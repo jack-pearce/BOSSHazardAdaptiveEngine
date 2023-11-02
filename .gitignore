@@ -1,0 +1,11 @@
+.dir-locals.el
+.vscode
+.vs
+.idea
+.clang*
+cmake*
+build/
+Debug/
+Release/
+MinSizeRel/
+RelWithDebInfo/
