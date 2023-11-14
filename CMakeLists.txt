@@ -1,6 +1,18 @@
 cmake_minimum_required(VERSION 3.10)
 project(BOSSHazardAdaptiveEngine)
 
+# Configure CCache if available
+find_program(CCACHE_EXECUTABLE ccache)
+mark_as_advanced(CCACHE_EXECUTABLE)
+if(CCACHE_EXECUTABLE)
+  foreach(LANG C CXX)
+    if(NOT DEFINED CMAKE_${LANG}_COMPILER_LAUNCHER AND NOT CMAKE_${LANG}_COMPILER MATCHES ".*/ccache")
+      message(STATUS "Enabling ccache for ${LANG}")
+      set(CMAKE_${LANG}_COMPILER_LAUNCHER ${CCACHE_EXECUTABLE} CACHE STRING "")
+    endif()
+  endforeach()
+endif()
+
 ############################## Custom build modes ###############################
 
 set(CMAKE_CXX_FLAGS_SANITIZE "-fno-omit-frame-pointer -fsanitize=address,signed-integer-overflow,null,alignment,bounds,function,return,vla-bound -O0 -g"
@@ -43,24 +55,24 @@ endif(MSVC)
 include(ExternalProject)
 
 # Core BOSS
-  if(NOT DEFINED BOSS_SOURCE_REPOSITORY)
+if(NOT DEFINED BOSS_SOURCE_REPOSITORY)
     if(NOT GITHUB_TOKEN)
-      message( FATAL_ERROR "You need to pass -DGITHUB_TOKEN=... to pass a github token to fetch the boss release or -DBOSS_SOURCE_REPOSITORY= for a non-github clone" )
+        message( FATAL_ERROR "You need to pass -DGITHUB_TOKEN=... to pass a github token to fetch the boss release or -DBOSS_SOURCE_REPOSITORY= for a non-github clone" )
     endif()
     set(BOSS_SOURCE_REPOSITORY https://little-big-h:${GITHUB_TOKEN}@github.com/symbol-store/BOSS.git)
-  endif()
-  if(NOT DEFINED BOSS_SOURCE_BRANCH)
+endif()
+if(NOT DEFINED BOSS_SOURCE_BRANCH)
     set(BOSS_SOURCE_BRANCH main)
-  endif()
-  message("getting boss sources from ${BOSS_SOURCE_REPOSITORY}, branch ${BOSS_SOURCE_BRANCH}")
-  ExternalProject_Add(BOSS
-      GIT_REPOSITORY ${BOSS_SOURCE_REPOSITORY}
-      GIT_TAG ${BOSS_SOURCE_BRANCH}
-      GIT_SHALLOW ON
-		  CMAKE_ARGS -DCMAKE_VERBOSE_MAKEFILE=${CMAKE_VERBOSE_MAKEFILE} -DCMAKE_INSTALL_PREFIX=${BOSSHazardAdaptiveEngine_BINARY_DIR}/deps $<IF:$<CONFIG:>,,-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}>
-                 -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}  -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER} -DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}
-      BUILD_BYPRODUCTS ${BOSSHazardAdaptiveEngine_BINARY_DIR}/deps/lib/${BOSS_LINK_LIBRARY_PREFIX}BOSS${BOSS_LINK_LIBRARY_SUFFIX}
-    )
+endif()
+message("getting boss sources from ${BOSS_SOURCE_REPOSITORY}, branch ${BOSS_SOURCE_BRANCH}")
+ExternalProject_Add(BOSS
+        GIT_REPOSITORY ${BOSS_SOURCE_REPOSITORY}
+        GIT_TAG ${BOSS_SOURCE_BRANCH}
+        GIT_SHALLOW ON
+        CMAKE_ARGS -DCMAKE_VERBOSE_MAKEFILE=${CMAKE_VERBOSE_MAKEFILE} -DCMAKE_INSTALL_PREFIX=${BOSSHazardAdaptiveEngine_BINARY_DIR}/deps $<IF:$<CONFIG:>,,-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}>
+        -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}  -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER} -DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}
+        BUILD_BYPRODUCTS ${BOSSHazardAdaptiveEngine_BINARY_DIR}/deps/lib/${BOSS_LINK_LIBRARY_PREFIX}BOSS${BOSS_LINK_LIBRARY_SUFFIX}
+)
 
 #################################### Targets ####################################
 
@@ -72,24 +84,39 @@ else()
   set(LibraryType MODULE)
 endif(MSVC)
 
-if(MSVC)
-  set(pluginInstallDir bin)
-else()
-  set(pluginInstallDir lib)
-endif(MSVC)
+set(ImplementationFiles Source/VolcanoEngine.cpp Source/Win32Boilerplate.cpp)
 
-set(ImplementationFiles Source/BOSSHazardAdaptiveEngine.cpp)
-
+# Plugin
 add_library(BOSSHazardAdaptiveEngine MODULE ${ImplementationFiles})
 set_property(TARGET BOSSHazardAdaptiveEngine PROPERTY CXX_STANDARD 20) ## the core is c++ 17 but the engines may want to use 20
 target_include_directories(BOSSHazardAdaptiveEngine SYSTEM PUBLIC ${BOSSHazardAdaptiveEngine_BINARY_DIR}/deps/include)
 target_link_directories(BOSSHazardAdaptiveEngine PUBLIC ${BOSSHazardAdaptiveEngine_BINARY_DIR}/deps/lib)
 add_dependencies(BOSSHazardAdaptiveEngine BOSS)
 
+#list(APPEND AllTargets BOSSHazardAdaptiveEngine)
+#
+#foreach(Target IN LISTS AllTargets)
+#  if(NOT WIN32)
+#    target_link_libraries(${Target} dl)
+#  endif(NOT WIN32)
+#    target_link_libraries(${Target} Threads::Threads)
+#    set_target_properties(${Target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+#    if(MSVC)
+#        target_compile_options(${Target} PUBLIC "/Zc:__cplusplus")
+#        target_compile_options(${Target} PUBLIC "/EHsc")
+#    endif()
+#    set_target_properties(${Target} PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+#    add_dependencies(${Target} BOSS)
+#    target_include_directories(${Target} SYSTEM PUBLIC ${BOSSHazardAdaptiveEngine_BINARY_DIR}/deps/include)
+#    target_include_directories(${Target} SYSTEM PUBLIC ${CMAKE_BINARY_DIR}/deps/include)
+#    target_link_libraries(${Target} ${CMAKE_BINARY_DIR}/deps/lib/${BOSS_LINK_LIBRARY_PREFIX}BOSS${BOSS_LINK_LIBRARY_SUFFIX})
+#    if(UNIX AND NOT APPLE)
+#        target_link_libraries(${Target} rt)
+#    endif()
+#endforeach()
+
 set_target_properties(BOSSHazardAdaptiveEngine PROPERTIES INSTALL_RPATH_USE_LINK_PATH TRUE)
 install(TARGETS BOSSHazardAdaptiveEngine LIBRARY DESTINATION lib)
 
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
-
-
