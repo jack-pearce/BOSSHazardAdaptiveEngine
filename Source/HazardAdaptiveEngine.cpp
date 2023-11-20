@@ -46,12 +46,31 @@ using namespace boss::algorithm;
 
 class Pred : public std::function<std::optional<ExpressionSpanArgument>(ExpressionArguments&)> {
 public:
-  using std::function<std::optional<ExpressionSpanArgument>(ExpressionArguments&)>::function;
-
+  using Function = std::function<std::optional<ExpressionSpanArgument>(ExpressionArguments&)>;
+  template <typename F>
+  Pred(F&& func, boss::Expression&& expr)
+      : Function(std::forward<F>(func)), cachedExpr(std::move(expr)) {}
+  template <typename F>
+  Pred(F&& func, boss::Symbol const& s) : Function(std::forward<F>(func)), cachedExpr(s) {}
+  Pred(Pred&& other) noexcept
+      : Function(std::move(static_cast<Function&&>(other))),
+        cachedExpr(std::move(other.cachedExpr)) {}
+  Pred& operator=(Pred&& other) noexcept {
+    *static_cast<Function*>(this) = std::move(static_cast<Function&&>(other));
+    cachedExpr = std::move(other.cachedExpr);
+    return *this;
+  }
+  Pred(Pred const&) = delete;
+  Pred const& operator=(Pred const&) = delete;
+  ~Pred() = default;
   friend ::std::ostream& operator<<(std::ostream& out, Pred const& pred) {
-    out << "[Pred]";
+    out << "[Pred for " << pred.cachedExpr << "]";
     return out;
   }
+  explicit operator boss::Expression() && { return std::move(cachedExpr); }
+
+private:
+  boss::Expression cachedExpr;
 };
 
 template <typename... StaticArgumentTypes>
@@ -144,6 +163,28 @@ Expression transformDynamicsToSpans(Expression&& input) {
           return x;
       },
       std::move(input));
+}
+
+static boss::Expression toBOSSExpression(Expression&& expr) {
+  return std::visit(boss::utilities::overload(
+                        [&](ComplexExpression&& e) -> boss::Expression {
+                          boss::ExpressionArguments bossArgs;
+                          auto fromArgs = e.getArguments();
+                          bossArgs.reserve(fromArgs.size());
+                          std::transform(std::make_move_iterator(fromArgs.begin()),
+                                         std::make_move_iterator(fromArgs.end()),
+                                         std::back_inserter(bossArgs), [](auto&& bulkArg) {
+                                           return toBOSSExpression(
+                                               std::forward<decltype(bulkArg)>(bulkArg));
+                                         });
+                          return boss::ComplexExpression(e.getHead(), std::move(bossArgs));
+                        },
+                        [&](Pred&& e) -> boss::Expression {
+                          boss::Expression output = static_cast<boss::Expression>(std::move(e));
+                          return std::move(output);
+                        },
+                        [](auto&& otherTypes) -> boss::Expression { return otherTypes; }),
+                    std::move(expr));
 }
 
 static Expression evaluateInternal(Expression&& e);
@@ -330,6 +371,12 @@ public:
                                return state;
                              });
     };
+    (*this)["Plus"_] = [](ComplexExpressionWithStaticArguments<Symbol>&& input) -> Expression {
+      return createLambdaExpression(std::move(input), std::plus());
+    };
+    (*this)["Plus"_] = [](ComplexExpressionWithStaticArguments<Pred>&& input) -> Expression {
+      return createLambdaExpression(std::move(input), std::plus());
+    };
 
     (*this)["Multiply"_] =
         []<NumericType FirstArgument>(
@@ -343,138 +390,71 @@ public:
                                return state;
                              });
     };
-
-    auto createPredicate = []<typename ArgType>(ArgType const& arg) {
-      if constexpr(std::is_same_v<ArgType, Symbol>) {
-        return [arg](
-                   ExpressionArguments& columns) mutable -> std::optional<ExpressionSpanArgument> {
-          // search for column matching the symbol in the relation
-          for(auto& columnExpr : columns) {
-            auto& column = get<ComplexExpression>(columnExpr);
-            if(column.getHead() == arg) {
-              auto& span =
-                  get<ComplexExpression>(column.getArguments().at(0)).getSpanArguments().at(0);
-              return std::visit(
-                  []<typename T>(
-                      Span<T> const& typedSpan) -> std::optional<ExpressionSpanArgument> {
-                    if constexpr(std::is_same_v<T, int64_t> || std::is_same_v<T, double_t>) {
-                      return typedSpan.clone(
-                          boss::expressions::CloneReason::FOR_TESTING); // TODO - return reference?
-                    } else {
-                      throw std::runtime_error("unsupported column type in predicate");
-                    }
-                  },
-                  span);
-            }
-          }
-          throw std::runtime_error("in predicate: unknown symbol " + arg.getName() + "_");
-        };
-      } else if constexpr(NumericType<ArgType>) {
-        return [arg](ExpressionArguments& /*unused*/) -> std::optional<ExpressionSpanArgument> {
-          return Span<ArgType>(
-              std::move(std::vector({arg}))); // TODO - hacky to return 1 element span
-        };
-      } else if constexpr(std::is_same_v<ArgType, Pred>) {
-        return [arg](ExpressionArguments& columns) { return arg(columns); };
-      } else {
-        throw std::runtime_error("unsupported argument type in predicate");
-        return [](ExpressionArguments& /*unused*/) -> std::optional<ExpressionSpanArgument> {
-          return {};
-        };
-      }
+    (*this)["Multiply"_] = [](ComplexExpressionWithStaticArguments<Symbol>&& input) -> Expression {
+      return createLambdaExpression(std::move(input), std::multiplies());
+    };
+    (*this)["Multiply"_] = [](ComplexExpressionWithStaticArguments<Pred>&& input) -> Expression {
+      return createLambdaExpression(std::move(input), std::multiplies());
     };
 
-    (*this)["Equal"_] =
-        [createPredicate](ComplexExpressionWithStaticArguments<Symbol>&& input) -> Expression {
+    (*this)["Minus"_] =
+        []<NumericType FirstArgument>(
+            ComplexExpressionWithStaticArguments<FirstArgument>&& input) -> Expression {
       assert(input.getSpanArguments().empty());
       assert(input.getDynamicArguments().size() == 1);
-      return std::visit(
-          [&createPredicate, &input](auto&& arg) -> Expression {
-            auto pred1 = createPredicate(get<0>(input.getStaticArguments()));
-            auto pred2 = createPredicate(arg);
-            return
-                [pred1, pred2](
-                    ExpressionArguments& columns) mutable -> std::optional<ExpressionSpanArgument> {
-                  auto arg1 = pred1(columns);
-                  auto arg2 = pred2(columns);
-                  if(!arg1 || !arg2) {
-                    return {};
-                  }
-                  std::vector<long> indexes;
-                  std::visit(
-                      [&indexes](auto&& typedSpan, auto&& typedThreshold) {
-                        using Type1 = std::decay_t<decltype(typedSpan)>;
-                        using Type2 = std::decay_t<decltype(typedThreshold)>;
-                        if constexpr(std::is_same_v<Type1, Span<int64_t>> &&
-                                     std::is_same_v<Type2, Span<int64_t>>) {
-                          for(long i = 0; i < typedSpan.size(); ++i) {
-                            if(typedSpan[i] == typedThreshold[0]) { // TODO - only change for Equal
-                              indexes.push_back(i);
-                            }
-                          }
-                        } else {
-                          throw std::runtime_error("unsupported column type in select");
-                        }
-                      },
-                      std::move(*arg1), std::move(*arg2));
-                  return Span<long>(std::move(std::vector(indexes)));
-                };
-          },
-          input.getDynamicArguments().at(0));
+      if(std::holds_alternative<Symbol>(input.getDynamicArguments().at(0)) ||
+         std::holds_alternative<Pred>(input.getDynamicArguments().at(0))) {
+        return createLambdaExpression(std::move(input), std::minus());
+      }
+      return get<0>(input.getStaticArguments()) -
+             get<FirstArgument>(input.getDynamicArguments().at(0));
+    };
+    (*this)["Minus"_] = [](ComplexExpressionWithStaticArguments<Symbol>&& input) -> Expression {
+      return createLambdaExpression(std::move(input), std::minus());
+    };
+    (*this)["Minus"_] = [](ComplexExpressionWithStaticArguments<Pred>&& input) -> Expression {
+      return createLambdaExpression(std::move(input), std::minus());
+    };
+
+    (*this)["Equal"_] = [](ComplexExpressionWithStaticArguments<Symbol>&& input) -> Expression {
+      return createLambdaExpression(std::move(input), std::equal_to());
+    };
+    (*this)["Equal"_] = [](ComplexExpressionWithStaticArguments<Pred>&& input) -> Expression {
+      return createLambdaExpression(std::move(input), std::equal_to());
     };
 
     (*this)["Greater"_] =
-        [createPredicate](ComplexExpressionWithStaticArguments<Symbol>&& input) -> Expression {
+        []<NumericType FirstArgument>(
+            ComplexExpressionWithStaticArguments<FirstArgument>&& input) -> Expression {
       assert(input.getSpanArguments().empty());
       assert(input.getDynamicArguments().size() == 1);
-      return std::visit(
-          [&createPredicate, &input](auto&& arg) -> Expression {
-            auto pred1 = createPredicate(get<0>(input.getStaticArguments()));
-            auto pred2 = createPredicate(arg);
-            return
-                [pred1, pred2](
-                    ExpressionArguments& columns) mutable -> std::optional<ExpressionSpanArgument> {
-                  auto arg1 = pred1(columns);
-                  auto arg2 = pred2(columns);
-                  if(!arg1 || !arg2) {
-                    return {};
-                  }
-                  std::vector<long> indexes;
-                  std::visit(
-                      [&indexes](auto&& typedSpan, auto&& typedThreshold) {
-                        using Type1 = std::decay_t<decltype(typedSpan)>;
-                        using Type2 = std::decay_t<decltype(typedThreshold)>;
-                        if constexpr(std::is_same_v<Type1, Span<int64_t>> &&
-                                     std::is_same_v<Type2, Span<int64_t>>) {
-                          for(long i = 0; i < typedSpan.size(); ++i) {
-                            if(typedSpan[i] > typedThreshold[0]) {
-                              indexes.push_back(i);
-                            }
-                          }
-                        } else {
-                          throw std::runtime_error("unsupported column type in select");
-                        }
-                      },
-                      std::move(*arg1), std::move(*arg2));
-                  return Span<long>(std::move(std::vector(indexes)));
-                };
-          },
-          input.getDynamicArguments().at(0));
+      if(std::holds_alternative<Symbol>(input.getDynamicArguments().at(0)) ||
+         std::holds_alternative<Pred>(input.getDynamicArguments().at(0))) {
+        return createLambdaExpression(std::move(input), std::greater());
+      }
+      return get<0>(input.getStaticArguments()) >
+             get<FirstArgument>(input.getDynamicArguments().at(0));
+    };
+    (*this)["Greater"_] = [](ComplexExpressionWithStaticArguments<Symbol>&& input) -> Expression {
+      return createLambdaExpression(std::move(input), std::greater());
+    };
+    (*this)["Greater"_] = [](ComplexExpressionWithStaticArguments<Pred>&& input) -> Expression {
+      return createLambdaExpression(std::move(input), std::greater());
     };
 
     (*this)["Where"_] = [](ComplexExpressionWithStaticArguments<Pred>&& input) -> Expression {
       assert(input.getSpanArguments().empty());
       assert(input.getDynamicArguments().empty());
-      return Pred(get<0>(input.getStaticArguments()));
+      return Pred(get<0>(std::move(input).getStaticArguments()));
     };
+
+    (*this)["As"_] = [](ComplexExpression&& input) -> Expression { return std::move(input); };
 
     (*this)["Select"_] = [](ComplexExpression&& inputExpr) -> Expression {
       ExpressionArguments args = std::move(inputExpr).getArguments();
       auto it = std::make_move_iterator(args.begin());
       auto relation = boss::get<ComplexExpression>(std::move(*it));
-      //      auto predExpr = boss::get<ComplexExpression>(std::move(*++it));
-      auto predFunc = boss::get<Pred>(std::move(
-          *++it)); // TODO - add predExpr to Pred object. Try printing halfway through evaluation
+      auto predFunc = boss::get<Pred>(std::move(*++it));
 
       auto columns = std::move(relation).getDynamicArguments();
       std::transform(
@@ -505,9 +485,16 @@ public:
                   [&predicate]<typename T>(Span<T>&& typedSpan) -> ExpressionSpanArgument {
                     if constexpr(std::is_same_v<T, int64_t> || std::is_same_v<T, double_t>) {
                       auto result = std::vector<std::decay_t<T>>(); // TODO - filter in place
-                      auto& indexes = std::get<Span<long>>(*predicate);
-                      for(auto& index : indexes) {
-                        result.push_back(typedSpan[index]);
+                      //                      auto& indexes = std::get<Span<long>>(*predicate);
+                      //                      for(auto& index : indexes) {
+                      //                        result.push_back(typedSpan[index]);
+                      //                      }
+                      // TODO - this should be indexes for Select (would need to change bool below)
+                      auto& qualified = std::get<Span<bool>>(*predicate);
+                      for(size_t i = 0; i < qualified.size(); ++i) {
+                        if(qualified[i]) {
+                          result.push_back(typedSpan[i]);
+                        }
                       }
                       return Span<T>(std::move(std::vector(result)));
                     } else {
@@ -625,20 +612,126 @@ public:
       for(auto asIt = std::make_move_iterator(asArgs.begin());
           asIt != std::make_move_iterator(asArgs.end()); ++asIt) {
         auto name = get<Symbol>(std::move(*asIt));
-        auto newName = get<Symbol>(
-            std::move(*++asIt)); // TODO - could turn this into a pred function to rename
-        for(auto& columnExpr : columns) {
-          if(std::get<ComplexExpression>(columnExpr).getHead() == name) {
-            auto& column = std::get<ComplexExpression>(columnExpr);
-            auto [head, statics, dynamics, spans] = std::move(column).decompose();
-            projectedColumns.emplace_back(ComplexExpression(std::move(newName), std::move(statics),
-                                                            std::move(dynamics), std::move(spans)));
+        auto as = std::move(*++asIt);
+        if(std::holds_alternative<Symbol>(as)) {
+          auto asSymbol = get<Symbol>(std::move(as));
+          for(auto& columnExpr : columns) {
+            if(std::get<ComplexExpression>(columnExpr).getHead() == asSymbol) {
+              auto& column = std::get<ComplexExpression>(columnExpr);
+              auto [head, statics, dynamics, spans] = std::move(column).decompose();
+              projectedColumns.emplace_back(ComplexExpression(
+                  std::move(name), std::move(statics), std::move(dynamics), std::move(spans)));
+              break;
+            }
+          }
+        } else {
+          auto asPred = get<Pred>(std::move(as));
+          ExpressionSpanArguments spans{};
+          while(auto projected = asPred(columns)) {
+            std::visit([&spans](auto&& typedSpan) { spans.emplace_back(std::move(typedSpan)); },
+                       *projected);
             break;
           }
+          auto dynamics = ExpressionArguments{};
+          dynamics.emplace_back(ComplexExpression("List"_, {}, {}, std::move(spans)));
+          projectedColumns.emplace_back(
+              ComplexExpression(std::move(name), {}, std::move(dynamics), {}));
         }
       }
       return ComplexExpression("Table"_, std::move(projectedColumns));
     };
+  }
+
+private:
+  template <typename T, typename F>
+  static Pred createLambdaExpression(ComplexExpressionWithStaticArguments<T>&& e, F&& f) {
+    assert(e.getSpanArguments().empty());
+    assert(e.getDynamicArguments().size() == 1);
+    Pred::Function pred = std::visit(
+        [&e, &f](auto&& arg) -> Pred::Function {
+          return
+              [pred1 = createLambdaArgument(get<0>(e.getStaticArguments())),
+               pred2 = createLambdaArgument(arg),
+               f](ExpressionArguments& columns) mutable -> std::optional<ExpressionSpanArgument> {
+                auto arg1 = pred1(columns);
+                auto arg2 = pred2(columns);
+                if(!arg1 || !arg2) {
+                  return {};
+                }
+                ExpressionSpanArgument span;
+                std::visit( // TODO - this should be indexes for Select
+                    [&span, f](auto&& typedSpan1, auto&& typedSpan2) {
+                      using Type1 = std::decay_t<decltype(typedSpan1)>;
+                      using Type2 = std::decay_t<decltype(typedSpan2)>;
+                      if constexpr(std::is_same_v<Type1, Span<int64_t>> &&
+                                   std::is_same_v<Type2, Span<int64_t>>) {
+                        assert(typedSpan1.size() == 1 || typedSpan2.size() == 1);
+                        using ElementType1 = typename Type1::element_type;
+                        using ElementType2 = typename Type2::element_type;
+                        using OutputType =
+                            typename std::result_of<decltype(f)(ElementType1, ElementType2)>::type;
+                        std::vector<OutputType> results;
+                        if(typedSpan2.size() == 1) {
+                          for(size_t i = 0; i < typedSpan1.size(); ++i) {
+                            results.push_back(f(typedSpan1[i], typedSpan2[0]));
+                          }
+                        } else {
+                          for(size_t i = 0; i < typedSpan2.size(); ++i) {
+                            results.push_back(f(typedSpan1[0], typedSpan2[i]));
+                          }
+                        }
+                        span = Span<OutputType>(std::move(std::vector(results)));
+                      } else {
+                        throw std::runtime_error("unsupported column type in select");
+                      }
+                    },
+                    std::move(*arg1), std::move(*arg2));
+
+                return span;
+              };
+        },
+        e.getDynamicArguments().at(0));
+    return {std::move(pred), toBOSSExpression(std::move(e))};
+  }
+
+  template <typename ArgType> static auto createLambdaArgument(ArgType const& arg) {
+    if constexpr(std::is_same_v<ArgType, Symbol>) {
+      return [arg](ExpressionArguments& columns) mutable -> std::optional<ExpressionSpanArgument> {
+        // search for column matching the symbol in the relation
+        for(auto& columnExpr : columns) {
+          auto& column = get<ComplexExpression>(columnExpr);
+          if(column.getHead() == arg) {
+            auto& span =
+                get<ComplexExpression>(column.getArguments().at(0)).getSpanArguments().at(0);
+            return std::visit(
+                []<typename T>(Span<T> const& typedSpan) -> std::optional<ExpressionSpanArgument> {
+                  if constexpr(std::is_same_v<T, int64_t> || std::is_same_v<T, double_t>) {
+                    return typedSpan.clone(
+                        boss::expressions::CloneReason::FOR_TESTING); // TODO - return reference?
+                  } else {
+                    throw std::runtime_error("unsupported column type in predicate");
+                  }
+                },
+                span);
+          }
+        }
+        throw std::runtime_error("in predicate: unknown symbol " + arg.getName() + "_");
+      };
+    } else if constexpr(NumericType<ArgType>) {
+      return [arg](ExpressionArguments& /*unused*/) -> std::optional<ExpressionSpanArgument> {
+        return Span<ArgType>(
+            std::move(std::vector({arg}))); // TODO - hacky to return 1 element span
+      };
+    } else if constexpr(std::is_same_v<ArgType, Pred>) {
+      return [f = static_cast<Pred::Function const&>(arg)](ExpressionArguments& columns) {
+        return f(columns);
+      };
+    } else {
+      throw std::runtime_error("unsupported argument type in predicate");
+      return [](ExpressionArguments& /*unused*/) -> std::optional<ExpressionSpanArgument> {
+        return {};
+      };
+    }
   }
 };
 
@@ -653,27 +746,6 @@ static Expression evaluateInternal(Expression&& e) {
                    },
                    [](auto&& e) -> Expression { return std::forward<decltype(e)>(e); }),
                std::move(e));
-}
-
-static boss::Expression toBOSSExpression(Expression&& expr) {
-  return std::visit(boss::utilities::overload(
-                        [&](ComplexExpression&& e) -> boss::Expression {
-                          boss::ExpressionArguments bossArgs;
-                          auto fromArgs = e.getArguments();
-                          bossArgs.reserve(fromArgs.size());
-                          std::transform(std::make_move_iterator(fromArgs.begin()),
-                                         std::make_move_iterator(fromArgs.end()),
-                                         std::back_inserter(bossArgs), [](auto&& bulkArg) {
-                                           return toBOSSExpression(
-                                               std::forward<decltype(bulkArg)>(bulkArg));
-                                         });
-                          return boss::ComplexExpression(e.getHead(), std::move(bossArgs));
-                        },
-                        [&](Pred&& e) -> boss::Expression {
-                          throw std::runtime_error("remaining unevaluated internal predicate");
-                        },
-                        [](auto&& otherTypes) -> boss::Expression { return otherTypes; }),
-                    std::move(expr));
 }
 
 static boss::Expression evaluate(boss::Expression&& expr) {
