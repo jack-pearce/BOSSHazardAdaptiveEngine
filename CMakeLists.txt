@@ -84,7 +84,13 @@ else()
   set(LibraryType MODULE)
 endif(MSVC)
 
-set(ImplementationFiles Source/VolcanoEngine.cpp Source/Win32Boilerplate.cpp)
+if(MSVC)
+    set(pluginInstallDir bin)
+else()
+    set(pluginInstallDir lib)
+endif(MSVC)
+
+set(ImplementationFiles Source/HazardAdaptiveEngine.cpp)
 
 # Plugin
 add_library(BOSSHazardAdaptiveEngine MODULE ${ImplementationFiles})
@@ -92,28 +98,6 @@ set_property(TARGET BOSSHazardAdaptiveEngine PROPERTY CXX_STANDARD 20) ## the co
 target_include_directories(BOSSHazardAdaptiveEngine SYSTEM PUBLIC ${BOSSHazardAdaptiveEngine_BINARY_DIR}/deps/include)
 target_link_directories(BOSSHazardAdaptiveEngine PUBLIC ${BOSSHazardAdaptiveEngine_BINARY_DIR}/deps/lib)
 add_dependencies(BOSSHazardAdaptiveEngine BOSS)
-
-#list(APPEND AllTargets BOSSHazardAdaptiveEngine)
-#
-#foreach(Target IN LISTS AllTargets)
-#  if(NOT WIN32)
-#    target_link_libraries(${Target} dl)
-#  endif(NOT WIN32)
-#    target_link_libraries(${Target} Threads::Threads)
-#    set_target_properties(${Target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
-#    if(MSVC)
-#        target_compile_options(${Target} PUBLIC "/Zc:__cplusplus")
-#        target_compile_options(${Target} PUBLIC "/EHsc")
-#    endif()
-#    set_target_properties(${Target} PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
-#    add_dependencies(${Target} BOSS)
-#    target_include_directories(${Target} SYSTEM PUBLIC ${BOSSHazardAdaptiveEngine_BINARY_DIR}/deps/include)
-#    target_include_directories(${Target} SYSTEM PUBLIC ${CMAKE_BINARY_DIR}/deps/include)
-#    target_link_libraries(${Target} ${CMAKE_BINARY_DIR}/deps/lib/${BOSS_LINK_LIBRARY_PREFIX}BOSS${BOSS_LINK_LIBRARY_SUFFIX})
-#    if(UNIX AND NOT APPLE)
-#        target_link_libraries(${Target} rt)
-#    endif()
-#endforeach()
 
 set_target_properties(BOSSHazardAdaptiveEngine PROPERTIES INSTALL_RPATH_USE_LINK_PATH TRUE)
 install(TARGETS BOSSHazardAdaptiveEngine LIBRARY DESTINATION lib)
