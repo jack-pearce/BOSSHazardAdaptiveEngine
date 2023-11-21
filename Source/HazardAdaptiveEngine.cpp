@@ -73,6 +73,7 @@ private:
   boss::Expression cachedExpr;
 };
 
+// Q: Should tests all use spans for data - currently most using dynamics which requires this func
 template <typename... StaticArgumentTypes>
 ComplexExpressionWithStaticArguments<StaticArgumentTypes...>
 transformDynamicsToSpans(ComplexExpressionWithStaticArguments<StaticArgumentTypes...>&& input_) {
@@ -592,7 +593,7 @@ public:
         return "Project"_(std::move(relation), std::move(asExpr));
       }
 
-      // TODO - repeat of function in Select
+      // TODO - repeat of function in Select - factor out
       auto columns = std::move(relation).getDynamicArguments();
       std::transform(
           std::make_move_iterator(columns.begin()), std::make_move_iterator(columns.end()),
@@ -643,6 +644,8 @@ public:
   }
 
 private:
+  // Q: To create ComplexExpressionWithStaticArguments you must always explicitly call the
+  // constructor with the associated types?
   template <typename T, typename F>
   static Pred createLambdaExpression(ComplexExpressionWithStaticArguments<T>&& e, F&& f) {
     assert(e.getSpanArguments().empty());
@@ -659,6 +662,8 @@ private:
                   return {};
                 }
                 ExpressionSpanArgument span;
+                // Q: How do I construct values directly into a vector in a new Span? Or should we
+                // create values in a vector and move this into a Span as below?
                 std::visit( // TODO - this should be indexes for Select
                     [&span, f](auto&& typedSpan1, auto&& typedSpan2) {
                       using Type1 = std::decay_t<decltype(typedSpan1)>;
@@ -690,6 +695,7 @@ private:
                 return span;
               };
         },
+        // Q: Could this be a single funtion call, getDynamicArgumentAt(0)?
         e.getDynamicArguments().at(0));
     return {std::move(pred), toBOSSExpression(std::move(e))};
   }
@@ -703,6 +709,8 @@ private:
           if(column.getHead() == arg) {
             auto& span =
                 get<ComplexExpression>(column.getArguments().at(0)).getSpanArguments().at(0);
+                // Q: When is the use of get required with the BOSS API
+                // Q: Use of boss::get vs std::get
             return std::visit(
                 []<typename T>(Span<T> const& typedSpan) -> std::optional<ExpressionSpanArgument> {
                   if constexpr(std::is_same_v<T, int64_t> || std::is_same_v<T, double_t>) {
@@ -720,7 +728,7 @@ private:
     } else if constexpr(NumericType<ArgType>) {
       return [arg](ExpressionArguments& /*unused*/) -> std::optional<ExpressionSpanArgument> {
         return Span<ArgType>(
-            std::move(std::vector({arg}))); // TODO - hacky to return 1 element span
+            std::move(std::vector({arg}))); // TODO - hacky to return 1 element span (Pred to return optional Expression?)
       };
     } else if constexpr(std::is_same_v<ArgType, Pred>) {
       return [f = static_cast<Pred::Function const&>(arg)](ExpressionArguments& columns) {
