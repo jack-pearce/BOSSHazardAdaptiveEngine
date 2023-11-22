@@ -12,13 +12,13 @@
 #include <iostream>
 #include <iterator>
 #include <list>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <numeric>
 #include <optional>
 #include <stdexcept>
 #include <type_traits>
-#include <unordered_map>
 #include <utility>
 #include <variant>
 
@@ -317,245 +317,6 @@ template <typename T> concept NumericType = requires(T param) {
 };
 
 class OperatorMap : public std::unordered_map<boss::Symbol, StatelessOperator> {
-public:
-  OperatorMap() {
-    (*this)["Plus"_] =
-        []<NumericType FirstArgument>(
-            ComplexExpressionWithStaticArguments<FirstArgument>&& input) -> Expression {
-      ExpressionArguments args = input.getArguments();
-      return visitAccumulate(std::move(args), static_cast<FirstArgument>(0),
-                             [](auto&& state, auto&& arg) {
-                               if constexpr(NumericType<std::decay_t<decltype(arg)>>) {
-                                 state += arg;
-                               }
-                               return state;
-                             });
-    };
-    (*this)["Plus"_] = [](ComplexExpressionWithStaticArguments<Symbol>&& input) -> Expression {
-      return createLambdaExpression(std::move(input), std::plus());
-    };
-    (*this)["Plus"_] = [](ComplexExpressionWithStaticArguments<Pred>&& input) -> Expression {
-      return createLambdaExpression(std::move(input), std::plus());
-    };
-
-    (*this)["Times"_] =
-        []<NumericType FirstArgument>(
-            ComplexExpressionWithStaticArguments<FirstArgument>&& input) -> Expression {
-      ExpressionArguments args = input.getArguments();
-      return visitAccumulate(std::move(args), static_cast<FirstArgument>(1),
-                             [](auto&& state, auto&& arg) {
-                               if constexpr(NumericType<std::decay_t<decltype(arg)>>) {
-                                 state *= arg;
-                               }
-                               return state;
-                             });
-    };
-    (*this)["Times"_] = [](ComplexExpressionWithStaticArguments<Symbol>&& input) -> Expression {
-      return createLambdaExpression(std::move(input), std::multiplies());
-    };
-    (*this)["Times"_] = [](ComplexExpressionWithStaticArguments<Pred>&& input) -> Expression {
-      return createLambdaExpression(std::move(input), std::multiplies());
-    };
-
-    (*this)["Minus"_] =
-        []<NumericType FirstArgument>(
-            ComplexExpressionWithStaticArguments<FirstArgument>&& input) -> Expression {
-      assert(input.getSpanArguments().empty());
-      assert(input.getDynamicArguments().size() == 1);
-      if(std::holds_alternative<Symbol>(input.getDynamicArguments().at(0)) ||
-         std::holds_alternative<Pred>(input.getDynamicArguments().at(0))) {
-        return createLambdaExpression(std::move(input), std::minus());
-      }
-      return get<0>(input.getStaticArguments()) -
-             get<FirstArgument>(input.getDynamicArguments().at(0));
-    };
-    (*this)["Minus"_] = [](ComplexExpressionWithStaticArguments<Symbol>&& input) -> Expression {
-      return createLambdaExpression(std::move(input), std::minus());
-    };
-    (*this)["Minus"_] = [](ComplexExpressionWithStaticArguments<Pred>&& input) -> Expression {
-      return createLambdaExpression(std::move(input), std::minus());
-    };
-
-    (*this)["Equal"_] = [](ComplexExpressionWithStaticArguments<Symbol>&& input) -> Expression {
-      return createLambdaExpression(std::move(input), std::equal_to());
-    };
-    (*this)["Equal"_] = [](ComplexExpressionWithStaticArguments<Pred>&& input) -> Expression {
-      return createLambdaExpression(std::move(input), std::equal_to());
-    };
-
-    (*this)["Greater"_] =
-        []<NumericType FirstArgument>(
-            ComplexExpressionWithStaticArguments<FirstArgument>&& input) -> Expression {
-      assert(input.getSpanArguments().empty());
-      assert(input.getDynamicArguments().size() == 1);
-      if(std::holds_alternative<Symbol>(input.getDynamicArguments().at(0)) ||
-         std::holds_alternative<Pred>(input.getDynamicArguments().at(0))) {
-        return createLambdaExpression(std::move(input), std::greater());
-      }
-      return get<0>(input.getStaticArguments()) >
-             get<FirstArgument>(input.getDynamicArguments().at(0));
-    };
-    (*this)["Greater"_] = [](ComplexExpressionWithStaticArguments<Symbol>&& input) -> Expression {
-      return createLambdaExpression(std::move(input), std::greater());
-    };
-    (*this)["Greater"_] = [](ComplexExpressionWithStaticArguments<Pred>&& input) -> Expression {
-      return createLambdaExpression(std::move(input), std::greater());
-    };
-
-    (*this)["And"_] = [](ComplexExpressionWithStaticArguments<Pred, Pred>&& input) -> Expression {
-      return createLambdaExpression(std::move(input), std::logical_and());
-    };
-
-    (*this)["Or"_] = [](ComplexExpressionWithStaticArguments<Pred, Pred>&& input) -> Expression {
-      return createLambdaExpression(std::move(input), std::logical_or());
-    };
-
-    (*this)["Where"_] = [](ComplexExpressionWithStaticArguments<Pred>&& input) -> Expression {
-      assert(input.getSpanArguments().empty());
-      assert(input.getDynamicArguments().empty());
-      return Pred(get<0>(std::move(input).getStaticArguments()));
-    };
-
-    (*this)["As"_] = [](ComplexExpression&& input) -> Expression { return std::move(input); };
-
-    (*this)["DateObject"_] =
-        [](ComplexExpressionWithStaticArguments<std::string>&& input) -> Expression {
-      assert(input.getSpanArguments().empty());    // NOLINT
-      assert(input.getDynamicArguments().empty()); // NOLINT
-      auto str = get<0>(std::move(input).getStaticArguments());
-      std::istringstream iss;
-      iss.str(std::string(str));
-      struct std::tm tm = {};
-      iss >> std::get_time(&tm, "%Y-%m-%d");
-      auto t = std::mktime(&tm);
-      static int const hoursInADay = 24;
-      // Q: How is a plain int like below stored as an Expression? Assume it is stored as an atomic
-      // and can be accessed as an int normally would?
-      return (int32_t)(std::chrono::duration_cast<std::chrono::hours>(
-                           std::chrono::system_clock::from_time_t(t).time_since_epoch())
-                           .count() /
-                       hoursInADay);
-    };
-
-    (*this)["Select"_] = [](ComplexExpression&& inputExpr) -> Expression {
-      ExpressionArguments args = std::move(inputExpr).getArguments();
-      auto it = std::make_move_iterator(args.begin());
-      auto relation = boss::get<ComplexExpression>(std::move(*it));
-      auto predFunc = boss::get<Pred>(std::move(*++it));
-
-      auto columns = std::move(relation).getDynamicArguments();
-      std::transform(
-          std::make_move_iterator(columns.begin()), std::make_move_iterator(columns.end()),
-          columns.begin(), [](auto&& columnExpr) {
-            auto column = get<ComplexExpression>(std::forward<decltype(columnExpr)>(columnExpr));
-            auto [head, unused_, dynamics, spans] = std::move(column).decompose();
-            auto list = get<ComplexExpression>(std::move(dynamics.at(0)));
-            if(list.getDynamicArguments().size() > 0) {
-              list = transformDynamicsToSpans(std::move(list));
-            }
-            dynamics.at(0) = std::move(list);
-            return ComplexExpression(std::move(head), {}, std::move(dynamics), std::move(spans));
-          });
-
-      while(auto predicate = predFunc(columns)) {
-        std::transform(
-            std::make_move_iterator(columns.begin()), std::make_move_iterator(columns.end()),
-            columns.begin(), [&predicate](auto&& columnExpr) {
-              auto column = get<ComplexExpression>(std::forward<decltype(columnExpr)>(columnExpr));
-              auto [head, unused_, dynamics, spans] = std::move(column).decompose();
-              auto list = get<ComplexExpression>(std::move(dynamics.at(0)));
-              auto [listHead, listUnused_, listDynamics, listSpans] = std::move(list).decompose();
-              listSpans.at(0) = std::visit(
-                  [&predicate]<typename T>(Span<T>&& typedSpan) -> ExpressionSpanArgument {
-                    if constexpr(std::is_same_v<T, int64_t> || std::is_same_v<T, double_t> ||
-                                 std::is_same_v<T, std::string>) {
-                      auto result = std::vector<std::decay_t<T>>(); // TODO - filter in place
-                      //                      auto& indexes = std::get<Span<long>>(*predicate);
-                      //                      for(auto& index : indexes) {
-                      //                        result.push_back(typedSpan[index]);
-                      //                      }
-                      // TODO - this should be indexes for Select (would need to change bool below)
-                      auto& qualified = std::get<Span<bool>>(*predicate);
-                      for(size_t i = 0; i < qualified.size(); ++i) {
-                        if(qualified[i]) {
-                          result.push_back(typedSpan[i]);
-                        }
-                      }
-                      return Span<T>(std::move(std::vector(result)));
-                    } else {
-                      throw std::runtime_error("unsupported column type in select: " +
-                                               std::string(typeid(T).name()));
-                    }
-                  },
-                  std::move(listSpans.at(0)));
-              dynamics.at(0) = ComplexExpression(std::move(listHead), {}, std::move(listDynamics),
-                                                 std::move(listSpans));
-              return ComplexExpression(std::move(head), {}, std::move(dynamics), std::move(spans));
-            });
-        break;
-      }
-      return ComplexExpression("Table"_, std::move(columns));
-    };
-
-    (*this)["Project"_] = [](ComplexExpression&& inputExpr) -> Expression {
-      ExpressionArguments args = std::move(inputExpr).getArguments();
-      auto it = std::make_move_iterator(args.begin());
-      auto relation = boss::get<ComplexExpression>(std::move(*it));
-      auto asExpr = std::move(*++it);
-      if(relation.getHead().getName() != "Table") {
-        return "Project"_(std::move(relation), std::move(asExpr));
-      }
-
-      // TODO - repeat of function in Select - factor out
-      auto columns = std::move(relation).getDynamicArguments();
-      std::transform(
-          std::make_move_iterator(columns.begin()), std::make_move_iterator(columns.end()),
-          columns.begin(), [](auto&& columnExpr) {
-            auto column = get<ComplexExpression>(std::forward<decltype(columnExpr)>(columnExpr));
-            auto [head, unused_, dynamics, spans] = std::move(column).decompose();
-            auto list = get<ComplexExpression>(std::move(dynamics.at(0)));
-            if(list.getDynamicArguments().size() > 0) {
-              list = transformDynamicsToSpans(std::move(list));
-            }
-            dynamics.at(0) = std::move(list);
-            return ComplexExpression(std::move(head), {}, std::move(dynamics), std::move(spans));
-          });
-
-      auto projectedColumns = ExpressionArguments{};
-      ExpressionArguments asArgs = boss::get<ComplexExpression>(std::move(asExpr)).getArguments();
-      for(auto asIt = std::make_move_iterator(asArgs.begin());
-          asIt != std::make_move_iterator(asArgs.end()); ++asIt) {
-        auto name = get<Symbol>(std::move(*asIt));
-        auto as = std::move(*++asIt);
-        if(std::holds_alternative<Symbol>(as)) {
-          auto asSymbol = get<Symbol>(std::move(as));
-          for(auto& columnExpr : columns) {
-            if(std::get<ComplexExpression>(columnExpr).getHead() == asSymbol) {
-              auto& column = std::get<ComplexExpression>(columnExpr);
-              auto [head, statics, dynamics, spans] = std::move(column).decompose();
-              projectedColumns.emplace_back(ComplexExpression(
-                  std::move(name), std::move(statics), std::move(dynamics), std::move(spans)));
-              break;
-            }
-          }
-        } else {
-          auto asPred = get<Pred>(std::move(as));
-          ExpressionSpanArguments spans{};
-          while(auto projected = asPred(columns)) {
-            std::visit([&spans](auto&& typedSpan) { spans.emplace_back(std::move(typedSpan)); },
-                       *projected);
-            break;
-          }
-          auto dynamics = ExpressionArguments{};
-          dynamics.emplace_back(ComplexExpression("List"_, {}, {}, std::move(spans)));
-          projectedColumns.emplace_back(
-              ComplexExpression(std::move(name), {}, std::move(dynamics), {}));
-        }
-      }
-      return ComplexExpression("Table"_, std::move(projectedColumns));
-    };
-  }
-
 private:
   // Q: To create ComplexExpressionWithStaticArguments you must always explicitly call the
   // constructor with the associated types?
@@ -802,7 +563,7 @@ private:
         // search for column matching the symbol in the relation
         for(auto& columnExpr : columns) {
           auto& column = get<ComplexExpression>(columnExpr);
-          if(column.getHead() == arg) {
+          if(column.getHead().getName() == arg.getName()) {
             auto& span =
                 get<ComplexExpression>(column.getArguments().at(0)).getSpanArguments().at(0);
             // Q: When is the use of get required with the BOSS API
@@ -836,6 +597,408 @@ private:
         return {};
       };
     }
+  }
+
+public:
+  OperatorMap() {
+    (*this)["Plus"_] =
+        []<NumericType FirstArgument>(
+            ComplexExpressionWithStaticArguments<FirstArgument>&& input) -> Expression {
+      ExpressionArguments args = input.getArguments();
+      return visitAccumulate(std::move(args), static_cast<FirstArgument>(0),
+                             [](auto&& state, auto&& arg) {
+                               if constexpr(NumericType<std::decay_t<decltype(arg)>>) {
+                                 state += arg;
+                               }
+                               return state;
+                             });
+    };
+    (*this)["Plus"_] = [](ComplexExpressionWithStaticArguments<Symbol>&& input) -> Expression {
+      return createLambdaExpression(std::move(input), std::plus());
+    };
+    (*this)["Plus"_] = [](ComplexExpressionWithStaticArguments<Pred>&& input) -> Expression {
+      return createLambdaExpression(std::move(input), std::plus());
+    };
+
+    (*this)["Times"_] =
+        []<NumericType FirstArgument>(
+            ComplexExpressionWithStaticArguments<FirstArgument>&& input) -> Expression {
+      ExpressionArguments args = input.getArguments();
+      return visitAccumulate(std::move(args), static_cast<FirstArgument>(1),
+                             [](auto&& state, auto&& arg) {
+                               if constexpr(NumericType<std::decay_t<decltype(arg)>>) {
+                                 state *= arg;
+                               }
+                               return state;
+                             });
+    };
+    (*this)["Times"_] = [](ComplexExpressionWithStaticArguments<Symbol>&& input) -> Expression {
+      return createLambdaExpression(std::move(input), std::multiplies());
+    };
+    (*this)["Times"_] = [](ComplexExpressionWithStaticArguments<Pred>&& input) -> Expression {
+      return createLambdaExpression(std::move(input), std::multiplies());
+    };
+
+    (*this)["Divide"_] =
+        []<NumericType FirstArgument>(
+            ComplexExpressionWithStaticArguments<FirstArgument>&& input) -> Expression {
+      assert(input.getSpanArguments().empty());
+      assert(input.getDynamicArguments().size() == 1);
+      if(std::holds_alternative<Symbol>(input.getDynamicArguments().at(0)) ||
+         std::holds_alternative<Pred>(input.getDynamicArguments().at(0))) {
+        return createLambdaExpression(std::move(input), std::divides());
+      }
+      return get<0>(input.getStaticArguments()) /
+             get<FirstArgument>(input.getDynamicArguments().at(0));
+    };
+    (*this)["Divide"_] = [](ComplexExpressionWithStaticArguments<Symbol>&& input) -> Expression {
+      return createLambdaExpression(std::move(input), std::divides());
+    };
+    (*this)["Divide"_] = [](ComplexExpressionWithStaticArguments<Pred>&& input) -> Expression {
+      return createLambdaExpression(std::move(input), std::divides());
+    };
+
+    (*this)["Minus"_] =
+        []<NumericType FirstArgument>(
+            ComplexExpressionWithStaticArguments<FirstArgument>&& input) -> Expression {
+      assert(input.getSpanArguments().empty());
+      assert(input.getDynamicArguments().size() == 1);
+      if(std::holds_alternative<Symbol>(input.getDynamicArguments().at(0)) ||
+         std::holds_alternative<Pred>(input.getDynamicArguments().at(0))) {
+        return createLambdaExpression(std::move(input), std::minus());
+      }
+      return get<0>(input.getStaticArguments()) -
+             get<FirstArgument>(input.getDynamicArguments().at(0));
+    };
+    (*this)["Minus"_] = [](ComplexExpressionWithStaticArguments<Symbol>&& input) -> Expression {
+      return createLambdaExpression(std::move(input), std::minus());
+    };
+    (*this)["Minus"_] = [](ComplexExpressionWithStaticArguments<Pred>&& input) -> Expression {
+      return createLambdaExpression(std::move(input), std::minus());
+    };
+
+    (*this)["Equal"_] = [](ComplexExpressionWithStaticArguments<Symbol>&& input) -> Expression {
+      return createLambdaExpression(std::move(input), std::equal_to());
+    };
+    (*this)["Equal"_] = [](ComplexExpressionWithStaticArguments<Pred>&& input) -> Expression {
+      return createLambdaExpression(std::move(input), std::equal_to());
+    };
+
+    (*this)["Greater"_] =
+        []<NumericType FirstArgument>(
+            ComplexExpressionWithStaticArguments<FirstArgument>&& input) -> Expression {
+      assert(input.getSpanArguments().empty());
+      assert(input.getDynamicArguments().size() == 1);
+      if(std::holds_alternative<Symbol>(input.getDynamicArguments().at(0)) ||
+         std::holds_alternative<Pred>(input.getDynamicArguments().at(0))) {
+        return createLambdaExpression(std::move(input), std::greater());
+      }
+      return get<0>(input.getStaticArguments()) >
+             get<FirstArgument>(input.getDynamicArguments().at(0));
+    };
+    (*this)["Greater"_] = [](ComplexExpressionWithStaticArguments<Symbol>&& input) -> Expression {
+      return createLambdaExpression(std::move(input), std::greater());
+    };
+    (*this)["Greater"_] = [](ComplexExpressionWithStaticArguments<Pred>&& input) -> Expression {
+      return createLambdaExpression(std::move(input), std::greater());
+    };
+
+    (*this)["And"_] = [](ComplexExpressionWithStaticArguments<Pred, Pred>&& input) -> Expression {
+      return createLambdaExpression(std::move(input), std::logical_and());
+    };
+
+    (*this)["Or"_] = [](ComplexExpressionWithStaticArguments<Pred, Pred>&& input) -> Expression {
+      return createLambdaExpression(std::move(input), std::logical_or());
+    };
+
+    (*this)["Where"_] = [](ComplexExpressionWithStaticArguments<Pred>&& input) -> Expression {
+      assert(input.getSpanArguments().empty());
+      assert(input.getDynamicArguments().empty());
+      return Pred(get<0>(std::move(input).getStaticArguments()));
+    };
+
+    (*this)["As"_] = [](ComplexExpression&& input) -> Expression { return std::move(input); };
+
+    (*this)["DateObject"_] =
+        [](ComplexExpressionWithStaticArguments<std::string>&& input) -> Expression {
+      assert(input.getSpanArguments().empty());    // NOLINT
+      assert(input.getDynamicArguments().empty()); // NOLINT
+      auto str = get<0>(std::move(input).getStaticArguments());
+      std::istringstream iss;
+      iss.str(std::string(str));
+      struct std::tm tm = {};
+      iss >> std::get_time(&tm, "%Y-%m-%d");
+      auto t = std::mktime(&tm);
+      static int const hoursInADay = 24;
+      // Q: How is a plain int like below stored as an Expression? Assume it is stored as an atomic
+      // and can be accessed as an int normally would?
+      return (int32_t)(std::chrono::duration_cast<std::chrono::hours>(
+                           std::chrono::system_clock::from_time_t(t).time_since_epoch())
+                           .count() /
+                       hoursInADay);
+    };
+
+    (*this)["Group"_] = [](ComplexExpression&& inputExpr) -> Expression {
+      ExpressionArguments args = std::move(inputExpr).getArguments();
+      auto it = std::make_move_iterator(args.begin());
+      auto relation = boss::get<ComplexExpression>(std::move(*it++));
+
+      // TODO - same as Select function
+      auto columns = std::move(relation).getDynamicArguments();
+      std::transform(
+          std::make_move_iterator(columns.begin()), std::make_move_iterator(columns.end()),
+          columns.begin(), [](auto&& columnExpr) {
+            auto column = get<ComplexExpression>(std::forward<decltype(columnExpr)>(columnExpr));
+            auto [head, unused_, dynamics, spans] = std::move(column).decompose();
+            auto list = get<ComplexExpression>(std::move(dynamics.at(0)));
+            if(list.getDynamicArguments().size() > 0) {
+              list = transformDynamicsToSpans(std::move(list));
+            }
+            dynamics.at(0) = std::move(list);
+            return ComplexExpression(std::move(head), {}, std::move(dynamics), std::move(spans));
+          });
+
+      auto resultColumns = ExpressionArguments{};
+
+      auto byFlag = boss::get<ComplexExpression>(args.at(1)).getHead().getName() == "By";
+      std::map<long, std::vector<size_t>> map;
+      if(byFlag) {
+        // TODO - GroupBy only groups by a single column currently
+        auto byExpr = boss::get<ComplexExpression>(std::move(*it++));
+        auto groupingColumnSymbol = get<Symbol>(byExpr.getDynamicArguments().at(0));
+        auto groupingPred = createLambdaArgument(groupingColumnSymbol);
+        if(auto column = groupingPred(columns)) {
+          ExpressionSpanArgument span;
+          std::visit(
+              [&map, &span](auto&& typedSpan) {
+                using Type = std::decay_t<decltype(typedSpan)>;
+                if constexpr(std::is_same_v<Type, Span<int64_t>> ||
+                             std::is_same_v<Type, Span<double>>) { // TODO - don't support strings
+                  using ElementType = typename Type::element_type;
+                  std::vector<ElementType> uniqueList;
+                  for(size_t i = 0; i < typedSpan.size(); ++i) {
+                    map[static_cast<long>(typedSpan[i])].push_back(i);
+                  }
+                  uniqueList.reserve(map.size());
+                  for(const auto& pair : map) {
+                    uniqueList.push_back(static_cast<ElementType>(pair.first));
+                  }
+                  span = Span<ElementType>(std::move(std::vector(uniqueList)));
+                } else {
+                  throw std::runtime_error("unsupported column type in group: " +
+                                           std::string(typeid(typename Type::element_type).name()));
+                }
+              },
+              std::move(*column));
+          ExpressionSpanArguments spans{};
+          spans.emplace_back(std::move(span));
+          auto dynamics = ExpressionArguments{};
+          dynamics.emplace_back(ComplexExpression("List"_, {}, {}, std::move(spans)));
+          resultColumns.emplace_back(
+              ComplexExpression(std::move(groupingColumnSymbol), {}, std::move(dynamics), {}));
+        } else {
+          throw std::runtime_error("couldn't access grouping column");
+        }
+      }
+
+      auto asFlag = boss::get<ComplexExpression>(args.at(1 + byFlag)).getHead().getName() == "As";
+      if(asFlag) {
+        auto asExpr = boss::get<ComplexExpression>(std::move(*it));
+        args = std::move(asExpr).getArguments();
+        it = std::make_move_iterator(args.begin());
+      }
+
+      for(auto aggFuncIt = it; aggFuncIt != std::make_move_iterator(args.end()); ++aggFuncIt) {
+        std::string specifiedName;
+        if(asFlag) {
+          auto name = get<Symbol>(std::move(*aggFuncIt++));
+          specifiedName = name.getName();
+        }
+        auto aggFunc = get<ComplexExpression>(std::move(*aggFuncIt));
+        assert(aggFunc.getDynamicArguments().size() == 1);
+        auto columnSymbol = get<Symbol>(aggFunc.getDynamicArguments().at(0));
+        auto aggFuncName = aggFunc.getHead().getName();
+        auto pred = createLambdaArgument(columnSymbol);
+        if(auto column = pred(columns)) {
+          ExpressionSpanArgument span;
+          std::visit(
+              [&span, &aggFuncName, &map, byFlag](auto&& typedSpan) {
+                using Type = std::decay_t<decltype(typedSpan)>;
+                if constexpr(std::is_same_v<Type, Span<int64_t>> ||
+                             std::is_same_v<Type, Span<double>>) {
+                  using ElementType = typename Type::element_type;
+                  if(aggFuncName == "Sum") {
+                    if(byFlag) {
+                      std::vector<ElementType> results;
+                      results.reserve(map.size());
+                      for (auto const& pair : map) {
+                        ElementType sum = 0;
+                        for (auto const& index : pair.second) {
+                           sum += typedSpan[index];
+                        }
+                        results.push_back(sum);
+                      }
+                      span = Span<ElementType>(std::move(std::vector(results)));
+                    } else {
+                      auto sum = std::accumulate(typedSpan.begin(), typedSpan.end(),
+                                                 static_cast<ElementType>(0));
+                      span = Span<ElementType>({sum});
+                    }
+                  } else if(aggFuncName == "Count") {
+                    if(byFlag) {
+                      std::vector<int64_t> results;
+                      results.reserve(map.size());
+                      for (auto const& pair : map) {
+                        results.push_back(static_cast<int64_t>(pair.second.size()));
+                      }
+                      span = Span<int64_t>(std::move(std::vector(results)));
+                    } else {
+                      auto count = static_cast<int64_t>(typedSpan.size());
+                      span = Span<int64_t>({count});
+                    }
+                  } else {
+                    throw std::runtime_error("unsupported aggregate function in group");
+                  }
+                } else {
+                  throw std::runtime_error("unsupported column type in group: " +
+                                           std::string(typeid(typename Type::element_type).name()));
+                }
+              },
+              std::move(*column));
+          ExpressionSpanArguments spans{};
+          spans.emplace_back(std::move(span));
+          auto dynamics = ExpressionArguments{};
+          dynamics.emplace_back(ComplexExpression("List"_, {}, {}, std::move(spans)));
+          auto name = asFlag ? Symbol(specifiedName) : columnSymbol;
+          resultColumns.emplace_back(
+              ComplexExpression(std::move(name), {}, std::move(dynamics), {}));
+        } else {
+          throw std::runtime_error("couldn't access aggregate column");
+        }
+      }
+      return ComplexExpression("Table"_, std::move(resultColumns));
+    };
+
+    (*this)["Select"_] = [](ComplexExpression&& inputExpr) -> Expression {
+      ExpressionArguments args = std::move(inputExpr).getArguments();
+      auto it = std::make_move_iterator(args.begin());
+      auto relation = boss::get<ComplexExpression>(std::move(*it));
+      auto predFunc = boss::get<Pred>(std::move(*++it));
+
+      auto columns = std::move(relation).getDynamicArguments();
+      std::transform(
+          std::make_move_iterator(columns.begin()), std::make_move_iterator(columns.end()),
+          columns.begin(), [](auto&& columnExpr) {
+            auto column = get<ComplexExpression>(std::forward<decltype(columnExpr)>(columnExpr));
+            auto [head, unused_, dynamics, spans] = std::move(column).decompose();
+            auto list = get<ComplexExpression>(std::move(dynamics.at(0)));
+            if(list.getDynamicArguments().size() > 0) {
+              list = transformDynamicsToSpans(std::move(list));
+            }
+            dynamics.at(0) = std::move(list);
+            return ComplexExpression(std::move(head), {}, std::move(dynamics), std::move(spans));
+          });
+
+      while(auto predicate = predFunc(columns)) {
+        std::transform(
+            std::make_move_iterator(columns.begin()), std::make_move_iterator(columns.end()),
+            columns.begin(), [&predicate](auto&& columnExpr) {
+              auto column = get<ComplexExpression>(std::forward<decltype(columnExpr)>(columnExpr));
+              auto [head, unused_, dynamics, spans] = std::move(column).decompose();
+              auto list = get<ComplexExpression>(std::move(dynamics.at(0)));
+              auto [listHead, listUnused_, listDynamics, listSpans] = std::move(list).decompose();
+              listSpans.at(0) = std::visit(
+                  [&predicate]<typename T>(Span<T>&& typedSpan) -> ExpressionSpanArgument {
+                    if constexpr(std::is_same_v<T, int64_t> || std::is_same_v<T, double_t> ||
+                                 std::is_same_v<T, std::string>) {
+                      auto result = std::vector<std::decay_t<T>>(); // TODO - filter in place
+                      //                      auto& indexes = std::get<Span<long>>(*predicate);
+                      //                      for(auto& index : indexes) {
+                      //                        result.push_back(typedSpan[index]);
+                      //                      }
+                      // TODO - this should be indexes for Select (would need to change bool below)
+                      auto& qualified = std::get<Span<bool>>(*predicate);
+                      for(size_t i = 0; i < qualified.size(); ++i) {
+                        if(qualified[i]) {
+                          result.push_back(typedSpan[i]);
+                        }
+                      }
+                      return Span<T>(std::move(std::vector(result)));
+                    } else {
+                      throw std::runtime_error("unsupported column type in select: " +
+                                               std::string(typeid(T).name()));
+                    }
+                  },
+                  std::move(listSpans.at(0)));
+              dynamics.at(0) = ComplexExpression(std::move(listHead), {}, std::move(listDynamics),
+                                                 std::move(listSpans));
+              return ComplexExpression(std::move(head), {}, std::move(dynamics), std::move(spans));
+            });
+        break;
+      }
+      return ComplexExpression("Table"_, std::move(columns));
+    };
+
+    (*this)["Project"_] = [](ComplexExpression&& inputExpr) -> Expression {
+      ExpressionArguments args = std::move(inputExpr).getArguments();
+      auto it = std::make_move_iterator(args.begin());
+      auto relation = boss::get<ComplexExpression>(std::move(*it));
+      auto asExpr = std::move(*++it);
+      if(relation.getHead().getName() != "Table") {
+        return "Project"_(std::move(relation), std::move(asExpr));
+      }
+
+      // TODO - repeat of function in Select - factor out
+      auto columns = std::move(relation).getDynamicArguments();
+      std::transform(
+          std::make_move_iterator(columns.begin()), std::make_move_iterator(columns.end()),
+          columns.begin(), [](auto&& columnExpr) {
+            auto column = get<ComplexExpression>(std::forward<decltype(columnExpr)>(columnExpr));
+            auto [head, unused_, dynamics, spans] = std::move(column).decompose();
+            auto list = get<ComplexExpression>(std::move(dynamics.at(0)));
+            if(list.getDynamicArguments().size() > 0) {
+              list = transformDynamicsToSpans(std::move(list));
+            }
+            dynamics.at(0) = std::move(list);
+            return ComplexExpression(std::move(head), {}, std::move(dynamics), std::move(spans));
+          });
+
+      // TODO - we move the column when found, therefore calcs using a column must come before
+      // the column itself in a project since we make a new column for calcs and move the column
+      // for just a symbol
+      auto projectedColumns = ExpressionArguments{};
+      ExpressionArguments asArgs = boss::get<ComplexExpression>(std::move(asExpr)).getArguments();
+      for(auto asIt = std::make_move_iterator(asArgs.begin());
+          asIt != std::make_move_iterator(asArgs.end()); ++asIt) {
+        auto name = get<Symbol>(std::move(*asIt));
+        auto as = std::move(*++asIt);
+        if(std::holds_alternative<Symbol>(as)) {
+          auto asSymbol = get<Symbol>(std::move(as));
+          for(auto& columnExpr : columns) {
+            if(std::get<ComplexExpression>(columnExpr).getHead() == asSymbol) {
+              auto& column = std::get<ComplexExpression>(columnExpr);
+              auto [head, statics, dynamics, spans] = std::move(column).decompose();
+              projectedColumns.emplace_back(ComplexExpression(
+                  std::move(name), std::move(statics), std::move(dynamics), std::move(spans)));
+              break;
+            }
+          }
+        } else {
+          auto asPred = get<Pred>(std::move(as));
+          ExpressionSpanArguments spans{};
+          while(auto projected = asPred(columns)) {
+            std::visit([&spans](auto&& typedSpan) { spans.emplace_back(std::move(typedSpan)); },
+                       *projected);
+            break;
+          }
+          auto dynamics = ExpressionArguments{};
+          dynamics.emplace_back(ComplexExpression("List"_, {}, {}, std::move(spans)));
+          projectedColumns.emplace_back(
+              ComplexExpression(std::move(name), {}, std::move(dynamics), {}));
+        }
+      }
+      return ComplexExpression("Table"_, std::move(projectedColumns));
+    };
   }
 };
 
