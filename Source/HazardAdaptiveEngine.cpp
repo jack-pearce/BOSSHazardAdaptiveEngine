@@ -44,6 +44,10 @@ using SpanInputs = std::variant<std::vector<std::int64_t>, std::vector<std::doub
 
 using namespace boss::algorithm;
 
+/** Pred function takes a relation in the form of ExpressionArguments, and an optional pointer to
+ * a span of candidate indexes. Based on these inputs and the internal predicate it returns an
+ * optional span in the form of an ExpressionSpanArgument
+ */
 class Pred : public std::function<std::optional<ExpressionSpanArgument>(ExpressionArguments&,
                                                                         Span<uint32_t>*)> {
 public:
@@ -766,6 +770,103 @@ public:
                        hoursInADay);
     };
 
+    (*this)["Project"_] = [](ComplexExpression&& inputExpr) -> Expression {
+      ExpressionArguments args = std::move(inputExpr).getArguments();
+      auto it = std::make_move_iterator(args.begin());
+      auto relation = get<ComplexExpression>(std::move(*it));
+      auto asExpr = std::move(*++it);
+      if(relation.getHead().getName() != "Table") {
+        return "Project"_(std::move(relation), std::move(asExpr));
+      }
+      auto columns = std::move(relation).getDynamicArguments();
+      columns = transformDynamicsInColumnsToSpans(std::move(columns));
+      ExpressionArguments asArgs = get<ComplexExpression>(std::move(asExpr)).getArguments();
+      auto projectedColumns = ExpressionArguments(asArgs.size() / 2);
+      size_t index = 0; // Process all calculation columns which will create a new column
+      for(auto asIt = std::make_move_iterator(asArgs.begin());
+          asIt != std::make_move_iterator(asArgs.end()); ++asIt) {
+        ++asIt;
+        assert(std::holds_alternative<Symbol>(*asIt) || std::holds_alternative<Pred>(*asIt));
+        if(std::holds_alternative<Pred>(*asIt)) {
+          auto name = get<Symbol>(std::move(*--asIt));
+          auto as = std::move(*++asIt);
+          auto pred = get<Pred>(std::move(as));
+          ExpressionSpanArguments spans{};
+          if(auto projected = pred(columns, nullptr)) {
+            std::visit([&spans](auto&& typedSpan) { spans.emplace_back(std::move(typedSpan)); },
+                       std::move(*projected));
+          }
+          auto dynamics = ExpressionArguments{};
+          dynamics.emplace_back(ComplexExpression("List"_, {}, {}, std::move(spans)));
+          projectedColumns[index] = ComplexExpression(std::move(name), {}, std::move(dynamics), {});
+        }
+        ++index;
+      }
+      index = 0; // Process all symbol columns which will move an existing column
+      for(auto asIt = std::make_move_iterator(asArgs.begin());
+          asIt != std::make_move_iterator(asArgs.end()); ++asIt) {
+        if(std::holds_alternative<Symbol>(*++asIt)) {
+          auto name = get<Symbol>(std::move(*--asIt));
+          auto as = std::move(*++asIt);
+          auto pred = createLambdaArgumentMove(get<Symbol>(std::move(as)));
+          ExpressionSpanArguments spans{};
+          if(auto projected = pred(columns, nullptr)) {
+            std::visit([&spans](auto&& typedSpan) { spans.emplace_back(std::move(typedSpan)); },
+                       std::move(*projected));
+          }
+          auto dynamics = ExpressionArguments{};
+          dynamics.emplace_back(ComplexExpression("List"_, {}, {}, std::move(spans)));
+          projectedColumns[index] = ComplexExpression(std::move(name), {}, std::move(dynamics), {});
+        }
+        ++index;
+      }
+      return ComplexExpression("Table"_, std::move(projectedColumns));
+    };
+
+    /** Currently candidate indexes is only used by Select which will create a new relation based
+     * on the final set of indexes from the predicates. However, alternatively we could simply pass
+     * the candidate indexes Span onto the next operator.
+     */
+    (*this)["Select"_] = [](ComplexExpression&& inputExpr) -> Expression {
+      ExpressionArguments args = std::move(inputExpr).getArguments();
+      auto it = std::make_move_iterator(args.begin());
+      auto relation = get<ComplexExpression>(std::move(*it));
+      auto predFunc = get<Pred>(std::move(*++it));
+      auto columns = std::move(relation).getDynamicArguments();
+      columns = transformDynamicsInColumnsToSpans(std::move(columns));
+      if(auto predicate = predFunc(columns, nullptr)) {
+        assert(std::holds_alternative<Span<uint32_t>>(*predicate));
+        auto& indexes = std::get<Span<uint32_t>>(*predicate);
+        std::transform(
+            std::make_move_iterator(columns.begin()), std::make_move_iterator(columns.end()),
+            columns.begin(), [&indexes](auto&& columnExpr) {
+              auto column = get<ComplexExpression>(std::forward<decltype(columnExpr)>(columnExpr));
+              auto [head, unused_, dynamics, spans] = std::move(column).decompose();
+              auto list = get<ComplexExpression>(std::move(dynamics.at(0)));
+              auto [listHead, listUnused_, listDynamics, listSpans] = std::move(list).decompose();
+              listSpans.at(0) = std::visit(
+                  [&indexes]<typename T>(Span<T>&& typedSpan) -> ExpressionSpanArgument {
+                    if constexpr(std::is_same_v<T, int64_t> || std::is_same_v<T, double_t> ||
+                                 std::is_same_v<T, std::string>) {
+                      for(size_t i = 0; i < indexes.size(); ++i) {
+                        typedSpan[i] = typedSpan[indexes[i]];
+                      }
+                      return std::move(typedSpan).subspan(0, indexes.size());
+                    } else {
+                      throw std::runtime_error("unsupported column type in select: " +
+                                               std::string(typeid(T).name()));
+                    }
+                  },
+                  std::move(listSpans.at(0)));
+              dynamics.at(0) = ComplexExpression(std::move(listHead), {}, std::move(listDynamics),
+                                                 std::move(listSpans));
+              return ComplexExpression(std::move(head), {}, std::move(dynamics), std::move(spans));
+            });
+      }
+      return ComplexExpression("Table"_, std::move(columns));
+    };
+
+    // TODO: Group currently only supports grouping on a single column of type long or double
     (*this)["Group"_] = [](ComplexExpression&& inputExpr) -> Expression {
       ExpressionArguments args = std::move(inputExpr).getArguments();
       auto it = std::make_move_iterator(args.begin());
@@ -778,7 +879,6 @@ public:
       auto byFlag = get<ComplexExpression>(args.at(1)).getHead().getName() == "By";
       std::map<long, std::vector<size_t>> map;
       if(byFlag) {
-        // TODO - Group on more than one column
         auto byExpr = get<ComplexExpression>(std::move(*it++));
         auto groupingColumnSymbol = get<Symbol>(byExpr.getDynamicArguments().at(0));
         auto groupingPred = createLambdaArgument(groupingColumnSymbol);
@@ -788,7 +888,7 @@ public:
               [&map, &span](auto&& typedSpan) {
                 using Type = std::decay_t<decltype(typedSpan)>;
                 if constexpr(std::is_same_v<Type, Span<int64_t>> ||
-                             std::is_same_v<Type, Span<double>>) { // TODO - support strings
+                             std::is_same_v<Type, Span<double>>) {
                   using ElementType = typename Type::element_type;
                   std::vector<ElementType> uniqueList;
                   for(size_t i = 0; i < typedSpan.size(); ++i) {
@@ -892,98 +992,6 @@ public:
         }
       }
       return ComplexExpression("Table"_, std::move(resultColumns));
-    };
-
-    (*this)["Select"_] = [](ComplexExpression&& inputExpr) -> Expression {
-      ExpressionArguments args = std::move(inputExpr).getArguments();
-      auto it = std::make_move_iterator(args.begin());
-      auto relation = get<ComplexExpression>(std::move(*it));
-      auto predFunc = get<Pred>(std::move(*++it));
-      auto columns = std::move(relation).getDynamicArguments();
-      columns = transformDynamicsInColumnsToSpans(std::move(columns));
-      if(auto predicate = predFunc(columns, nullptr)) {
-        assert(std::holds_alternative<Span<uint32_t>>(*predicate));
-        auto& indexes = std::get<Span<uint32_t>>(*predicate);
-        std::transform(
-            std::make_move_iterator(columns.begin()), std::make_move_iterator(columns.end()),
-            columns.begin(), [&indexes](auto&& columnExpr) {
-              auto column = get<ComplexExpression>(std::forward<decltype(columnExpr)>(columnExpr));
-              auto [head, unused_, dynamics, spans] = std::move(column).decompose();
-              auto list = get<ComplexExpression>(std::move(dynamics.at(0)));
-              auto [listHead, listUnused_, listDynamics, listSpans] = std::move(list).decompose();
-              listSpans.at(0) = std::visit(
-                  [&indexes]<typename T>(Span<T>&& typedSpan) -> ExpressionSpanArgument {
-                    if constexpr(std::is_same_v<T, int64_t> || std::is_same_v<T, double_t> ||
-                                 std::is_same_v<T, std::string>) {
-                      for(size_t i = 0; i < indexes.size(); ++i) {
-                        typedSpan[i] = typedSpan[indexes[i]];
-                      }
-                      return std::move(typedSpan).subspan(0, indexes.size());
-                    } else {
-                      throw std::runtime_error("unsupported column type in select: " +
-                                               std::string(typeid(T).name()));
-                    }
-                  },
-                  std::move(listSpans.at(0)));
-              dynamics.at(0) = ComplexExpression(std::move(listHead), {}, std::move(listDynamics),
-                                                 std::move(listSpans));
-              return ComplexExpression(std::move(head), {}, std::move(dynamics), std::move(spans));
-            });
-      }
-      return ComplexExpression("Table"_, std::move(columns));
-    };
-
-    (*this)["Project"_] = [](ComplexExpression&& inputExpr) -> Expression {
-      ExpressionArguments args = std::move(inputExpr).getArguments();
-      auto it = std::make_move_iterator(args.begin());
-      auto relation = get<ComplexExpression>(std::move(*it));
-      auto asExpr = std::move(*++it);
-      if(relation.getHead().getName() != "Table") {
-        return "Project"_(std::move(relation), std::move(asExpr));
-      }
-      auto columns = std::move(relation).getDynamicArguments();
-      columns = transformDynamicsInColumnsToSpans(std::move(columns));
-      ExpressionArguments asArgs = get<ComplexExpression>(std::move(asExpr)).getArguments();
-      auto projectedColumns = ExpressionArguments(asArgs.size() / 2);
-      size_t index = 0; // Process all calculation columns which will create a new column
-      for(auto asIt = std::make_move_iterator(asArgs.begin());
-          asIt != std::make_move_iterator(asArgs.end()); ++asIt) {
-        ++asIt;
-        assert(std::holds_alternative<Symbol>(*asIt) || std::holds_alternative<Pred>(*asIt));
-        if(std::holds_alternative<Pred>(*asIt)) {
-          auto name = get<Symbol>(std::move(*--asIt));
-          auto as = std::move(*++asIt);
-          auto pred = get<Pred>(std::move(as));
-          ExpressionSpanArguments spans{};
-          if(auto projected = pred(columns, nullptr)) {
-            std::visit([&spans](auto&& typedSpan) { spans.emplace_back(std::move(typedSpan)); },
-                       std::move(*projected));
-          }
-          auto dynamics = ExpressionArguments{};
-          dynamics.emplace_back(ComplexExpression("List"_, {}, {}, std::move(spans)));
-          projectedColumns[index] = ComplexExpression(std::move(name), {}, std::move(dynamics), {});
-        }
-        ++index;
-      }
-      index = 0; // Process all symbol columns which will move an existing column
-      for(auto asIt = std::make_move_iterator(asArgs.begin());
-          asIt != std::make_move_iterator(asArgs.end()); ++asIt) {
-        if(std::holds_alternative<Symbol>(*++asIt)) {
-          auto name = get<Symbol>(std::move(*--asIt));
-          auto as = std::move(*++asIt);
-          auto pred = createLambdaArgumentMove(get<Symbol>(std::move(as)));
-          ExpressionSpanArguments spans{};
-          if(auto projected = pred(columns, nullptr)) {
-            std::visit([&spans](auto&& typedSpan) { spans.emplace_back(std::move(typedSpan)); },
-                       std::move(*projected));
-          }
-          auto dynamics = ExpressionArguments{};
-          dynamics.emplace_back(ComplexExpression("List"_, {}, {}, std::move(spans)));
-          projectedColumns[index] = ComplexExpression(std::move(name), {}, std::move(dynamics), {});
-        }
-        ++index;
-      }
-      return ComplexExpression("Table"_, std::move(projectedColumns));
     };
   }
 };
