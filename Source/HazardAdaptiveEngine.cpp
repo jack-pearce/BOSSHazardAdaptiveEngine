@@ -988,17 +988,23 @@ public:
   }
 };
 
+/***************************** BOSS API CONVENIENCE FUNCTIONS *****************************/
+static Expression operator|(Expression&& expression, auto&& function) {
+  return std::visit(boss::utilities::overload(std::move(function),
+                                              [](auto&& atom) -> Expression { return atom; }),
+                    std::move(expression));
+}
+/*****************************************************************************************/
+
 static Expression evaluateInternal(Expression&& e) {
   static OperatorMap operators;
-  return visit(boss::utilities::overload(
-                   [](ComplexExpression&& e) -> Expression {
-                     auto head = e.getHead();
-                     if(operators.count(head))
-                       return operators.at(head)(std::move(e));
-                     return std::move(e);
-                   },
-                   [](auto&& e) -> Expression { return std::forward<decltype(e)>(e); }),
-               std::move(e));
+  return std::move(e) | [](ComplexExpression&& e) -> Expression {
+    auto head = e.getHead();
+    auto it = operators.find(head);
+    if(it != operators.end())
+      return it->second(std::move(e));
+    return std::move(e);
+  };
 }
 
 static boss::Expression evaluate(boss::Expression&& expr) {
