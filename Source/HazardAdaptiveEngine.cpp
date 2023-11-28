@@ -46,7 +46,7 @@ using namespace boss::algorithm;
 
 /** Pred function takes a relation in the form of ExpressionArguments, and an optional pointer to
  * a span of candidate indexes. Based on these inputs and the internal predicate it returns an
- * optional span in the form of an ExpressionSpanArgument
+ * optional span in the form of an ExpressionSpanArgument.
  */
 class Pred : public std::function<std::optional<ExpressionSpanArgument>(ExpressionArguments&,
                                                                         Span<uint32_t>*)> {
@@ -549,8 +549,10 @@ private:
     return {std::move(pred), toBOSSExpression(std::move(e))};
   }
 
-  // TODO - hacky to return 1 element span (Pred to return optional Expression?)
-  template <typename ArgType> static auto createLambdaArgument(ArgType const& arg) {
+  // TODO: Turn single arguments into a single element span so that createLambdaResult acts on two
+  //  spans. Could make this cleaner by Pred::Function returning an Expression or variant (but would
+  //  require more code)?
+  template <typename ArgType> static Pred::Function createLambdaArgument(ArgType const& arg) {
     if constexpr(NumericType<ArgType>) {
       return [arg](ExpressionArguments& /*unused*/,
                    Span<uint32_t>* /*unused*/) -> std::optional<ExpressionSpanArgument> {
@@ -575,7 +577,7 @@ private:
    * only be used locally within an operator and not returned as there is no guarantee the
    * underlying span will stay in scope. For example, it can be called from Select and Group where
    * the columns are used as intermediaries to produce the final result. However, it cannot be used
-   * in Project to return columns (the original columns must be moved)
+   * in Project to return columns (instead the columns must be moved)
    */
   static Pred::Function createLambdaArgument(Symbol const& arg) {
     return [arg](ExpressionArguments& columns,
@@ -746,15 +748,15 @@ public:
     };
 
     (*this)["As"_] = [](ComplexExpression&& input) -> Expression {
-      assert(input.getSpanArguments().empty());            // NOLINT
-      assert(input.getDynamicArguments().size() % 2 == 0); // NOLINT
+      assert(input.getSpanArguments().empty());
+      assert(input.getDynamicArguments().size() % 2 == 0);
       return std::move(input);
     };
 
     (*this)["DateObject"_] =
         [](ComplexExpressionWithStaticArguments<std::string>&& input) -> Expression {
-      assert(input.getSpanArguments().empty());    // NOLINT
-      assert(input.getDynamicArguments().empty()); // NOLINT
+      assert(input.getSpanArguments().empty());
+      assert(input.getDynamicArguments().empty());
       auto str = get<0>(std::move(input).getStaticArguments());
       std::istringstream iss;
       iss.str(std::string(str));
@@ -782,7 +784,7 @@ public:
       columns = transformDynamicsInColumnsToSpans(std::move(columns));
       ExpressionArguments asArgs = get<ComplexExpression>(std::move(asExpr)).getArguments();
       auto projectedColumns = ExpressionArguments(asArgs.size() / 2);
-      size_t index = 0; // Process all calculation columns which will create a new column
+      size_t index = 0; // Process all calculation columns, each creating a new column
       for(auto asIt = std::make_move_iterator(asArgs.begin());
           asIt != std::make_move_iterator(asArgs.end()); ++asIt) {
         ++asIt;
@@ -802,7 +804,7 @@ public:
         }
         ++index;
       }
-      index = 0; // Process all symbol columns which will move an existing column
+      index = 0; // Process all symbol columns, each moving an existing column
       for(auto asIt = std::make_move_iterator(asArgs.begin());
           asIt != std::make_move_iterator(asArgs.end()); ++asIt) {
         if(std::holds_alternative<Symbol>(*++asIt)) {
@@ -824,8 +826,8 @@ public:
     };
 
     /** Currently candidate indexes is only used by Select which will create a new relation based
-     * on the final set of indexes from the predicates. However, alternatively we could simply pass
-     * the candidate indexes Span onto the next operator.
+     * on the final set of indexes determined by the predicates. However, alternatively we could
+     * simply pass the candidate indexes Span onto the next operator.
      */
     (*this)["Select"_] = [](ComplexExpression&& inputExpr) -> Expression {
       ExpressionArguments args = std::move(inputExpr).getArguments();
@@ -866,7 +868,7 @@ public:
       return ComplexExpression("Table"_, std::move(columns));
     };
 
-    // TODO: Group currently only supports grouping on a single column of type long or double
+    // TODO: Group currently only supports grouping on a single column (type long or double)
     (*this)["Group"_] = [](ComplexExpression&& inputExpr) -> Expression {
       ExpressionArguments args = std::move(inputExpr).getArguments();
       auto it = std::make_move_iterator(args.begin());
