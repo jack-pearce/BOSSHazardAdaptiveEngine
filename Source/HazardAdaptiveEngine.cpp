@@ -211,7 +211,9 @@ private:
                         throw std::runtime_error(
                             "Found a Span<Pred const> in an expression to evaluate. "
                             "It should not happen.");
-                      } else if constexpr(std::is_same_v<std::decay_t<decltype(a)>, Span<bool>>) {
+                      } else if constexpr(std::is_same_v<std::decay_t<decltype(a)>, Span<bool>> ||
+                                          std::is_same_v<std::decay_t<decltype(a)>,
+                                                         Span<bool const>>) {
                         return bool(a[0]);
                       } else {
                         return std::move(a[0]);
@@ -219,7 +221,6 @@ private:
                     },
                     spans.front())
               : std::move(dynamics.at(sizeof...(T)));
-
       if(dynamics.empty()) {
         spans[0] = std::visit(
             [](auto&& span) -> ExpressionSpanArgument {
@@ -351,8 +352,9 @@ private:
                         std::is_same_v<Type2, Span<double>>)) {
             using ElementType1 = typename Type1::element_type;
             using ElementType2 = typename Type2::element_type;
-            using OutputType =
-                typename std::result_of<decltype(f)(ElementType1, ElementType2)>::type;
+            using OutputType = decltype(std::declval<decltype(f)>()(std::declval<ElementType1>(),
+                                                                    std::declval<ElementType2>()));
+
             // If output of f is a bool, then we are performing a select so return indexes
             if constexpr(std::is_same_v<OutputType, bool>) {
               std::vector<uint32_t> indexes;
@@ -419,8 +421,9 @@ private:
                         std::is_same_v<Type2, Span<double>>)) {
             using ElementType1 = typename Type1::element_type;
             using ElementType2 = typename Type2::element_type;
-            using OutputType =
-                typename std::result_of<decltype(f)(ElementType1, ElementType2)>::type;
+            using OutputType = decltype(std::declval<decltype(f)>()(std::declval<ElementType1>(),
+                                                                    std::declval<ElementType2>()));
+
             if constexpr(std::is_same_v<OutputType, bool>) {
               size_t qualifiedIndexes = 0;
               if(typedSpan2.size() == 1) {
