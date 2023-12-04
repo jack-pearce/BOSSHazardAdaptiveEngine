@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.10)
 project(BOSSHazardAdaptiveEngine)
 
+if(POLICY CMP0135)
+    cmake_policy(SET CMP0135 NEW)
+    set(CMAKE_POLICY_DEFAULT_CMP0135 NEW)
+endif()
+
 # Configure CCache if available
 find_program(CCACHE_EXECUTABLE ccache)
 mark_as_advanced(CCACHE_EXECUTABLE)
@@ -12,6 +17,24 @@ if(CCACHE_EXECUTABLE)
     endif()
   endforeach()
 endif()
+
+#################### Requirements for hazard-adaptive engine ####################
+
+if (NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    message(FATAL_ERROR "Unsupported operating system: ${CMAKE_SYSTEM_NAME}")
+endif ()
+
+file(READ "/proc/sys/kernel/perf_event_paranoid" PARANOID_LEVEL_CONTENT)
+if (NOT PARANOID_LEVEL_CONTENT)
+    message(FATAL_ERROR "Failed to read /proc/sys/kernel/perf_event_paranoid")
+endif()
+
+if (NOT PARANOID_LEVEL_CONTENT LESS_EQUAL 1)
+    message(FATAL_ERROR "Paranoid level is ${PARANOID_LEVEL_CONTENT}, it must be greater than 1.")
+endif()
+
+message(STATUS "Paranoid level: ${PARANOID_LEVEL_CONTENT}")
+
 
 ############################## Custom build modes ###############################
 
@@ -74,6 +97,38 @@ ExternalProject_Add(BOSS
         BUILD_BYPRODUCTS ${BOSSHazardAdaptiveEngine_BINARY_DIR}/deps/lib/${BOSS_LINK_LIBRARY_PREFIX}BOSS${BOSS_LINK_LIBRARY_SUFFIX}
 )
 
+# PAPI
+ExternalProject_Add(
+        papi
+        PREFIX ${BOSSHazardAdaptiveEngine_BINARY_DIR}/papi
+        URL https://icl.utk.edu/projects/papi/downloads/papi-7.0.1.tar.gz
+        URL_MD5 14bb2b09dab28232911f929ef4e4b98b
+        SOURCE_DIR ${BOSSHazardAdaptiveEngine_BINARY_DIR}/papi/source
+        BINARY_DIR ${BOSSHazardAdaptiveEngine_BINARY_DIR}/papi/source/src
+        CONFIGURE_COMMAND ${CMAKE_COMMAND} -E chdir ${BOSSHazardAdaptiveEngine_BINARY_DIR}/papi/source/src ${BOSSHazardAdaptiveEngine_BINARY_DIR}/papi/source/src/configure --prefix=${BOSSHazardAdaptiveEngine_BINARY_DIR}/papi/install
+        BUILD_COMMAND make
+        INSTALL_COMMAND make install
+)
+
+# Tessil robin-map
+ExternalProject_Add(
+        robin-map
+        GIT_REPOSITORY https://github.com/Tessil/robin-map.git
+        GIT_TAG master
+        PREFIX ${BOSSHazardAdaptiveEngine_BINARY_DIR}/robin-map
+        INSTALL_COMMAND ""
+)
+
+# JsonCpp
+ExternalProject_Add(
+        jsoncpp
+        GIT_REPOSITORY https://github.com/open-source-parsers/jsoncpp.git
+        GIT_TAG master
+        PREFIX ${BOSSHazardAdaptiveEngine_BINARY_DIR}/jsoncpp
+        INSTALL_COMMAND ""
+)
+
+
 #################################### Targets ####################################
 
 if(MSVC)
@@ -98,6 +153,17 @@ set_property(TARGET BOSSHazardAdaptiveEngine PROPERTY CXX_STANDARD 20) ## the co
 target_include_directories(BOSSHazardAdaptiveEngine SYSTEM PUBLIC ${BOSSHazardAdaptiveEngine_BINARY_DIR}/deps/include)
 target_link_directories(BOSSHazardAdaptiveEngine PUBLIC ${BOSSHazardAdaptiveEngine_BINARY_DIR}/deps/lib)
 add_dependencies(BOSSHazardAdaptiveEngine BOSS)
+
+target_include_directories(BOSSHazardAdaptiveEngine SYSTEM PRIVATE ${BOSSHazardAdaptiveEngine_BINARY_DIR}/papi/install/include)
+target_link_libraries(BOSSHazardAdaptiveEngine PRIVATE ${BOSSHazardAdaptiveEngine_BINARY_DIR}/papi/install/lib/libpapi.so)
+add_dependencies(BOSSHazardAdaptiveEngine papi)
+
+target_include_directories(BOSSHazardAdaptiveEngine PRIVATE ${BOSSHazardAdaptiveEngine_BINARY_DIR}/robin-map/src/robin-map/include)
+add_dependencies(BOSSHazardAdaptiveEngine robin-map)
+
+target_include_directories(BOSSHazardAdaptiveEngine PRIVATE ${BOSSHazardAdaptiveEngine_BINARY_DIR}/jsoncpp/src/jsoncpp/include)
+target_link_libraries(BOSSHazardAdaptiveEngine PRIVATE ${BOSSHazardAdaptiveEngine_BINARY_DIR}/jsoncpp/src/jsoncpp-build/lib/libjsoncpp.so)
+add_dependencies(BOSSHazardAdaptiveEngine jsoncpp)
 
 set_target_properties(BOSSHazardAdaptiveEngine PROPERTIES INSTALL_RPATH_USE_LINK_PATH TRUE)
 install(TARGETS BOSSHazardAdaptiveEngine LIBRARY DESTINATION lib)
