@@ -2,7 +2,6 @@
 .vscode
 .vs
 .idea
-.clang*
 cmake*
 build/
 Debug/
