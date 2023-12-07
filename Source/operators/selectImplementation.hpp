@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstring>
 #include <iostream>
+#include <memory>
 
 // #define DEBUG
 
@@ -265,29 +266,28 @@ template <typename T, typename P> inline void SelectAdaptive<T, P>::processMicro
 /****************************** MULTI-THREADED ******************************/
 
 template <typename T, typename P> struct SelectThreadArgs {
-  vectorOfPairs<size_t, size_t>* taskIndexes;
-  std::atomic<size_t>* tasksCompleted;
-  std::atomic<size_t>* processingComplete;
-  size_t maxSize;
+  size_t startCandidates;
+  size_t numCandidates;
   Span<T>& column;
   T value;
   bool columnIsFirstArg;
   P& predicate;
   Span<uint32_t>* candidateIndexes;
   uint32_t* selectedIndexes;
-  std::atomic<size_t>* totalSelected;
+  std::atomic<uint32_t>* threadToMerge;
+  std::atomic<uint32_t>* positionToWrite;
   uint32_t dop;
+  uint32_t threadNum;
 
-  SelectThreadArgs(vectorOfPairs<size_t, size_t>* taskIndexes_,
-                   std::atomic<size_t>* tasksCompleted_, std::atomic<size_t>* processingComplete_,
-                   size_t maxSize_, Span<T>& column_, T value_, bool columnIsFirstArg_,
-                   P& predicate_, Span<uint32_t>* candidateIndexes_, uint32_t* selectedIndexes_,
-                   std::atomic<size_t>* totalSelected_, uint32_t dop_)
-      : taskIndexes(taskIndexes_), tasksCompleted(tasksCompleted_),
-        processingComplete(processingComplete_), maxSize(maxSize_), column(column_), value(value_),
-        columnIsFirstArg(columnIsFirstArg_), predicate(predicate_),
+  SelectThreadArgs(size_t startCandidates_, size_t numCandidates_, Span<T>& column_, T value_,
+                   bool columnIsFirstArg_, P& predicate_, Span<uint32_t>* candidateIndexes_,
+                   uint32_t* selectedIndexes_, std::atomic<uint32_t>* threadToMerge_,
+                   std::atomic<uint32_t>* positionToWrite_, uint32_t dop_, uint32_t threadNum_)
+      : startCandidates(startCandidates_), numCandidates(numCandidates_), column(column_),
+        value(value_), columnIsFirstArg(columnIsFirstArg_), predicate(predicate_),
         candidateIndexes(candidateIndexes_), selectedIndexes(selectedIndexes_),
-        totalSelected(totalSelected_), dop(dop_) {}
+        threadToMerge(threadToMerge_), positionToWrite(positionToWrite_), dop(dop_),
+        threadNum(threadNum_) {}
 };
 
 template <typename T, typename P> class MonitorSelectParallel;
@@ -303,41 +303,39 @@ public:
 private:
   inline void processMicroBatch();
 
+  size_t microBatchStartIndex;
+  size_t remainingTuples;
   Span<T>& column;
   T value;
   bool columnIsFirstArg;
   P& predicate;
   Span<uint32_t>* candidateIndexes;
-  uint32_t dop;
+  uint32_t* selectedIndexes;
 
-  vectorOfPairs<size_t, size_t>* taskIndexes;
-  std::atomic<size_t>* tasksCompleted;
-  std::atomic<size_t>* totalSelected;
-  std::atomic<size_t>* processingComplete;
-  uint32_t* overallSelectedIndexes;
+  std::atomic<uint32_t>* threadToMerge;
+  std::atomic<uint32_t>* positionToWrite;
+  uint32_t dop;
+  uint32_t threadNum;
 
   size_t tuplesPerHazardCheck;
   size_t maxConsecutivePredications;
   size_t tuplesInBranchBurst;
 
   SelectImplementation activeOperator;
-
   SelectBranch<T, P> branchOperator;
   SelectPredication<T, P> predicationOperator;
 
-  std::vector<uint32_t> threadSelectionBuffer;
+  uint32_t* threadSelectionBuffer;
   uint32_t* threadSelection;
-  long_long* branchMispredictions;
-  MonitorSelectParallel<T, P>* monitor;
+  std::unique_ptr<long_long> branchMispredictions;
+  std::unique_ptr<MonitorSelectParallel<T, P>> monitor;
   int eventSet;
 
-  size_t microBatchStartIndex{};
-  size_t threadSelected{};
-  size_t consecutivePredications{};
+  size_t consecutivePredications;
+  size_t threadSelected;
+
   size_t microBatchSize{};
   size_t microBatchSelected{};
-  size_t taskSelected{};
-  size_t taskTuplesRemaining{};
 };
 
 template <typename T, typename P> class MonitorSelectParallel {
@@ -388,27 +386,30 @@ private:
 
 template <typename T, typename P>
 SelectAdaptiveParallelAux<T, P>::SelectAdaptiveParallelAux(SelectThreadArgs<T, P>* args)
-    : column(args->column), value(args->value), columnIsFirstArg(args->columnIsFirstArg),
-      predicate(args->predicate), candidateIndexes(args->candidateIndexes), dop(args->dop),
-      taskIndexes(args->taskIndexes), tasksCompleted(args->tasksCompleted),
-      processingComplete(args->processingComplete), totalSelected(args->totalSelected),
-      overallSelectedIndexes(args->selectedIndexes), tuplesPerHazardCheck(50000),
-      maxConsecutivePredications(10), tuplesInBranchBurst(1000),
+    : microBatchStartIndex(args->startCandidates), remainingTuples(args->numCandidates),
+      column(args->column), value(args->value), columnIsFirstArg(args->columnIsFirstArg),
+      predicate(args->predicate), candidateIndexes(args->candidateIndexes),
+      selectedIndexes(args->selectedIndexes), threadToMerge(args->threadToMerge),
+      positionToWrite(args->positionToWrite), dop(args->dop), threadNum(args->threadNum),
+      tuplesPerHazardCheck(50000), maxConsecutivePredications(10), tuplesInBranchBurst(1000),
       activeOperator(SelectImplementation::Predication_), branchOperator(SelectBranch<T, P>()),
-      predicationOperator(SelectPredication<T, P>()) {
-  auto bufferSize = (1.25 * (args->maxSize / dop)) + 1000;
-  threadSelectionBuffer.reserve(bufferSize);
-  threadSelectionBuffer.resize(bufferSize);
-  threadSelection = threadSelectionBuffer.data();
+      predicationOperator(SelectPredication<T, P>()), consecutivePredications(0),
+      threadSelected(0) {
 
-  delete args;
+  if(threadNum == 0) {
+    threadSelectionBuffer = selectedIndexes;
+    threadSelection = selectedIndexes;
+  } else {
+    threadSelectionBuffer = new uint32_t[remainingTuples];
+    threadSelection = threadSelectionBuffer;
+  }
 
   eventSet = PAPI_NULL;
   std::vector<std::string> counters = {"PERF_COUNT_HW_BRANCH_MISSES"};
   createThreadEventSet(&eventSet, counters);
 
-  branchMispredictions = new long_long;
-  monitor = new MonitorSelectParallel<T, P>(this, dop, branchMispredictions);
+  branchMispredictions = std::make_unique<long_long>();
+  monitor = std::make_unique<MonitorSelectParallel<T, P>>(this, dop, branchMispredictions.get());
 }
 
 template <typename T, typename P>
@@ -429,75 +430,59 @@ void SelectAdaptiveParallelAux<T, P>::adjustRobustness(int adjustment) {
 }
 
 template <typename T, typename P> void SelectAdaptiveParallelAux<T, P>::processInput() {
-  size_t nextTaskNumber = (*tasksCompleted).fetch_add(1);
-
-  while(nextTaskNumber < static_cast<size_t>(taskIndexes->size())) {
-
-    microBatchStartIndex = (*taskIndexes)[nextTaskNumber].first;
-    taskTuplesRemaining = (*taskIndexes)[nextTaskNumber].second;
-
-    if(__builtin_expect((threadSelected + taskTuplesRemaining) >= threadSelectionBuffer.size(),
-                        false)) {
-      threadSelectionBuffer.resize(threadSelectionBuffer.size() * 1.5);
+  while(remainingTuples > 0) {
+    if(__builtin_expect(consecutivePredications == maxConsecutivePredications, false)) {
+      activeOperator = SelectImplementation::Branch_;
+      consecutivePredications = 0;
+      microBatchSize = std::min(remainingTuples, tuplesInBranchBurst);
+    } else {
+      microBatchSize = std::min(remainingTuples, tuplesPerHazardCheck);
     }
-
-    taskSelected = 0;
-    consecutivePredications = 0;
-    activeOperator = SelectImplementation::Predication_;
-
-    while(taskTuplesRemaining > 0) {
-      if(__builtin_expect(consecutivePredications == maxConsecutivePredications, false)) {
-        activeOperator = SelectImplementation::Branch_;
-        consecutivePredications = 0;
-        microBatchSize = std::min(taskTuplesRemaining, tuplesInBranchBurst);
-      } else {
-        microBatchSize = std::min(taskTuplesRemaining, tuplesPerHazardCheck);
-      }
-      processMicroBatch();
-      monitor->checkHazards(microBatchSize, microBatchSelected);
-    }
-
-    threadSelected += taskSelected;
-    nextTaskNumber = (*tasksCompleted).fetch_add(1);
+    processMicroBatch();
+    monitor->checkHazards(microBatchSize, microBatchSelected);
   }
-
-  *processingComplete += 1;
 }
 
 template <typename T, typename P> inline void SelectAdaptiveParallelAux<T, P>::processMicroBatch() {
   microBatchSelected = 0;
   if(activeOperator == SelectImplementation::Branch_) {
-    readThreadEventSet(eventSet, 1, branchMispredictions);
+    readThreadEventSet(eventSet, 1, branchMispredictions.get());
     microBatchSelected = branchOperator.processMicroBatch(
         microBatchStartIndex, microBatchSize, column, value, columnIsFirstArg, predicate,
         candidateIndexes, threadSelection);
-    readThreadEventSet(eventSet, 1, branchMispredictions);
+    readThreadEventSet(eventSet, 1, branchMispredictions.get());
   } else {
-    readThreadEventSet(eventSet, 1, branchMispredictions);
+    readThreadEventSet(eventSet, 1, branchMispredictions.get());
     microBatchSelected = predicationOperator.processMicroBatch(
         microBatchStartIndex, microBatchSize, column, value, columnIsFirstArg, predicate,
         candidateIndexes, threadSelection);
-    readThreadEventSet(eventSet, 1, branchMispredictions);
+    readThreadEventSet(eventSet, 1, branchMispredictions.get());
     consecutivePredications++;
   }
-  taskTuplesRemaining -= microBatchSize;
+  remainingTuples -= microBatchSize;
   microBatchStartIndex += microBatchSize;
   threadSelection += microBatchSelected;
-  taskSelected += microBatchSelected;
+  threadSelected += microBatchSelected;
 }
 
 template <typename T, typename P> void SelectAdaptiveParallelAux<T, P>::mergeOutput() {
-  size_t overallSelectionStartIndex = (*totalSelected).fetch_add(threadSelected);
-  while(*processingComplete != dop) { // Busy wait
+  while((*threadToMerge).load(std::memory_order_acquire) != threadNum) {
   }
-  memcpy(overallSelectedIndexes + overallSelectionStartIndex, threadSelectionBuffer.data(),
-         threadSelected * sizeof(uint32_t));
+  auto writeIndex = (*positionToWrite).fetch_add(threadSelected, std::memory_order_release);
+  (*threadToMerge).fetch_add(1, std::memory_order_release);
+
+  if(threadNum == 0) {
+    return;
+  }
+
+  memcpy(selectedIndexes + writeIndex, threadSelectionBuffer, threadSelected * sizeof(uint32_t));
 }
 
 template <typename T, typename P> SelectAdaptiveParallelAux<T, P>::~SelectAdaptiveParallelAux() {
-  destroyThreadEventSet(eventSet, branchMispredictions);
-  delete branchMispredictions;
-  delete monitor;
+  if(threadNum != 0) {
+    delete[] threadSelectionBuffer;
+  }
+  destroyThreadEventSet(eventSet, branchMispredictions.get());
 }
 
 template <typename T, typename P> void* selectAdaptiveParallelAux(void* arg) {
@@ -521,6 +506,7 @@ public:
     while(dop > n) {
       dop /= 2;
     }
+
     candidateIndexesPtr = candidateIndexes.size() > 0 ? &candidateIndexes : nullptr;
     if(candidateIndexes.size() == 0) {
       std::vector<uint32_t> vec(column.size());
@@ -536,44 +522,33 @@ public:
     }
 
     pthread_t threads[dop];
-
-    size_t adaptivePeriod = 50000;
-    size_t tuplesPerTask = std::max(adaptivePeriod * 20, n / (dop * 20));
-    if((n / tuplesPerTask) < (4 * dop)) {
-      tuplesPerTask = n / dop;
-    }
-
-    vectorOfPairs<size_t, size_t> taskIndexes(n / tuplesPerTask, std::make_pair(0, tuplesPerTask));
-    taskIndexes.back().second = n - (((n / tuplesPerTask) - 1) * (tuplesPerTask));
+    size_t tuplesPerThread = n / dop;
+    vectorOfPairs<size_t, size_t> threadIndexes(dop, std::make_pair(0, tuplesPerThread));
+    threadIndexes.back().second = n - ((dop - 1) * tuplesPerThread);
 
     size_t startIndex = 0;
-    for(auto& taskIndex : taskIndexes) {
-      taskIndex.first = startIndex;
-      startIndex += taskIndex.second;
+    for(auto& threadIndex : threadIndexes) {
+      threadIndex.first = startIndex;
+      startIndex += threadIndex.second;
     }
 
-    std::atomic<size_t> totalSelected = 0;
-    std::atomic<size_t> tasksCompleted = 0;
-    std::atomic<size_t> processingComplete = 0;
-
-    std::vector<SelectThreadArgs<T, P>*> threadArgs(dop);
+    std::atomic<uint32_t> threadToMerge = 0;
+    std::atomic<uint32_t> positionToWrite = 0;
+    std::vector<std::unique_ptr<SelectThreadArgs<T, P>>> threadArgs;
 
     for(auto i = 0; i < dop; ++i) {
-      threadArgs[i] = new SelectThreadArgs<T, P>(
-          &taskIndexes, &tasksCompleted, &processingComplete, n, column, value, columnIsFirstArg,
-          predicate, candidateIndexesPtr, candidateIndexes.begin(), &totalSelected, dop);
-      pthread_create(&threads[i], NULL, selectAdaptiveParallelAux<T, P>, threadArgs[i]);
+      threadArgs.push_back(std::make_unique<SelectThreadArgs<T, P>>(threadIndexes[i].first, threadIndexes[i].second,
+                                                 column, value, columnIsFirstArg, predicate,
+                                                 candidateIndexesPtr, candidateIndexes.begin(),
+                                                 &threadToMerge, &positionToWrite, dop, i));
+      pthread_create(&threads[i], NULL, selectAdaptiveParallelAux<T, P>, threadArgs[i].get());
     }
 
     for(int i = 0; i < dop; ++i) {
       pthread_join(threads[i], nullptr);
     }
 
-    auto beginIt = candidateIndexes.begin();
-    auto endIt = candidateIndexes.begin() + totalSelected;
-    std::sort(beginIt, endIt);
-
-    return std::move(candidateIndexes).subspan(0, totalSelected);
+    return std::move(candidateIndexes).subspan(0, positionToWrite);
   }
 
 private:
