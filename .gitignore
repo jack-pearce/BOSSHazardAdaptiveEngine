@@ -1,6 +1,7 @@
 .dir-locals.el
 .vscode
 .vs
+.json
 .idea
 cmake*
 build/

@@ -3,6 +3,8 @@
 #include <Expression.hpp>
 #include <ExpressionUtilities.hpp>
 
+#include "operators/select.hpp"
+
 #include <algorithm>
 #include <any>
 #include <cassert>
@@ -36,6 +38,8 @@ using ExpressionBuilder = boss::utilities::ExtensibleExpressionBuilder<HAExpress
 static ExpressionBuilder operator""_(const char* name, size_t /*unused*/) {
   return ExpressionBuilder(name);
 }
+
+using adaptive::Select;
 
 using boss::Span;
 using boss::Symbol;
@@ -354,32 +358,16 @@ private:
             using ElementType2 = typename Type2::element_type;
             using OutputType = decltype(std::declval<decltype(f)>()(std::declval<ElementType1>(),
                                                                     std::declval<ElementType2>()));
-
             // If output of f is a bool, then we are performing a select so return indexes
             if constexpr(std::is_same_v<OutputType, bool>) {
-              std::vector<uint32_t> indexes;
-              indexes.reserve(std::max(typedSpan1.size(), typedSpan2.size()));
+              assert(typedSpan1.size() == 1 || typedSpan2.size() == 1);
               if(typedSpan2.size() == 1) {
-                for(uint32_t i = 0; i < typedSpan1.size(); ++i) {
-                  if(f(typedSpan1[i], typedSpan2[0])) {
-                    indexes.push_back(i);
-                  }
-                }
-              } else if(typedSpan1.size() == 1) {
-                for(size_t i = 0; i < typedSpan2.size(); ++i) {
-                  if(f(typedSpan1[0], typedSpan2[i])) {
-                    indexes.push_back(i);
-                  }
-                }
+                span =
+                    adaptive::select(Select::Adaptive, typedSpan1, typedSpan2[0], true, f, {}, 2);
               } else {
-                assert(typedSpan1.size() == typedSpan2.size());
-                for(size_t i = 0; i < typedSpan2.size(); ++i) {
-                  if(f(typedSpan1[i], typedSpan2[i])) {
-                    indexes.push_back(i);
-                  }
-                }
+                span =
+                    adaptive::select(Select::Adaptive, typedSpan2, typedSpan1[0], false, f, {}, 2);
               }
-              span = Span<uint32_t>(std::move(std::vector(indexes)));
             } else {
               std::vector<OutputType> output;
               output.reserve(std::max(typedSpan1.size(), typedSpan2.size()));
@@ -425,28 +413,14 @@ private:
                                                                     std::declval<ElementType2>()));
 
             if constexpr(std::is_same_v<OutputType, bool>) {
-              size_t qualifiedIndexes = 0;
+              assert(typedSpan1.size() == 1 || typedSpan2.size() == 1);
               if(typedSpan2.size() == 1) {
-                for(auto& index : indexes) {
-                  if(f(typedSpan1[index], typedSpan2[0])) {
-                    indexes[qualifiedIndexes++] = index;
-                  }
-                }
-              } else if(typedSpan1.size() == 1) {
-                for(auto& index : indexes) {
-                  if(f(typedSpan1[0], typedSpan2[index])) {
-                    indexes[qualifiedIndexes++] = index;
-                  }
-                }
+                indexes = adaptive::select(Select::Adaptive, typedSpan1, typedSpan2[0], true, f,
+                                           std::move(indexes), 2);
               } else {
-                assert(typedSpan1.size() == typedSpan2.size());
-                for(auto& index : indexes) {
-                  if(f(typedSpan1[index], typedSpan2[index])) {
-                    indexes[qualifiedIndexes++] = index;
-                  }
-                }
+                indexes = adaptive::select(Select::Adaptive, typedSpan2, typedSpan1[0], false, f,
+                                           std::move(indexes), 2);
               }
-              indexes = std::move(indexes).subspan(0, qualifiedIndexes);
             } else {
               throw std::runtime_error(
                   "function in createLambdaPipelineResult does not return bool: " +
@@ -528,18 +502,15 @@ private:
             ExpressionArguments& columns,
             Span<uint32_t>* indexes) mutable -> std::optional<ExpressionSpanArgument> {
       auto candidateIndexes = preds[0](columns, nullptr);
-      if(!candidateIndexes) {
-        return {};
-      }
       ExpressionSpanArgument span;
       std::visit(
           [&span, &preds, &columns](auto&& candidateIndexes) {
             if constexpr(std::is_same_v<std::decay_t<decltype(candidateIndexes)>, Span<uint32_t>>) {
               for(auto it = std::next(preds.begin()); it != preds.end(); ++it) {
-                (*it)(columns, &candidateIndexes);
                 if(candidateIndexes.size() == 0) {
                   break;
                 }
+                (*it)(columns, &candidateIndexes);
               }
               span = Span<uint32_t>(std::move(candidateIndexes));
             } else {
@@ -842,6 +813,7 @@ public:
       if(auto predicate = predFunc(columns, nullptr)) {
         assert(std::holds_alternative<Span<uint32_t>>(*predicate));
         auto& indexes = std::get<Span<uint32_t>>(*predicate);
+        // TODO: parallelize this with one thread per column to be filtered in place
         std::transform(
             std::make_move_iterator(columns.begin()), std::make_move_iterator(columns.end()),
             columns.begin(), [&indexes](auto&& columnExpr) {

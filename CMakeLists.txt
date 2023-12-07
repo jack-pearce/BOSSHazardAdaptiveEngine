@@ -145,10 +145,18 @@ else()
     set(pluginInstallDir lib)
 endif(MSVC)
 
-set(ImplementationFiles Source/HazardAdaptiveEngine.cpp)
+set(ImplementationFiles
+        Source/HazardAdaptiveEngine.cpp
+        Source/operators/select.cpp
+        Source/utilities/papiWrapper.cpp
+        Source/utilities/systemInformation.cpp
+        Source/constants/machineConstants.cpp
+)
 
 # Plugin
 add_library(BOSSHazardAdaptiveEngine MODULE ${ImplementationFiles})
+target_include_directories(BOSSHazardAdaptiveEngine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+
 set_property(TARGET BOSSHazardAdaptiveEngine PROPERTY CXX_STANDARD 20) ## the core is c++ 17 but the engines may want to use 20
 target_include_directories(BOSSHazardAdaptiveEngine SYSTEM PUBLIC ${BOSSHazardAdaptiveEngine_BINARY_DIR}/deps/include)
 target_link_directories(BOSSHazardAdaptiveEngine PUBLIC ${BOSSHazardAdaptiveEngine_BINARY_DIR}/deps/lib)
