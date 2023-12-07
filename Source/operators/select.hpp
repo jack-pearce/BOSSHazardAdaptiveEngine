@@ -8,7 +8,7 @@ using boss::Span;
 namespace adaptive {
 
 enum SelectImplementation { Branch_, Predication_ };
-enum Select { Branch, Predication, Adaptive };
+enum Select { Branch, Predication, Adaptive, AdaptiveParallel};
 
 std::string getSelectName(Select select);
 

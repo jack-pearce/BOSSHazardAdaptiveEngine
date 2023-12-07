@@ -362,11 +362,11 @@ private:
             if constexpr(std::is_same_v<OutputType, bool>) {
               assert(typedSpan1.size() == 1 || typedSpan2.size() == 1);
               if(typedSpan2.size() == 1) {
-                span =
-                    adaptive::select(Select::Adaptive, typedSpan1, typedSpan2[0], true, f, {}, 4);
+                span = adaptive::select(Select::AdaptiveParallel, typedSpan1, typedSpan2[0], true,
+                                        f, {}, 4);
               } else {
-                span =
-                    adaptive::select(Select::Adaptive, typedSpan2, typedSpan1[0], false, f, {}, 4);
+                span = adaptive::select(Select::AdaptiveParallel, typedSpan2, typedSpan1[0], false,
+                                        f, {}, 4);
               }
             } else {
               std::vector<OutputType> output;
@@ -415,11 +415,11 @@ private:
             if constexpr(std::is_same_v<OutputType, bool>) {
               assert(typedSpan1.size() == 1 || typedSpan2.size() == 1);
               if(typedSpan2.size() == 1) {
-                indexes = adaptive::select(Select::Adaptive, typedSpan1, typedSpan2[0], true, f,
-                                           std::move(indexes), 4);
+                indexes = adaptive::select(Select::AdaptiveParallel, typedSpan1, typedSpan2[0],
+                                           true, f, std::move(indexes), 4);
               } else {
-                indexes = adaptive::select(Select::Adaptive, typedSpan2, typedSpan1[0], false, f,
-                                           std::move(indexes), 4);
+                indexes = adaptive::select(Select::AdaptiveParallel, typedSpan2, typedSpan1[0],
+                                           false, f, std::move(indexes), 4);
               }
             } else {
               throw std::runtime_error(

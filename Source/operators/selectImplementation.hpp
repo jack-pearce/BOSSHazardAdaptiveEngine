@@ -157,8 +157,7 @@ public:
     upperCrossoverSelectivity =
         static_cast<float>(MachineConstants::getInstance().getMachineConstant(upperName));
 
-    // Gradient of number of branch misses between lower cross-over selectivity and upper cross-over
-    // selectivity
+    // Gradient of number of branch misses between lower and upper cross-over selectivity
     m = ((1 - upperCrossoverSelectivity) - lowerCrossoverSelectivity) /
         (upperCrossoverSelectivity - lowerCrossoverSelectivity);
   }
@@ -353,8 +352,7 @@ public:
     upperCrossoverSelectivity =
         static_cast<float>(MachineConstants::getInstance().getMachineConstant(upperName));
 
-    // Gradient of number of branch misses between lower cross-over selectivity and upper cross-over
-    // selectivity
+    // Gradient of number of branch misses between lower and upper cross-over selectivity
     m = ((1 - upperCrossoverSelectivity) - lowerCrossoverSelectivity) /
         (upperCrossoverSelectivity - lowerCrossoverSelectivity);
   }
@@ -415,13 +413,13 @@ SelectAdaptiveParallelAux<T, P>::SelectAdaptiveParallelAux(SelectThreadArgs<T, P
 template <typename T, typename P>
 void SelectAdaptiveParallelAux<T, P>::adjustRobustness(int adjustment) {
   if(__builtin_expect((adjustment > 0) && activeOperator == SelectImplementation::Branch_, false)) {
-#if FALSE
+#if DEBUG
     std::cout << "Switched to select predication" << std::endl;
 #endif
     activeOperator = SelectImplementation::Predication_;
   } else if(__builtin_expect(
                 (adjustment < 0) && activeOperator == SelectImplementation::Predication_, false)) {
-#if FALSE
+#if DEBUG
     std::cout << "Switched to select branch" << std::endl;
 #endif
     activeOperator = SelectImplementation::Branch_;
@@ -501,7 +499,6 @@ public:
                          Span<uint32_t>&& candidateIndexes_, uint32_t dop_)
       : column(column_), value(value_), columnIsFirstArg(columnIsFirstArg_), predicate(predicate_),
         candidateIndexes(std::move(candidateIndexes_)), dop(dop_) {
-    assert(1 < dop && dop <= logicalCoresCount());
     n = candidateIndexes.size() == 0 ? column.size() : candidateIndexes.size();
     while(dop > n) {
       dop /= 2;
@@ -537,10 +534,10 @@ public:
     std::vector<std::unique_ptr<SelectThreadArgs<T, P>>> threadArgs;
 
     for(auto i = 0; i < dop; ++i) {
-      threadArgs.push_back(std::make_unique<SelectThreadArgs<T, P>>(threadIndexes[i].first, threadIndexes[i].second,
-                                                 column, value, columnIsFirstArg, predicate,
-                                                 candidateIndexesPtr, candidateIndexes.begin(),
-                                                 &threadToMerge, &positionToWrite, dop, i));
+      threadArgs.push_back(std::make_unique<SelectThreadArgs<T, P>>(
+          threadIndexes[i].first, threadIndexes[i].second, column, value, columnIsFirstArg,
+          predicate, candidateIndexesPtr, candidateIndexes.begin(), &threadToMerge,
+          &positionToWrite, dop, i));
       pthread_create(&threads[i], NULL, selectAdaptiveParallelAux<T, P>, threadArgs[i].get());
     }
 
@@ -568,34 +565,34 @@ private:
 template <typename T, typename P>
 Span<uint32_t> select(Select implementation, Span<T>& column, T value, bool columnIsFirstArg,
                       P& predicate, Span<uint32_t>&& candidateIndexes, size_t dop) {
-  assert(dop > 0);
-  if(implementation == Select::Adaptive) {
-    if(dop == 1) {
-      SelectAdaptive<T, P> selectOperator(column, value, columnIsFirstArg, predicate,
-                                          std::move(candidateIndexes));
-      return std::move(selectOperator.processInput());
-    } else {
-      SelectAdaptiveParallel<T, P> selectOperator(column, value, columnIsFirstArg, predicate,
-                                                  std::move(candidateIndexes), dop);
-      return std::move(selectOperator.processInput());
-    }
+  assert(1 <= dop && dop <= logicalCoresCount());
+  if(implementation == Select::AdaptiveParallel) {
+    SelectAdaptiveParallel<T, P> selectOperator(column, value, columnIsFirstArg, predicate,
+                                                std::move(candidateIndexes), dop);
+    return std::move(selectOperator.processInput());
   }
 
   assert(dop == 1);
+  if(implementation == Select::Adaptive) {
+    SelectAdaptive<T, P> selectOperator(column, value, columnIsFirstArg, predicate,
+                                        std::move(candidateIndexes));
+    return std::move(selectOperator.processInput());
+  }
+
   auto candidateIndexesPtr = candidateIndexes.size() > 0 ? &candidateIndexes : nullptr;
   if(candidateIndexes.size() == 0) {
     std::vector<uint32_t> vec(column.size());
     candidateIndexes = Span<uint32_t>(std::move(std::vector(vec)));
   }
   uint32_t* selectedIndexes = candidateIndexes.begin();
-  size_t numSelected = 0;
+  size_t numSelected;
 
   if(implementation == Select::Branch) {
     SelectBranch<T, P> selectOperator;
     numSelected = selectOperator.processMicroBatch(
         0, candidateIndexesPtr ? candidateIndexes.size() : column.size(), column, value,
         columnIsFirstArg, predicate, candidateIndexesPtr, selectedIndexes);
-  } else if(implementation == Select::Predication) {
+  } else {
     SelectPredication<T, P> selectOperator;
     numSelected = selectOperator.processMicroBatch(
         0, candidateIndexesPtr ? candidateIndexes.size() : column.size(), column, value,
