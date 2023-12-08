@@ -430,6 +430,9 @@ void SelectAdaptiveParallelAux<T, P>::adjustRobustness(int adjustment) {
 template <typename T, typename P> void SelectAdaptiveParallelAux<T, P>::processInput() {
   while(remainingTuples > 0) {
     if(__builtin_expect(consecutivePredications == maxConsecutivePredications, false)) {
+#ifdef DEBUG
+      std::cout << "Running branch burst" << std::endl;
+#endif
       activeOperator = SelectImplementation::Branch_;
       consecutivePredications = 0;
       microBatchSize = std::min(remainingTuples, tuplesInBranchBurst);
