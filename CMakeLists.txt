@@ -114,7 +114,7 @@ ExternalProject_Add(
 ExternalProject_Add(
         robin-map
         GIT_REPOSITORY https://github.com/Tessil/robin-map.git
-        GIT_TAG master
+        GIT_TAG d37a410
         PREFIX ${BOSSHazardAdaptiveEngine_BINARY_DIR}/robin-map
         INSTALL_COMMAND ""
 )
@@ -123,7 +123,7 @@ ExternalProject_Add(
 ExternalProject_Add(
         jsoncpp
         GIT_REPOSITORY https://github.com/open-source-parsers/jsoncpp.git
-        GIT_TAG master
+        GIT_TAG 5defb4e
         PREFIX ${BOSSHazardAdaptiveEngine_BINARY_DIR}/jsoncpp
         INSTALL_COMMAND ""
 )
