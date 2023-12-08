@@ -13,7 +13,7 @@ enum Select { Branch, Predication, Adaptive, AdaptiveParallel};
 std::string getSelectName(Select select);
 
 template <typename T, typename F>
-Span<uint32_t> select(Select implementation, Span<T>& column, T value, bool columnIsFirstArg, F& predicate,
+Span<uint32_t> select(Select implementation, const Span<T>& column, T value, bool columnIsFirstArg, F& predicate,
                       Span<uint32_t>&& candidateIndexes, size_t dop = 1);
 
 } // namespace adaptive

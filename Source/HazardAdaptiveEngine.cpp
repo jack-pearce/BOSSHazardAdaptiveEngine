@@ -612,11 +612,11 @@ private:
   struct FilterThreadArgs {
     std::atomic<uint32_t>* columnToFilter;
     uint32_t numColumns;
-    Span<uint32_t>& indexes;
+    const Span<uint32_t>& indexes;
     ExpressionArguments& columns;
 
     FilterThreadArgs(std::atomic<uint32_t>* columnToFilter_, uint32_t numColumns_,
-                     Span<uint32_t>& indexes_, ExpressionArguments& columns_)
+                     const Span<uint32_t>& indexes_, ExpressionArguments& columns_)
         : columnToFilter(columnToFilter_), numColumns(numColumns_), indexes(indexes_),
           columns(columns_) {}
   };
@@ -625,7 +625,7 @@ private:
     auto* args = static_cast<FilterThreadArgs*>(arg);
     std::atomic<uint32_t>* columnToFilter = args->columnToFilter;
     uint32_t numColumns = args->numColumns;
-    Span<uint32_t>& indexes = args->indexes;
+    const Span<uint32_t>& indexes = args->indexes;
     ExpressionArguments& columns = args->columns;
 
     uint32_t columnNumber;
