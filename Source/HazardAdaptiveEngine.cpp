@@ -22,6 +22,8 @@
 #include <utility>
 #include <variant>
 
+constexpr uint32_t DOP = 2;
+
 class Pred;
 
 using HAExpressionSystem = boss::expressions::generic::ExtensibleExpressionSystem<Pred, uint32_t>;
@@ -363,10 +365,10 @@ private:
               assert(typedSpan1.size() == 1 || typedSpan2.size() == 1);
               if(typedSpan2.size() == 1) {
                 span = adaptive::select(Select::AdaptiveParallel, typedSpan1, typedSpan2[0], true,
-                                        f, {}, 4);
+                                        f, {}, DOP);
               } else {
                 span = adaptive::select(Select::AdaptiveParallel, typedSpan2, typedSpan1[0], false,
-                                        f, {}, 4);
+                                        f, {}, DOP);
               }
             } else {
               std::vector<OutputType> output;
@@ -416,10 +418,10 @@ private:
               assert(typedSpan1.size() == 1 || typedSpan2.size() == 1);
               if(typedSpan2.size() == 1) {
                 indexes = adaptive::select(Select::AdaptiveParallel, typedSpan1, typedSpan2[0],
-                                           true, f, std::move(indexes), 4);
+                                           true, f, std::move(indexes), DOP);
               } else {
                 indexes = adaptive::select(Select::AdaptiveParallel, typedSpan2, typedSpan1[0],
-                                           false, f, std::move(indexes), 4);
+                                           false, f, std::move(indexes), DOP);
               }
             } else {
               throw std::runtime_error(
@@ -605,6 +607,54 @@ private:
       }
       throw std::runtime_error("in predicate: unknown symbol " + arg.getName() + "_");
     };
+  }
+
+  struct FilterThreadArgs {
+    std::atomic<uint32_t>* columnToFilter;
+    uint32_t numColumns;
+    Span<uint32_t>& indexes;
+    ExpressionArguments& columns;
+
+    FilterThreadArgs(std::atomic<uint32_t>* columnToFilter_, uint32_t numColumns_,
+                     Span<uint32_t>& indexes_, ExpressionArguments& columns_)
+        : columnToFilter(columnToFilter_), numColumns(numColumns_), indexes(indexes_),
+          columns(columns_) {}
+  };
+
+  static void* filterColumns(void* arg) {
+    auto* args = static_cast<FilterThreadArgs*>(arg);
+    std::atomic<uint32_t>* columnToFilter = args->columnToFilter;
+    uint32_t numColumns = args->numColumns;
+    Span<uint32_t>& indexes = args->indexes;
+    ExpressionArguments& columns = args->columns;
+
+    uint32_t columnNumber;
+    while((columnNumber = (*columnToFilter).fetch_add(1, std::memory_order_relaxed)) < numColumns) {
+      auto column = get<ComplexExpression>(std::move(columns.at(columnNumber)));
+      auto [head, unused_, dynamics, spans] = std::move(column).decompose();
+      auto list = get<ComplexExpression>(std::move(dynamics.at(0)));
+      auto [listHead, listUnused_, listDynamics, listSpans] = std::move(list).decompose();
+      listSpans.at(0) = std::visit(
+          [&indexes]<typename T>(Span<T>&& typedSpan) -> ExpressionSpanArgument {
+            if constexpr(std::is_same_v<T, int64_t> || std::is_same_v<T, double_t> ||
+                         std::is_same_v<T, std::string>) {
+              for(size_t i = 0; i < indexes.size(); ++i) {
+                typedSpan[i] = typedSpan[indexes[i]];
+              }
+              return std::move(typedSpan).subspan(0, indexes.size());
+            } else {
+              throw std::runtime_error("unsupported column type in select: " +
+                                       std::string(typeid(T).name()));
+            }
+          },
+          std::move(listSpans.at(0)));
+      dynamics.at(0) =
+          ComplexExpression(std::move(listHead), {}, std::move(listDynamics), std::move(listSpans));
+      columns.at(columnNumber) =
+          ComplexExpression(std::move(head), {}, std::move(dynamics), std::move(spans));
+    }
+
+    return nullptr;
   }
 
 public:
@@ -813,32 +863,17 @@ public:
       if(auto predicate = predFunc(columns, nullptr)) {
         assert(std::holds_alternative<Span<uint32_t>>(*predicate));
         auto& indexes = std::get<Span<uint32_t>>(*predicate);
-        // TODO: parallelize this with one thread per column to be filtered in place
-        std::transform(
-            std::make_move_iterator(columns.begin()), std::make_move_iterator(columns.end()),
-            columns.begin(), [&indexes](auto&& columnExpr) {
-              auto column = get<ComplexExpression>(std::forward<decltype(columnExpr)>(columnExpr));
-              auto [head, unused_, dynamics, spans] = std::move(column).decompose();
-              auto list = get<ComplexExpression>(std::move(dynamics.at(0)));
-              auto [listHead, listUnused_, listDynamics, listSpans] = std::move(list).decompose();
-              listSpans.at(0) = std::visit(
-                  [&indexes]<typename T>(Span<T>&& typedSpan) -> ExpressionSpanArgument {
-                    if constexpr(std::is_same_v<T, int64_t> || std::is_same_v<T, double_t> ||
-                                 std::is_same_v<T, std::string>) {
-                      for(size_t i = 0; i < indexes.size(); ++i) {
-                        typedSpan[i] = typedSpan[indexes[i]];
-                      }
-                      return std::move(typedSpan).subspan(0, indexes.size());
-                    } else {
-                      throw std::runtime_error("unsupported column type in select: " +
-                                               std::string(typeid(T).name()));
-                    }
-                  },
-                  std::move(listSpans.at(0)));
-              dynamics.at(0) = ComplexExpression(std::move(listHead), {}, std::move(listDynamics),
-                                                 std::move(listSpans));
-              return ComplexExpression(std::move(head), {}, std::move(dynamics), std::move(spans));
-            });
+        auto numThreads = std::min(DOP, static_cast<uint32_t>(columns.size()));
+        pthread_t threads[numThreads];
+        std::atomic<uint32_t> columnToFilter = 0;
+        auto threadArgs = std::make_unique<FilterThreadArgs>(
+            &columnToFilter, static_cast<uint32_t>(columns.size()), indexes, columns);
+        for(auto i = 0; i < numThreads; ++i) {
+          pthread_create(&threads[i], nullptr, filterColumns, threadArgs.get());
+        }
+        for(int i = 0; i < numThreads; ++i) {
+          pthread_join(threads[i], nullptr);
+        }
       }
       return ComplexExpression("Table"_, std::move(columns));
     };
