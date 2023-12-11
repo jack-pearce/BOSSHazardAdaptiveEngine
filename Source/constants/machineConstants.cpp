@@ -91,7 +91,7 @@ void MachineConstants::writeEmptyFile() {
 }
 
 void MachineConstants::calculateMissingMachineConstants() {
-  auto dop = 1;
+  uint32_t dop = 1;
   while(dop <= logicalCoresCount()) {
     std::string dopStr = std::to_string(dop);
 

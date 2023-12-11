@@ -38,25 +38,69 @@ message(STATUS "Paranoid level: ${PARANOID_LEVEL_CONTENT}")
 
 ############################## Custom build modes ###############################
 
-set(CMAKE_CXX_FLAGS_SANITIZE "-fno-omit-frame-pointer -fsanitize=address,signed-integer-overflow,null,alignment,bounds,function,return,vla-bound -O0 -g"
-  CACHE STRING
-  "Flags used by the C++ compiler during Sanitize builds."
-  FORCE)
-set(CMAKE_C_FLAGS_SANITIZE "-fno-omit-frame-pointer -fsanitize=address,signed-integer-overflow,null,alignment,bounds,function,return,vla-bound -O0 -g"
-  CACHE STRING
-  "Flags used by the C compiler during Sanitize builds."
-  FORCE)
+# Default flags for all build types
+set(COMMON_FLAGS "-Wall -Wextra -Wpedantic -Werror -march=native")
+
+# Debug build type
+set(CMAKE_CXX_FLAGS_DEBUG "${COMMON_FLAGS} -Og -g"
+    CACHE STRING
+    "Flags used by the C++ compiler during Debug builds."
+    FORCE)
+set(CMAKE_C_FLAGS_DEBUG "${COMMON_FLAGS} -Og -g"
+    CACHE STRING
+    "Flags used by the C compiler during Debug builds."
+    FORCE)
+set(CMAKE_EXE_LINKER_FLAGS_DEBUG
+    ${CMAKE_EXE_LINKER_FLAGS_DEBUG} CACHE STRING
+    "Flags used for linking binaries during Debug builds."
+    FORCE)
+set(CMAKE_SHARED_LINKER_FLAGS_DEBUG
+    ${CMAKE_SHARED_LINKER_FLAGS_DEBUG} CACHE STRING
+    "Flags used by the shared libraries linker during Debug builds."
+    FORCE)
+
+# Release build type
+set(CMAKE_CXX_FLAGS_RELEASE "${COMMON_FLAGS} -O3"
+    CACHE STRING
+    "Flags used by the C++ compiler during Release builds."
+    FORCE)
+set(CMAKE_C_FLAGS_RELEASE "${COMMON_FLAGS} -O3"
+    CACHE STRING
+    "Flags used by the C compiler during Release builds."
+    FORCE)
+set(CMAKE_EXE_LINKER_FLAGS_RELEASE
+    ${CMAKE_EXE_LINKER_FLAGS_RELEASE} CACHE STRING
+    "Flags used for linking binaries during Release builds."
+    FORCE)
+set(CMAKE_SHARED_LINKER_FLAGS_RELEASE
+    ${CMAKE_SHARED_LINKER_FLAGS_RELEASE} CACHE STRING
+    "Flags used by the shared libraries linker during Release builds."
+    FORCE)
+
+# Sanitize build type
+set(CMAKE_CXX_FLAGS_SANITIZE "${COMMON_FLAGS} -fno-omit-frame-pointer -fsanitize=address,signed-integer-overflow,null,alignment,bounds,function,return,vla-bound -O0 -g"
+    CACHE STRING
+    "Flags used by the C++ compiler during Sanitize builds."
+    FORCE)
+set(CMAKE_C_FLAGS_SANITIZE "${COMMON_FLAGS} -fno-omit-frame-pointer -fsanitize=address,signed-integer-overflow,null,alignment,bounds,function,return,vla-bound -O0 -g"
+    CACHE STRING
+    "Flags used by the C compiler during Sanitize builds."
+    FORCE)
 set(CMAKE_EXE_LINKER_FLAGS_SANITIZE
-  ${CMAKE_EXE_LINKER_FLAGS_DEBUG} CACHE STRING
-  "Flags used for linking binaries during Sanitize builds."
-  FORCE)
+    ${CMAKE_EXE_LINKER_FLAGS_DEBUG} CACHE STRING
+    "Flags used for linking binaries during Sanitize builds."
+    FORCE)
 set(CMAKE_SHARED_LINKER_FLAGS_SANITIZE
-  ${CMAKE_SHARED_LINKER_FLAGS_DEBUG} CACHE STRING
-  "Flags used by the shared libraries linker during Sanitize builds."
-  FORCE)
+    ${CMAKE_SHARED_LINKER_FLAGS_DEBUG} CACHE STRING
+    "Flags used by the shared libraries linker during Sanitize builds."
+    FORCE)
 mark_as_advanced(
-  CMAKE_CXX_FLAGS_SANITIZE		  CMAKE_EXE_LINKER_FLAGS_SANITIZE
-  CMAKE_C_FLAGS_SANITIZE		  CMAKE_SHARED_LINKER_FLAGS_SANITIZE
+    CMAKE_CXX_FLAGS_DEBUG		    CMAKE_EXE_LINKER_FLAGS_DEBUG
+    CMAKE_C_FLAGS_DEBUG		        CMAKE_SHARED_LINKER_FLAGS_DEBUG
+    CMAKE_CXX_FLAGS_RELEASE		    CMAKE_EXE_LINKER_FLAGS_RELEASE
+    CMAKE_C_FLAGS_RELEASE		    CMAKE_SHARED_LINKER_FLAGS_RELEASE
+    CMAKE_CXX_FLAGS_SANITIZE		CMAKE_EXE_LINKER_FLAGS_SANITIZE
+    CMAKE_C_FLAGS_SANITIZE		    CMAKE_SHARED_LINKER_FLAGS_SANITIZE
   )
 
 set(CMAKE_BUILD_TYPE "${CMAKE_BUILD_TYPE}" CACHE STRING

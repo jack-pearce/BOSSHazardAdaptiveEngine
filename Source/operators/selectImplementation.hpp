@@ -121,8 +121,8 @@ private:
   const Span<T>& column;
   T value;
   bool columnIsFirstArg;
-  Span<uint32_t> candidateIndexes;
   P& predicate;
+  Span<uint32_t> candidateIndexes;
 
   uint32_t tuplesPerHazardCheck;
   uint32_t maxConsecutivePredications;
@@ -200,7 +200,7 @@ SelectAdaptive<T, P>::SelectAdaptive(const Span<T>& column_, T value_, bool colu
   candidateIndexesPtr = candidateIndexes.size() > 0 ? &candidateIndexes : nullptr;
   if(candidateIndexes.size() == 0) {
     std::vector<uint32_t> vec(column.size());
-    candidateIndexes = Span<uint32_t>(std::move(std::vector(vec)));
+    candidateIndexes = Span<uint32_t>(std::vector(vec));
   }
   selectedIndexes = candidateIndexes.begin();
 }
@@ -510,7 +510,7 @@ public:
     candidateIndexesPtr = candidateIndexes.size() > 0 ? &candidateIndexes : nullptr;
     if(candidateIndexes.size() == 0) {
       std::vector<uint32_t> vec(column.size());
-      candidateIndexes = Span<uint32_t>(std::move(std::vector(vec)));
+      candidateIndexes = Span<uint32_t>(std::vector(vec));
     }
     Counters::getInstance();
     MachineConstants::getInstance();
@@ -521,7 +521,7 @@ public:
       return std::move(candidateIndexes).subspan(0, 0);
     }
 
-    pthread_t threads[dop];
+    std::vector<pthread_t> threads(dop);
     size_t tuplesPerThread = n / dop;
     vectorOfPairs<size_t, size_t> threadIndexes(dop, std::make_pair(0, tuplesPerThread));
     threadIndexes.back().second = n - ((dop - 1) * tuplesPerThread);
@@ -536,7 +536,7 @@ public:
     std::atomic<uint32_t> positionToWrite = 0;
     std::vector<std::unique_ptr<SelectThreadArgs<T, P>>> threadArgs;
 
-    for(auto i = 0; i < dop; ++i) {
+    for(uint32_t i = 0; i < dop; ++i) {
       threadArgs.push_back(std::make_unique<SelectThreadArgs<T, P>>(
           threadIndexes[i].first, threadIndexes[i].second, column, value, columnIsFirstArg,
           predicate, candidateIndexesPtr, candidateIndexes.begin(), &threadToMerge,
@@ -544,7 +544,7 @@ public:
       pthread_create(&threads[i], NULL, selectAdaptiveParallelAux<T, P>, threadArgs[i].get());
     }
 
-    for(int i = 0; i < dop; ++i) {
+    for(uint32_t i = 0; i < dop; ++i) {
       pthread_join(threads[i], nullptr);
     }
 
@@ -555,8 +555,8 @@ private:
   const Span<T>& column;
   T value;
   bool columnIsFirstArg;
-  Span<uint32_t> candidateIndexes;
   P& predicate;
+  Span<uint32_t> candidateIndexes;
 
   uint32_t dop;
   size_t n;
@@ -585,7 +585,7 @@ Span<uint32_t> select(Select implementation, const Span<T>& column, T value, boo
   auto candidateIndexesPtr = candidateIndexes.size() > 0 ? &candidateIndexes : nullptr;
   if(candidateIndexes.size() == 0) {
     std::vector<uint32_t> vec(column.size());
-    candidateIndexes = Span<uint32_t>(std::move(std::vector(vec)));
+    candidateIndexes = Span<uint32_t>(std::vector(vec));
   }
   uint32_t* selectedIndexes = candidateIndexes.begin();
   size_t numSelected;

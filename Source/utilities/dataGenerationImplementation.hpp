@@ -22,7 +22,7 @@ template <typename T> std::vector<T> generateRandomisedUniqueValuesInMemory(size
 
   std::vector<T> data(n);
 
-  for(T i = 1; i <= n; ++i) {
+  for(T i = 1; i <= static_cast<T>(n); ++i) {
     data[i - 1] = i;
   }
 

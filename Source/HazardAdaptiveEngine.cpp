@@ -167,7 +167,7 @@ static boss::Expression toBOSSExpression(Expression&& expr) {
                         },
                         [&](Pred&& e) -> boss::Expression {
                           boss::Expression output = static_cast<boss::Expression>(std::move(e));
-                          return std::move(output);
+                          return output;
                         },
                         [](auto&& otherTypes) -> boss::Expression { return otherTypes; }),
                     std::move(expr));
@@ -207,10 +207,10 @@ private:
   std::function<Expression(ComplexExpressionWithStaticArguments<Args...>&&)> func;
   template <typename... T>
   std::pair<Expression, bool> dispatchAndEvaluate(ComplexExpressionWithStaticArguments<T...>&& e) {
-    auto [head, statics, dynamics, spans] = std::move(e).decompose();
+    auto [head1, statics1, dynamics1, spans1] = std::move(e).decompose();
     if constexpr(sizeof...(T) < sizeof...(Args)) {
       Expression dispatchArgument =
-          dynamics.empty()
+          dynamics1.empty()
               ? std::visit(
                     [](auto& a) -> Expression {
                       if constexpr(std::is_same_v<std::decay_t<decltype(a)>, Span<Pred const>>) {
@@ -225,25 +225,26 @@ private:
                         return std::move(a[0]);
                       }
                     },
-                    spans.front())
-              : std::move(dynamics.at(sizeof...(T)));
-      if(dynamics.empty()) {
-        spans[0] = std::visit(
+                    spans1.front())
+              : std::move(dynamics1.at(sizeof...(T)));
+      if(dynamics1.empty()) {
+        spans1[0] = std::visit(
             [](auto&& span) -> ExpressionSpanArgument {
               return std::forward<decltype(span)>(span).subspan(1);
             },
-            std::move(spans[0]));
+            std::move(spans1[0]));
       }
 
       return std::visit(
-          [head = std::move(head), statics = std::move(statics), dynamics = std::move(dynamics),
-           spans = std::move(spans), this](auto&& argument) mutable -> std::pair<Expression, bool> {
+          [head = std::move(head1), statics = std::move(statics1), dynamics = std::move(dynamics1),
+           spans = std::move(spans1),
+           this](auto&& argument) mutable -> std::pair<Expression, bool> {
             typedef std::decay_t<decltype(argument)> ArgType;
 
             if constexpr(std::is_same_v<ArgType, typename std::tuple_element<
                                                      sizeof...(T), std::tuple<Args...>>::type>) {
               // argument type matching, add one more static argument to the expression
-              return dispatchAndEvaluate(ComplexExpressionWithStaticArguments<T..., ArgType>(
+              return this->dispatchAndEvaluate(ComplexExpressionWithStaticArguments<T..., ArgType>(
                   head,
                   std::tuple_cat(std::move(statics),
                                  std::make_tuple(std::forward<decltype(argument)>(argument))),
@@ -265,15 +266,15 @@ private:
           evaluateInternal(std::move(dispatchArgument)));
     } else {
       ExpressionArguments rest{};
-      if(dynamics.size() > sizeof...(Args)) {
+      if(dynamics1.size() > sizeof...(Args)) {
         std::transform(
-            std::move_iterator(next(dynamics.begin(), sizeof...(Args))),
-            std::move_iterator(dynamics.end()), std::back_inserter(rest),
+            std::move_iterator(next(dynamics1.begin(), sizeof...(Args))),
+            std::move_iterator(dynamics1.end()), std::back_inserter(rest),
             [](auto&& arg) { return evaluateInternal(std::forward<decltype(arg)>(arg)); });
       }
       return std::make_pair(
-          func(ComplexExpressionWithStaticArguments<Args...>(std::move(head), std::move(statics),
-                                                             std::move(rest), std::move(spans))),
+          func(ComplexExpressionWithStaticArguments<Args...>(std::move(head1), std::move(statics1),
+                                                             std::move(rest), std::move(spans1))),
           true);
     }
   }
@@ -307,13 +308,15 @@ public:
   }
 
   template <typename F, typename... Types>
-  void registerFunctorForTypes(F f, std::variant<Types...> unused) {
+  void registerFunctorForTypes(F f, std::variant<Types...> /*unused*/) {
     (
         [this, &f]() {
           if constexpr(std::is_invocable_v<F, ComplexExpressionWithStaticArguments<Types>>) {
             this->functors[typeid(Types)] = Functor::makeUnique(
                 std::function<Expression(ComplexExpressionWithStaticArguments<Types>&&)>(f));
           }
+          (void)f;    /* Addresses this bug https://bugs.llvm.org/show_bug.cgi?id=35450 */
+          (void)this; /* Addresses this bug https://bugs.llvm.org/show_bug.cgi?id=35450 */
         }(),
         ...);
   }
@@ -502,7 +505,7 @@ private:
     Pred::Function pred =
         [preds = std::move(preds)](
             ExpressionArguments& columns,
-            Span<uint32_t>* indexes) mutable -> std::optional<ExpressionSpanArgument> {
+            Span<uint32_t>* /*unused*/) mutable -> std::optional<ExpressionSpanArgument> {
       auto candidateIndexes = preds[0](columns, nullptr);
       ExpressionSpanArgument span;
       std::visit(
@@ -557,7 +560,7 @@ private:
    */
   static Pred::Function createLambdaArgument(Symbol const& arg) {
     return [arg](ExpressionArguments& columns,
-                 Span<uint32_t>* indexes) mutable -> std::optional<ExpressionSpanArgument> {
+                 Span<uint32_t>* /*unused*/) mutable -> std::optional<ExpressionSpanArgument> {
       for(auto& columnExpr : columns) {
         auto& column = get<ComplexExpression>(columnExpr);
         if(column.getHead().getName() == arg.getName()) {
@@ -587,7 +590,7 @@ private:
    */
   static Pred::Function createLambdaArgumentMove(Symbol const& arg) {
     return [arg](ExpressionArguments& columns,
-                 Span<uint32_t>* indexes) mutable -> std::optional<ExpressionSpanArgument> {
+                 Span<uint32_t>* /*unused*/) mutable -> std::optional<ExpressionSpanArgument> {
       for(auto& columnExpr : columns) {
         auto& column = get<ComplexExpression>(columnExpr);
         if(column.getHead().getName() == arg.getName()) {
@@ -864,14 +867,14 @@ public:
         assert(std::holds_alternative<Span<uint32_t>>(*predicate));
         auto& indexes = std::get<Span<uint32_t>>(*predicate);
         auto numThreads = std::min(DOP, static_cast<uint32_t>(columns.size()));
-        pthread_t threads[numThreads];
+        std::vector<pthread_t> threads(numThreads);
         std::atomic<uint32_t> columnToFilter = 0;
         auto threadArgs = std::make_unique<FilterThreadArgs>(
             &columnToFilter, static_cast<uint32_t>(columns.size()), indexes, columns);
-        for(auto i = 0; i < numThreads; ++i) {
+        for(uint32_t i = 0; i < numThreads; ++i) {
           pthread_create(&threads[i], nullptr, filterColumns, threadArgs.get());
         }
-        for(int i = 0; i < numThreads; ++i) {
+        for(uint32_t i = 0; i < numThreads; ++i) {
           pthread_join(threads[i], nullptr);
         }
       }
@@ -978,7 +981,7 @@ public:
                       for(auto const& pair : map) {
                         results.push_back(static_cast<int64_t>(pair.second.size()));
                       }
-                      span = Span<int64_t>(std::move(std::vector(results)));
+                      span = Span<int64_t>(std::vector(results));
                     } else {
                       auto count = static_cast<int64_t>(typedSpan.size());
                       span = Span<int64_t>({count});
