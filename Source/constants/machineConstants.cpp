@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <json/json.h>
@@ -23,8 +24,16 @@ MachineConstants& MachineConstants::getInstance() {
 }
 
 MachineConstants::MachineConstants() {
-  machineConstantsFilePath =
-      getProjectRootDirectory() + "/Source/constants/machineConstantValues.json";
+  char* constantsPath = std::getenv("HAZARD_ADAPTIVE_CONSTANTS");
+  if(constantsPath != nullptr) {
+    std::cout << "Environment variable set, will get constants from '" << constantsPath << "'" << std::endl;
+    machineConstantsFilePath = constantsPath;
+  } else {
+    machineConstantsFilePath =
+        getProjectRootDirectory() + "/Source/constants/machineConstantValues.json";
+    std::cout << "Environment variable for constants not set, will attempt to get constants from '"
+              << machineConstantsFilePath << "'" << std::endl;
+  }
   loadMachineConstants();
 }
 
