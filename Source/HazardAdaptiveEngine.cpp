@@ -556,7 +556,7 @@ private:
    * only be used locally within an operator and not returned as there is no guarantee the
    * underlying span will stay in scope. For example, it can be called from Select and Group where
    * the columns are used as intermediaries to produce the final result. However, it cannot be used
-   * in Project to return columns (instead the columns must be moved)
+   * in Project to return columns (instead columns must be moved, see createLambdaArgumentMove func)
    */
   static Pred::Function createLambdaArgument(Symbol const& arg) {
     return [arg](ExpressionArguments& columns,
@@ -586,7 +586,12 @@ private:
 
   /**
    * This function is the same as createLambdaArgument(Symbol) except that it decomposes the column
-   * and moves the matched span
+   * and moves the matched span. This is used in 'Project'. Moving the columns is okay for the
+   * following reasons: When using a storage engine the data in the Table (being projected from) is
+   * already a shallow copy, so it is okay to move. In the case that the data is embedded in
+   * the expression (e.g. in BOSSTests.cpp) then that table only exists within the expression
+   * (within the Project operator) and therefore we must move from it. If we did a shallow copy, the
+   * data would not exist outside of the project operator.
    */
   static Pred::Function createLambdaArgumentMove(Symbol const& arg) {
     return [arg](ExpressionArguments& columns,
@@ -612,20 +617,20 @@ private:
     };
   }
 
-  struct FilterThreadArgs {
+  struct CreateFilteredColumnsThreadArgs {
     std::atomic<uint32_t>* columnToFilter;
     uint32_t numColumns;
     const Span<uint32_t>& indexes;
     ExpressionArguments& columns;
 
-    FilterThreadArgs(std::atomic<uint32_t>* columnToFilter_, uint32_t numColumns_,
-                     const Span<uint32_t>& indexes_, ExpressionArguments& columns_)
+    CreateFilteredColumnsThreadArgs(std::atomic<uint32_t>* columnToFilter_, uint32_t numColumns_,
+                                    const Span<uint32_t>& indexes_, ExpressionArguments& columns_)
         : columnToFilter(columnToFilter_), numColumns(numColumns_), indexes(indexes_),
           columns(columns_) {}
   };
 
-  static void* filterColumns(void* arg) {
-    auto* args = static_cast<FilterThreadArgs*>(arg);
+  static void* createFilteredColumns(void* arg) {
+    auto* args = static_cast<CreateFilteredColumnsThreadArgs*>(arg);
     std::atomic<uint32_t>* columnToFilter = args->columnToFilter;
     uint32_t numColumns = args->numColumns;
     const Span<uint32_t>& indexes = args->indexes;
@@ -641,10 +646,12 @@ private:
           [&indexes]<typename T>(Span<T>&& typedSpan) -> ExpressionSpanArgument {
             if constexpr(std::is_same_v<T, int64_t> || std::is_same_v<T, double_t> ||
                          std::is_same_v<T, std::string>) {
-              for(size_t i = 0; i < indexes.size(); ++i) {
-                typedSpan[i] = typedSpan[indexes[i]];
+              std::vector<T> filteredColumn;
+              filteredColumn.reserve(indexes.size());
+              for(auto& index : indexes) {
+                filteredColumn.push_back(typedSpan[index]);
               }
-              return std::move(typedSpan).subspan(0, indexes.size());
+              return Span<T>(std::move(std::vector(filteredColumn)));
             } else {
               throw std::runtime_error("unsupported column type in select: " +
                                        std::string(typeid(T).name()));
@@ -869,10 +876,10 @@ public:
         auto numThreads = std::min(DOP, static_cast<uint32_t>(columns.size()));
         std::vector<pthread_t> threads(numThreads);
         std::atomic<uint32_t> columnToFilter = 0;
-        auto threadArgs = std::make_unique<FilterThreadArgs>(
+        auto threadArgs = std::make_unique<CreateFilteredColumnsThreadArgs>(
             &columnToFilter, static_cast<uint32_t>(columns.size()), indexes, columns);
         for(uint32_t i = 0; i < numThreads; ++i) {
-          pthread_create(&threads[i], nullptr, filterColumns, threadArgs.get());
+          pthread_create(&threads[i], nullptr, createFilteredColumns, threadArgs.get());
         }
         for(uint32_t i = 0; i < numThreads; ++i) {
           pthread_join(threads[i], nullptr);

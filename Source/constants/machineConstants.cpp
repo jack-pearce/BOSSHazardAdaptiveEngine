@@ -26,11 +26,16 @@ MachineConstants& MachineConstants::getInstance() {
 MachineConstants::MachineConstants() {
   char* constantsPath = std::getenv("HAZARD_ADAPTIVE_CONSTANTS");
   if(constantsPath != nullptr) {
-    std::cout << "Environment variable set, will get constants from '" << constantsPath << "'" << std::endl;
+    std::cout << "Environment variable set, will get constants from '" << constantsPath << "'\n";
     machineConstantsFilePath = constantsPath;
   } else {
+    // TODO: currently hardcode since I can't find how to set environment variables in vtune
+    machineConstantsFilePath =
+        "/home/jcp122/repos/BOSSHazardAdaptiveEngine/Source/constants/machineConstantValues.json";
+#if FALSE
     machineConstantsFilePath =
         getProjectRootDirectory() + "/Source/constants/machineConstantValues.json";
+#endif
     std::cout << "Environment variable for constants not set, will attempt to get constants from '"
               << machineConstantsFilePath << "'" << std::endl;
   }
