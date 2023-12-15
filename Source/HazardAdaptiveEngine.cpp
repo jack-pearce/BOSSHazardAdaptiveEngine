@@ -41,6 +41,9 @@ static ExpressionBuilder operator""_(const char* name, size_t /*unused*/) {
   return ExpressionBuilder(name);
 }
 
+using BOSSExpressionSpanArguments = boss::DefaultExpressionSystem::ExpressionSpanArguments;
+using BOSSExpressionSpanArgument = boss::DefaultExpressionSystem::ExpressionSpanArgument;
+
 using adaptive::Select;
 
 using boss::Span;
@@ -84,6 +87,69 @@ public:
 private:
   boss::Expression cachedExpr;
 };
+
+#ifdef DEBUG_MODE
+namespace utilities {
+static boss::Expression injectDebugInfoToSpans(boss::Expression&& expr) {
+  return std::visit(
+      boss::utilities::overload(
+          [&](boss::ComplexExpression&& e) -> boss::Expression {
+            auto [head, unused_, dynamics, spans] = std::move(e).decompose();
+            boss::ExpressionArguments debugDynamics;
+            debugDynamics.reserve(dynamics.size() + spans.size());
+            std::transform(std::make_move_iterator(dynamics.begin()),
+                           std::make_move_iterator(dynamics.end()),
+                           std::back_inserter(debugDynamics), [](auto&& arg) {
+                             return injectDebugInfoToSpans(std::forward<decltype(arg)>(arg));
+                           });
+            std::transform(
+                std::make_move_iterator(spans.begin()), std::make_move_iterator(spans.end()),
+                std::back_inserter(debugDynamics), [](auto&& span) {
+                  return std::visit(
+                      [](auto&& typedSpan) -> boss::Expression {
+                        using Element = typename std::decay_t<decltype(typedSpan)>::element_type;
+                        return boss::ComplexExpressionWithStaticArguments<std::string, int64_t>(
+                            "Span"_, {typeid(Element).name(), typedSpan.size()}, {}, {});
+                      },
+                      std::forward<decltype(span)>(span));
+                });
+            return boss::ComplexExpression(std::move(head), {}, std::move(debugDynamics), {});
+          },
+          [](auto&& otherTypes) -> boss::Expression { return otherTypes; }),
+      std::move(expr));
+}
+
+static Expression injectDebugInfoToSpansExtendedExpressionSystem(Expression&& expr) {
+  return std::visit(
+      boss::utilities::overload(
+          [&](ComplexExpression&& e) -> Expression {
+            auto [head, unused_, dynamics, spans] = std::move(e).decompose();
+            ExpressionArguments debugDynamics;
+            debugDynamics.reserve(dynamics.size() + spans.size());
+            std::transform(std::make_move_iterator(dynamics.begin()),
+                           std::make_move_iterator(dynamics.end()),
+                           std::back_inserter(debugDynamics), [](auto&& arg) {
+                             return injectDebugInfoToSpansExtendedExpressionSystem(
+                                 std::forward<decltype(arg)>(arg));
+                           });
+            std::transform(
+                std::make_move_iterator(spans.begin()), std::make_move_iterator(spans.end()),
+                std::back_inserter(debugDynamics), [](auto&& span) {
+                  return std::visit(
+                      [](auto&& typedSpan) -> Expression {
+                        using Element = typename std::decay_t<decltype(typedSpan)>::element_type;
+                        return ComplexExpressionWithStaticArguments<std::string, int64_t>(
+                            "Span"_, {typeid(Element).name(), typedSpan.size()}, {}, {});
+                      },
+                      std::forward<decltype(span)>(span));
+                });
+            return ComplexExpression(std::move(head), {}, std::move(debugDynamics), {});
+          },
+          [](auto&& otherTypes) -> Expression { return otherTypes; }),
+      std::move(expr));
+}
+} // namespace utilities
+#endif
 
 static Expression evaluateInternal(Expression&& e);
 
@@ -152,25 +218,40 @@ ExpressionArguments transformDynamicsInColumnsToSpans(ExpressionArguments&& colu
 }
 
 static boss::Expression toBOSSExpression(Expression&& expr) {
-  return std::visit(boss::utilities::overload(
-                        [&](ComplexExpression&& e) -> boss::Expression {
-                          boss::ExpressionArguments bossArgs;
-                          auto fromArgs = e.getArguments();
-                          bossArgs.reserve(fromArgs.size());
-                          std::transform(std::make_move_iterator(fromArgs.begin()),
-                                         std::make_move_iterator(fromArgs.end()),
-                                         std::back_inserter(bossArgs), [](auto&& bulkArg) {
-                                           return toBOSSExpression(
-                                               std::forward<decltype(bulkArg)>(bulkArg));
-                                         });
-                          return boss::ComplexExpression(e.getHead(), std::move(bossArgs));
-                        },
-                        [&](Pred&& e) -> boss::Expression {
-                          boss::Expression output = static_cast<boss::Expression>(std::move(e));
-                          return output;
-                        },
-                        [](auto&& otherTypes) -> boss::Expression { return otherTypes; }),
-                    std::move(expr));
+  return std::visit(
+      boss::utilities::overload(
+          [&](ComplexExpression&& e) -> boss::Expression {
+            auto [head, unused_, dynamics, spans] = std::move(e).decompose();
+            boss::ExpressionArguments bossDynamics;
+            bossDynamics.reserve(dynamics.size());
+            std::transform(
+                std::make_move_iterator(dynamics.begin()), std::make_move_iterator(dynamics.end()),
+                std::back_inserter(bossDynamics),
+                [](auto&& arg) { return toBOSSExpression(std::forward<decltype(arg)>(arg)); });
+            BOSSExpressionSpanArguments bossSpans;
+            std::transform(
+                std::make_move_iterator(spans.begin()), std::make_move_iterator(spans.end()),
+                std::back_inserter(bossSpans), [](auto&& span) {
+                  return std::visit(
+                      []<typename T>(Span<T>&& typedSpan) -> BOSSExpressionSpanArgument {
+                        if constexpr(std::is_same_v<T, int64_t> || std::is_same_v<T, double_t> ||
+                                     std::is_same_v<T, std::string>) {
+                          return typedSpan;
+                        } else {
+                          throw std::runtime_error("span type not supported by BOSS core");
+                        }
+                      },
+                      std::forward<decltype(span)>(span));
+                });
+            return boss::ComplexExpression(std::move(head), {}, std::move(bossDynamics),
+                                           std::move(bossSpans));
+          },
+          [&](Pred&& e) -> boss::Expression {
+            boss::Expression output = static_cast<boss::Expression>(std::move(e));
+            return output;
+          },
+          [](auto&& otherTypes) -> boss::Expression { return otherTypes; }),
+      std::move(expr));
 }
 
 template <typename... Args> class TypedFunctor;
