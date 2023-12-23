@@ -23,6 +23,7 @@
 #include <variant>
 
 constexpr uint32_t DOP = 2;
+constexpr adaptive::Select selectImplementation = adaptive::Select::AdaptiveParallel;
 
 class Pred;
 
@@ -448,11 +449,11 @@ private:
             if constexpr(std::is_same_v<OutputType, bool>) {
               assert(typedSpan1.size() == 1 || typedSpan2.size() == 1);
               if(typedSpan2.size() == 1) {
-                span = adaptive::select(Select::AdaptiveParallel, typedSpan1, typedSpan2[0], true,
-                                        f, {}, DOP);
+                span = adaptive::select(selectImplementation, typedSpan1, typedSpan2[0], true, f,
+                                        {}, DOP);
               } else {
-                span = adaptive::select(Select::AdaptiveParallel, typedSpan2, typedSpan1[0], false,
-                                        f, {}, DOP);
+                span = adaptive::select(selectImplementation, typedSpan2, typedSpan1[0], false, f,
+                                        {}, DOP);
               }
             } else {
               std::vector<OutputType> output;
@@ -501,11 +502,11 @@ private:
             if constexpr(std::is_same_v<OutputType, bool>) {
               assert(typedSpan1.size() == 1 || typedSpan2.size() == 1);
               if(typedSpan2.size() == 1) {
-                indexes = adaptive::select(Select::AdaptiveParallel, typedSpan1, typedSpan2[0],
-                                           true, f, std::move(indexes), DOP);
+                indexes = adaptive::select(selectImplementation, typedSpan1, typedSpan2[0], true, f,
+                                           std::move(indexes), DOP);
               } else {
-                indexes = adaptive::select(Select::AdaptiveParallel, typedSpan2, typedSpan1[0],
-                                           false, f, std::move(indexes), DOP);
+                indexes = adaptive::select(selectImplementation, typedSpan2, typedSpan1[0], false,
+                                           f, std::move(indexes), DOP);
               }
             } else {
               throw std::runtime_error(
@@ -955,15 +956,44 @@ public:
         assert(std::holds_alternative<Span<uint32_t>>(*predicate));
         auto& indexes = std::get<Span<uint32_t>>(*predicate);
         auto numThreads = std::min(DOP, static_cast<uint32_t>(columns.size()));
-        std::vector<pthread_t> threads(numThreads);
-        std::atomic<uint32_t> columnToFilter = 0;
-        auto threadArgs = std::make_unique<CreateFilteredColumnsThreadArgs>(
-            &columnToFilter, static_cast<uint32_t>(columns.size()), indexes, columns);
-        for(uint32_t i = 0; i < numThreads; ++i) {
-          pthread_create(&threads[i], nullptr, createFilteredColumns, threadArgs.get());
-        }
-        for(uint32_t i = 0; i < numThreads; ++i) {
-          pthread_join(threads[i], nullptr);
+        if (numThreads == 1) {
+          for (auto& columnRef : columns) {
+            auto column = get<ComplexExpression>(std::move(columnRef));
+            auto [head, unused_, dynamics, spans] = std::move(column).decompose();
+            auto list = get<ComplexExpression>(std::move(dynamics.at(0)));
+            auto [listHead, listUnused_, listDynamics, listSpans] = std::move(list).decompose();
+            listSpans.at(0) = std::visit(
+                [&indexes]<typename T>(Span<T>&& typedSpan) -> ExpressionSpanArgument {
+                  if constexpr(std::is_same_v<T, int64_t> || std::is_same_v<T, double_t> ||
+                               std::is_same_v<T, std::string>) {
+                    std::vector<T> filteredColumn;
+                    filteredColumn.reserve(indexes.size());
+                    for(auto& index : indexes) {
+                      filteredColumn.push_back(typedSpan[index]);
+                    }
+                    return Span<T>(std::move(std::vector(filteredColumn)));
+                  } else {
+                    throw std::runtime_error("unsupported column type in select: " +
+                                             std::string(typeid(T).name()));
+                  }
+                },
+                std::move(listSpans.at(0)));
+            dynamics.at(0) = ComplexExpression(std::move(listHead), {}, std::move(listDynamics),
+                                               std::move(listSpans));
+            columnRef =
+                ComplexExpression(std::move(head), {}, std::move(dynamics), std::move(spans));
+          }
+        } else {
+          std::vector<pthread_t> threads(numThreads);
+          std::atomic<uint32_t> columnToFilter = 0;
+          auto threadArgs = std::make_unique<CreateFilteredColumnsThreadArgs>(
+              &columnToFilter, static_cast<uint32_t>(columns.size()), indexes, columns);
+          for(uint32_t i = 0; i < numThreads; ++i) {
+            pthread_create(&threads[i], nullptr, createFilteredColumns, threadArgs.get());
+          }
+          for(uint32_t i = 0; i < numThreads; ++i) {
+            pthread_join(threads[i], nullptr);
+          }
         }
       }
       return ComplexExpression("Table"_, std::move(columns));

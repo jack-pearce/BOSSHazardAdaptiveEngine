@@ -50,8 +50,8 @@ template <typename T> double calculateSelectLowerMachineConstant(uint32_t dop) {
         MachineConstants::getInstance().updateMachineConstant(machineConstantLowerName, 1);
         MachineConstants::getInstance().updateMachineConstant(machineConstantUpperName, 0);
         branchCycles = PAPI_get_real_usec();
-        select(Select::Adaptive, columnSpan1, 1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity),
-               false, predicate, {}, dop);
+        select(Select::AdaptiveParallel, columnSpan1, 1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity),
+               false, predicate, {}, dop, true);
         branchCycles = PAPI_get_real_usec() - branchCycles;
       }
     }
@@ -70,8 +70,8 @@ template <typename T> double calculateSelectLowerMachineConstant(uint32_t dop) {
         MachineConstants::getInstance().updateMachineConstant(machineConstantLowerName, 0);
         MachineConstants::getInstance().updateMachineConstant(machineConstantUpperName, 1);
         predicationCycles = PAPI_get_real_usec();
-        select(Select::Adaptive, columnSpan2, 1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity),
-               false, predicate, {}, dop);
+        select(Select::AdaptiveParallel, columnSpan2, 1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity),
+               false, predicate, {}, dop, true);
         predicationCycles = PAPI_get_real_usec() - predicationCycles;
       }
     }
@@ -82,7 +82,7 @@ template <typename T> double calculateSelectLowerMachineConstant(uint32_t dop) {
       lowerSelectivity = midSelectivity;
     }
 
-#if DEBUG
+#ifdef DEBUG
     std::cout << "Selectivity: " << (lowerSelectivity + upperSelectivity) / 2
               << ", branch cycles: " << branchCycles
               << ", predication cycles: " << predicationCycles << std::endl;
@@ -128,8 +128,8 @@ template <typename T> double calculateSelectUpperMachineConstant(uint32_t dop) {
         MachineConstants::getInstance().updateMachineConstant(machineConstantLowerName, 1);
         MachineConstants::getInstance().updateMachineConstant(machineConstantUpperName, 0);
         branchCycles = PAPI_get_real_usec();
-        select(Select::Adaptive, columnSpan1, 1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity),
-               false, predicate, {}, dop);
+        select(Select::AdaptiveParallel, columnSpan1, 1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity),
+               false, predicate, {}, dop, true);
         branchCycles = PAPI_get_real_usec() - branchCycles;
       }
     }
@@ -148,8 +148,8 @@ template <typename T> double calculateSelectUpperMachineConstant(uint32_t dop) {
         MachineConstants::getInstance().updateMachineConstant(machineConstantLowerName, 0);
         MachineConstants::getInstance().updateMachineConstant(machineConstantUpperName, 1);
         predicationCycles = PAPI_get_real_usec();
-        select(Select::Adaptive, columnSpan2, 1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity),
-               false, predicate, {}, dop);
+        select(Select::AdaptiveParallel, columnSpan2, 1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity),
+               false, predicate, {}, dop, true);
         predicationCycles = PAPI_get_real_usec() - predicationCycles;
       }
     }
@@ -160,7 +160,7 @@ template <typename T> double calculateSelectUpperMachineConstant(uint32_t dop) {
       upperSelectivity = midSelectivity;
     }
 
-#if DEBUG
+#ifdef DEBUG
     std::cout << "Selectivity: " << (lowerSelectivity + upperSelectivity) / 2
               << ", branch cycles: " << branchCycles
               << ", predication cycles: " << predicationCycles << std::endl;

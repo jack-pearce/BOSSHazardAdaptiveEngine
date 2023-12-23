@@ -14,7 +14,7 @@
 #include <iostream>
 #include <memory>
 
-// #define DEBUG
+//#define DEBUG
 
 namespace adaptive {
 
@@ -199,7 +199,9 @@ SelectAdaptive<T, P>::SelectAdaptive(const Span<T>& column_, T value_, bool colu
   remainingTuples = candidateIndexes.size() == 0 ? column.size() : candidateIndexes.size();
   candidateIndexesPtr = candidateIndexes.size() > 0 ? &candidateIndexes : nullptr;
   if(candidateIndexes.size() == 0) {
-    std::vector<uint32_t> vec(column.size());
+    std::vector<uint32_t> vec;
+    vec.reserve(column.size());
+    vec.resize(column.size());
     candidateIndexes = Span<uint32_t>(std::vector(vec));
   }
   selectedIndexes = candidateIndexes.begin();
@@ -499,9 +501,13 @@ template <typename T, typename P> void* selectAdaptiveParallelAux(void* arg) {
 template <typename T, typename P> class SelectAdaptiveParallel {
 public:
   SelectAdaptiveParallel(const Span<T>& column_, T value_, bool columnIsFirstArg_, P& predicate_,
-                         Span<uint32_t>&& candidateIndexes_, uint32_t dop_)
+                         Span<uint32_t>&& candidateIndexes_, uint32_t dop_, bool calibrationRun)
       : column(column_), value(value_), columnIsFirstArg(columnIsFirstArg_), predicate(predicate_),
         candidateIndexes(std::move(candidateIndexes_)), dop(dop_) {
+    if (!calibrationRun) {
+      MachineConstants::getInstance().calculateMissingMachineConstants();
+    }
+
     n = candidateIndexes.size() == 0 ? column.size() : candidateIndexes.size();
     while(dop > n) {
       dop /= 2;
@@ -509,7 +515,9 @@ public:
 
     candidateIndexesPtr = candidateIndexes.size() > 0 ? &candidateIndexes : nullptr;
     if(candidateIndexes.size() == 0) {
-      std::vector<uint32_t> vec(column.size());
+      std::vector<uint32_t> vec;
+      vec.reserve(column.size());
+      vec.resize(column.size());
       candidateIndexes = Span<uint32_t>(std::vector(vec));
     }
     Counters::getInstance();
@@ -567,11 +575,11 @@ private:
 
 template <typename T, typename P>
 Span<uint32_t> select(Select implementation, const Span<T>& column, T value, bool columnIsFirstArg,
-                      P& predicate, Span<uint32_t>&& candidateIndexes, size_t dop) {
+                      P& predicate, Span<uint32_t>&& candidateIndexes, size_t dop, bool calibrationRun) {
   assert(1 <= dop && dop <= logicalCoresCount());
   if(implementation == Select::AdaptiveParallel) {
     SelectAdaptiveParallel<T, P> selectOperator(column, value, columnIsFirstArg, predicate,
-                                                std::move(candidateIndexes), dop);
+                                                std::move(candidateIndexes), dop, calibrationRun);
     return std::move(selectOperator.processInput());
   }
 
@@ -584,7 +592,9 @@ Span<uint32_t> select(Select implementation, const Span<T>& column, T value, boo
 
   auto candidateIndexesPtr = candidateIndexes.size() > 0 ? &candidateIndexes : nullptr;
   if(candidateIndexes.size() == 0) {
-    std::vector<uint32_t> vec(column.size());
+    std::vector<uint32_t> vec;
+    vec.reserve(column.size());
+    vec.resize(column.size());
     candidateIndexes = Span<uint32_t>(std::vector(vec));
   }
   uint32_t* selectedIndexes = candidateIndexes.begin();
