@@ -22,7 +22,7 @@
 #include <utility>
 #include <variant>
 
-constexpr uint32_t DOP = 2;
+constexpr uint32_t DOP = 4;
 constexpr adaptive::Select selectImplementation = adaptive::Select::AdaptiveParallel;
 
 class Pred;
@@ -728,12 +728,12 @@ private:
           [&indexes]<typename T>(Span<T>&& typedSpan) -> ExpressionSpanArgument {
             if constexpr(std::is_same_v<T, int64_t> || std::is_same_v<T, double_t> ||
                          std::is_same_v<T, std::string>) {
-              std::vector<T> filteredColumn;
-              filteredColumn.reserve(indexes.size());
-              for(auto& index : indexes) {
-                filteredColumn.push_back(typedSpan[index]);
+              auto* filteredColumn = new T[indexes.size()];
+              for(size_t i = 0; i < indexes.size(); ++i) {
+                filteredColumn[i] = typedSpan[indexes[i]];
               }
-              return Span<T>(std::move(std::vector(filteredColumn)));
+              return Span<T>(filteredColumn, indexes.size(),
+                             [filteredColumn]() { delete[] filteredColumn; });
             } else {
               throw std::runtime_error("unsupported column type in select: " +
                                        std::string(typeid(T).name()));
@@ -956,8 +956,8 @@ public:
         assert(std::holds_alternative<Span<uint32_t>>(*predicate));
         auto& indexes = std::get<Span<uint32_t>>(*predicate);
         auto numThreads = std::min(DOP, static_cast<uint32_t>(columns.size()));
-        if (numThreads == 1) {
-          for (auto& columnRef : columns) {
+        if(numThreads == 1) {
+          for(auto& columnRef : columns) {
             auto column = get<ComplexExpression>(std::move(columnRef));
             auto [head, unused_, dynamics, spans] = std::move(column).decompose();
             auto list = get<ComplexExpression>(std::move(dynamics.at(0)));
@@ -966,12 +966,12 @@ public:
                 [&indexes]<typename T>(Span<T>&& typedSpan) -> ExpressionSpanArgument {
                   if constexpr(std::is_same_v<T, int64_t> || std::is_same_v<T, double_t> ||
                                std::is_same_v<T, std::string>) {
-                    std::vector<T> filteredColumn;
-                    filteredColumn.reserve(indexes.size());
-                    for(auto& index : indexes) {
-                      filteredColumn.push_back(typedSpan[index]);
+                    auto* filteredColumn = new T[indexes.size()];
+                    for(size_t i = 0; i < indexes.size(); ++i) {
+                      filteredColumn[i] = typedSpan[indexes[i]];
                     }
-                    return Span<T>(std::move(std::vector(filteredColumn)));
+                    return Span<T>(filteredColumn, indexes.size(),
+                                   [filteredColumn]() { delete[] filteredColumn; });
                   } else {
                     throw std::runtime_error("unsupported column type in select: " +
                                              std::string(typeid(T).name()));
