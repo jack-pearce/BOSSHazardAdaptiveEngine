@@ -3,6 +3,7 @@
 
 #include "constants/machineConstants.hpp"
 #include "utilities/dataStructures.hpp"
+#include "utilities/memory.hpp"
 #include "utilities/papiWrapper.hpp"
 #include "utilities/systemInformation.hpp"
 
@@ -14,7 +15,7 @@
 #include <iostream>
 #include <memory>
 
-// #define DEBUG
+//#define DEBUG
 
 namespace adaptive {
 
@@ -527,7 +528,9 @@ public:
       return std::move(candidateIndexes).subspan(0, 0);
     }
 
+#if 1
     std::vector<pthread_t> threads(dop);
+#endif
     size_t tuplesPerThread = n / dop;
     vectorOfPairs<size_t, size_t> threadIndexes(dop, std::make_pair(0, tuplesPerThread));
     threadIndexes.back().second = n - ((dop - 1) * tuplesPerThread);
@@ -547,13 +550,19 @@ public:
           threadIndexes[i].first, threadIndexes[i].second, column, value, columnIsFirstArg,
           predicate, candidateIndexesPtr, candidateIndexes.begin(), &threadToMerge,
           &positionToWrite, dop, i));
+// TODO: investigate why creating threads here is faster than using thread pool for Q6 SF=1
+#if 1
       pthread_create(&threads[i], NULL, selectAdaptiveParallelAux<T, P>, threadArgs[i].get());
     }
-
     for(uint32_t i = 0; i < dop; ++i) {
       pthread_join(threads[i], nullptr);
     }
-
+#else
+      ThreadPool::getInstance().enqueue(
+          [threadArg = threadArgs[i].get()] { selectAdaptiveParallelAux<T, P>(threadArg); });
+    }
+    ThreadPool::getInstance().waitUntilComplete(dop);
+#endif
     return std::move(candidateIndexes).subspan(0, positionToWrite);
   }
 

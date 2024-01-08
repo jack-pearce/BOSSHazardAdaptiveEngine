@@ -195,6 +195,7 @@ set(ImplementationFiles
         Source/utilities/papiWrapper.cpp
         Source/utilities/systemInformation.cpp
         Source/constants/machineConstants.cpp
+        Source/config.cpp
 )
 
 # Plugin
