@@ -30,7 +30,9 @@ if (NOT PARANOID_LEVEL_CONTENT)
 endif()
 
 if (NOT PARANOID_LEVEL_CONTENT LESS_EQUAL 1)
-    message(FATAL_ERROR "Paranoid level is ${PARANOID_LEVEL_CONTENT}, it must be greater than 1.")
+    message(FATAL_ERROR "Paranoid level is ${PARANOID_LEVEL_CONTENT}"
+                        "It must be less than or equal to 1.\n"
+                        "Please run: \"sudo sh -c 'echo 1 >/proc/sys/kernel/perf_event_paranoid'\".")
 endif()
 
 message(STATUS "Paranoid level: ${PARANOID_LEVEL_CONTENT}")

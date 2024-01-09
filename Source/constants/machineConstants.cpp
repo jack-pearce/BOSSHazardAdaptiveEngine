@@ -121,7 +121,10 @@ void MachineConstants::calculateMissingMachineConstants() {
       calculateSelectMachineConstants<int64_t>(dop);
     }
 
-    dop *= 2;
+    if (dop == logicalCoresCount()) {
+      break;
+    }
+    dop = (dop * 2) <= logicalCoresCount() ? dop * 2 : logicalCoresCount();
   }
 }
 
