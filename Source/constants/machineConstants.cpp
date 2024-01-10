@@ -32,6 +32,7 @@ MachineConstants::MachineConstants() {
     // TODO: currently hardcode since I can't find how to set environment variables in vtune
     machineConstantsFilePath =
         "/home/jcp122/repos/BOSSHazardAdaptiveEngine/Source/constants/machineConstantValues.json";
+//    "/repos/BOSSHazardAdaptiveEngine/Source/constants/machineConstantValues.json";
 #if FALSE
     machineConstantsFilePath =
         getProjectRootDirectory() + "/Source/constants/machineConstantValues.json";

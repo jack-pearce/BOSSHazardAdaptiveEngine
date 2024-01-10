@@ -909,8 +909,7 @@ public:
         assert(std::holds_alternative<Span<uint32_t>>(*predicate));
         auto& indexes = std::get<Span<uint32_t>>(*predicate);
         const auto indexesPerThread = indexes.size() / DOP;
-        // Threshold number of indexesPerThread at which point single threaded is faster
-        if(DOP == 1 || indexesPerThread < 100) {
+        if(DOP == 1 || indexesPerThread < adaptive::config::minTuplesPerThread) {
           for(auto& columnRef : columns) {
             auto column = get<ComplexExpression>(std::move(columnRef));
             auto [head, unused_, dynamics, spans] = std::move(column).decompose();

@@ -198,6 +198,7 @@ set(ImplementationFiles
         Source/utilities/systemInformation.cpp
         Source/constants/machineConstants.cpp
         Source/config.cpp
+        Source/utilities/utilities.cpp
 )
 
 # Plugin

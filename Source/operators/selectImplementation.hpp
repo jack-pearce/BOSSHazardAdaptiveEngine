@@ -6,6 +6,7 @@
 #include "utilities/memory.hpp"
 #include "utilities/papiWrapper.hpp"
 #include "utilities/systemInformation.hpp"
+#include "utilities/utilities.h"
 
 #include <algorithm>
 #include <atomic>
@@ -15,7 +16,9 @@
 #include <iostream>
 #include <memory>
 
-//#define DEBUG
+// #define PRINT_SELECTIVITY
+// #define DEBUG
+// #define VERBOSE_DEBUG
 
 namespace adaptive {
 
@@ -194,7 +197,7 @@ SelectAdaptive<T, P>::SelectAdaptive(const Span<T>& column_, T value_, bool colu
     : column(column_), value(value_), columnIsFirstArg(columnIsFirstArg_), predicate(predicate_),
       candidateIndexes(std::move(candidateIndexes_)), tuplesPerHazardCheck(50000),
       maxConsecutivePredications(10), tuplesInBranchBurst(1000), microBatchStartIndex(0),
-      totalSelected(0), consecutivePredications(0),
+      totalSelected(0), consecutivePredications(maxConsecutivePredications),
       activeOperator(SelectImplementation::Predication_), monitor(MonitorSelect<T, P>(this)),
       branchOperator(SelectBranch<T, P>()), predicationOperator(SelectPredication<T, P>()) {
   remainingTuples = candidateIndexes.size() == 0 ? column.size() : candidateIndexes.size();
@@ -224,6 +227,10 @@ template <typename T, typename P> void SelectAdaptive<T, P>::adjustRobustness(in
 }
 
 template <typename T, typename P> Span<uint32_t> SelectAdaptive<T, P>::processInput() {
+#ifdef PRINT_SELECTIVITY
+  std::cout << candidateIndexes.size() << " input values into predicate" << std::endl;
+#endif
+
   while(remainingTuples > 0) {
     if(__builtin_expect(consecutivePredications == maxConsecutivePredications, false)) {
 #ifdef DEBUG
@@ -239,18 +246,27 @@ template <typename T, typename P> Span<uint32_t> SelectAdaptive<T, P>::processIn
     monitor.checkHazards(microBatchSize, microBatchSelected);
   }
 
+#ifdef PRINT_SELECTIVITY
+  std::cout << totalSelected << " values selected by predicate" << std::endl;
+#endif
   return std::move(candidateIndexes).subspan(0, totalSelected);
 }
 
 template <typename T, typename P> inline void SelectAdaptive<T, P>::processMicroBatch() {
   microBatchSelected = 0;
   if(activeOperator == SelectImplementation::Branch_) {
+#ifdef VERBOSE_DEBUG
+    std::cout << "Processing micro-batch with Branch" << std::endl;
+#endif
     Counters::getInstance().readSharedEventSet();
     microBatchSelected = branchOperator.processMicroBatch(
         microBatchStartIndex, microBatchSize, column, value, columnIsFirstArg, predicate,
         candidateIndexesPtr, selectedIndexes);
     Counters::getInstance().readSharedEventSet();
   } else {
+#ifdef VERBOSE_DEBUG
+    std::cout << "Processing micro-batch with Predication" << std::endl;
+#endif
     Counters::getInstance().readSharedEventSet();
     microBatchSelected = predicationOperator.processMicroBatch(
         microBatchStartIndex, microBatchSize, column, value, columnIsFirstArg, predicate,
@@ -393,8 +409,8 @@ SelectAdaptiveParallelAux<T, P>::SelectAdaptiveParallelAux(SelectThreadArgs<T, P
       positionToWrite(args->positionToWrite), dop(args->dop), threadNum(args->threadNum),
       tuplesPerHazardCheck(50000), maxConsecutivePredications(10), tuplesInBranchBurst(1000),
       activeOperator(SelectImplementation::Predication_), branchOperator(SelectBranch<T, P>()),
-      predicationOperator(SelectPredication<T, P>()), consecutivePredications(0),
-      threadSelected(0) {
+      predicationOperator(SelectPredication<T, P>()),
+      consecutivePredications(maxConsecutivePredications), threadSelected(0) {
 
   if(threadNum == 0) {
     threadSelectionBuffer = selectedIndexes;
@@ -449,12 +465,18 @@ template <typename T, typename P> void SelectAdaptiveParallelAux<T, P>::processI
 template <typename T, typename P> inline void SelectAdaptiveParallelAux<T, P>::processMicroBatch() {
   microBatchSelected = 0;
   if(activeOperator == SelectImplementation::Branch_) {
+#ifdef VERBOSE_DEBUG
+    std::cout << "Processing micro-batch with Branch" << std::endl;
+#endif
     readThreadEventSet(eventSet, 1, branchMispredictions.get());
     microBatchSelected = branchOperator.processMicroBatch(
         microBatchStartIndex, microBatchSize, column, value, columnIsFirstArg, predicate,
         candidateIndexes, threadSelection);
     readThreadEventSet(eventSet, 1, branchMispredictions.get());
   } else {
+#ifdef VERBOSE_DEBUG
+    std::cout << "Processing micro-batch with Predication" << std::endl;
+#endif
     readThreadEventSet(eventSet, 1, branchMispredictions.get());
     microBatchSelected = predicationOperator.processMicroBatch(
         microBatchStartIndex, microBatchSize, column, value, columnIsFirstArg, predicate,
@@ -509,8 +531,8 @@ public:
     }
 
     n = candidateIndexes.size() == 0 ? column.size() : candidateIndexes.size();
-    while(dop > n) {
-      dop /= 2;
+    while(dop > 1 && (n / dop) < adaptive::config::minTuplesPerThread) {
+      dop = roundDownToPowerOf2(dop);
     }
 
     candidateIndexesPtr = candidateIndexes.size() > 0 ? &candidateIndexes : nullptr;
@@ -524,13 +546,16 @@ public:
   }
 
   Span<uint32_t> processInput() {
+#ifdef PRINT_SELECTIVITY
+    std::cout << candidateIndexes.size() << " input values into predicate" << std::endl;
+#endif
     if(n == 0) {
+#ifdef PRINT_SELECTIVITY
+      std::cout << "0 values selected by predicate" << std::endl;
+#endif
       return std::move(candidateIndexes).subspan(0, 0);
     }
 
-#if 1
-    std::vector<pthread_t> threads(dop);
-#endif
     size_t tuplesPerThread = n / dop;
     vectorOfPairs<size_t, size_t> threadIndexes(dop, std::make_pair(0, tuplesPerThread));
     threadIndexes.back().second = n - ((dop - 1) * tuplesPerThread);
@@ -550,18 +575,13 @@ public:
           threadIndexes[i].first, threadIndexes[i].second, column, value, columnIsFirstArg,
           predicate, candidateIndexesPtr, candidateIndexes.begin(), &threadToMerge,
           &positionToWrite, dop, i));
-// TODO: investigate why creating threads here is faster than using thread pool for Q6 SF=1
-#if 1
-      pthread_create(&threads[i], NULL, selectAdaptiveParallelAux<T, P>, threadArgs[i].get());
-    }
-    for(uint32_t i = 0; i < dop; ++i) {
-      pthread_join(threads[i], nullptr);
-    }
-#else
       ThreadPool::getInstance().enqueue(
           [threadArg = threadArgs[i].get()] { selectAdaptiveParallelAux<T, P>(threadArg); });
     }
     ThreadPool::getInstance().waitUntilComplete(dop);
+
+#ifdef PRINT_SELECTIVITY
+    std::cout << positionToWrite << " values selected by predicate" << std::endl;
 #endif
     return std::move(candidateIndexes).subspan(0, positionToWrite);
   }
