@@ -51,8 +51,9 @@ using adaptive::config::selectImplementation;
 
 using boss::Span;
 using boss::Symbol;
-using SpanInputs = std::variant<std::vector<std::int64_t>, std::vector<std::double_t>,
-                                std::vector<std::string>, std::vector<uint32_t>>;
+using SpanInputs =
+    std::variant<std::vector<std::int32_t>, std::vector<std::int64_t>, std::vector<std::double_t>,
+                 std::vector<std::string>, std::vector<uint32_t>>;
 
 using namespace boss::algorithm;
 
@@ -237,7 +238,8 @@ static boss::Expression toBOSSExpression(Expression&& expr) {
                 std::back_inserter(bossSpans), [](auto&& span) {
                   return std::visit(
                       []<typename T>(Span<T>&& typedSpan) -> BOSSExpressionSpanArgument {
-                        if constexpr(std::is_same_v<T, int64_t> || std::is_same_v<T, double_t> ||
+                        if constexpr(std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t> ||
+                                     std::is_same_v<T, double_t> ||
                                      std::is_same_v<T, std::string>) {
                           return typedSpan;
                         } else {
@@ -439,7 +441,10 @@ private:
         [&span, &f](auto&& typedSpan1, auto&& typedSpan2) {
           using Type1 = std::decay_t<decltype(typedSpan1)>;
           using Type2 = std::decay_t<decltype(typedSpan2)>;
-          if constexpr((std::is_same_v<Type1, Span<int64_t>> &&
+          // TODO
+          if constexpr((std::is_same_v<Type1, Span<int32_t>> &&
+                        std::is_same_v<Type2, Span<int32_t>>) ||
+                       (std::is_same_v<Type1, Span<int64_t>> &&
                         std::is_same_v<Type2, Span<int64_t>>) ||
                        (std::is_same_v<Type1, Span<double>> &&
                         std::is_same_v<Type2, Span<double>>)) {
@@ -492,7 +497,10 @@ private:
         [&indexes, &f](auto&& typedSpan1, auto&& typedSpan2) {
           using Type1 = std::decay_t<decltype(typedSpan1)>;
           using Type2 = std::decay_t<decltype(typedSpan2)>;
-          if constexpr((std::is_same_v<Type1, Span<int64_t>> &&
+          // TODO
+          if constexpr((std::is_same_v<Type1, Span<int32_t>> &&
+                        std::is_same_v<Type2, Span<int32_t>>) ||
+                       (std::is_same_v<Type1, Span<int64_t>> &&
                         std::is_same_v<Type2, Span<int64_t>>) ||
                        (std::is_same_v<Type1, Span<double>> &&
                         std::is_same_v<Type2, Span<double>>)) {
@@ -653,8 +661,8 @@ private:
           auto& span = get<ComplexExpression>(column.getArguments().at(0)).getSpanArguments().at(0);
           return std::visit(
               []<typename T>(Span<T> const& typedSpan) -> std::optional<ExpressionSpanArgument> {
-                if constexpr(std::is_same_v<T, int64_t> || std::is_same_v<T, double_t> ||
-                             std::is_same_v<T, std::string>) {
+                if constexpr(std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t> ||
+                             std::is_same_v<T, double_t> || std::is_same_v<T, std::string>) {
                   using ElementType = std::remove_const_t<T>;
                   auto* ptr = const_cast<ElementType*>(typedSpan.begin());
                   return Span<ElementType>(ptr, typedSpan.size(), []() {});
@@ -688,8 +696,8 @@ private:
               std::move(get<ComplexExpression>(column.getArguments().at(0))).decompose();
           return std::visit(
               []<typename T>(Span<T>&& typedSpan) -> std::optional<ExpressionSpanArgument> {
-                if constexpr(std::is_same_v<T, int64_t> || std::is_same_v<T, double_t> ||
-                             std::is_same_v<T, std::string>) {
+                if constexpr(std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t> ||
+                             std::is_same_v<T, double_t> || std::is_same_v<T, std::string>) {
                   return Span<T>(std::move(typedSpan));
                 } else {
                   throw std::runtime_error("unsupported column type in predicate");
@@ -917,8 +925,8 @@ public:
             auto [listHead, listUnused_, listDynamics, listSpans] = std::move(list).decompose();
             listSpans.at(0) = std::visit(
                 [&indexes]<typename T>(Span<T>&& typedSpan) -> ExpressionSpanArgument {
-                  if constexpr(std::is_same_v<T, int64_t> || std::is_same_v<T, double_t> ||
-                               std::is_same_v<T, std::string>) {
+                  if constexpr(std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t> ||
+                               std::is_same_v<T, double_t> || std::is_same_v<T, std::string>) {
                     auto unfilteredColumn = std::move(typedSpan);
                     size_t size = indexes.size();
                     auto* filteredColumn = new T[size];
@@ -950,8 +958,8 @@ public:
             listSpans.at(0) = std::visit(
                 [indexesPerThread,
                  &indexes]<typename T>(Span<T>&& typedSpan) -> ExpressionSpanArgument {
-                  if constexpr(std::is_same_v<T, int64_t> || std::is_same_v<T, double_t> ||
-                               std::is_same_v<T, std::string>) {
+                  if constexpr(std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t> ||
+                               std::is_same_v<T, double_t> || std::is_same_v<T, std::string>) {
                     auto unfilteredColumn = std::move(typedSpan);
                     auto* filteredColumn = new T[indexes.size()];
                     uint32_t startIndex = 0;
@@ -1008,7 +1016,8 @@ public:
           std::visit(
               [&map, &span](auto&& typedSpan) {
                 using Type = std::decay_t<decltype(typedSpan)>;
-                if constexpr(std::is_same_v<Type, Span<int64_t>> ||
+                if constexpr(std::is_same_v<Type, Span<int32_t>> ||
+                             std::is_same_v<Type, Span<int64_t>> ||
                              std::is_same_v<Type, Span<double>>) {
                   using ElementType = typename Type::element_type;
                   std::vector<ElementType> uniqueList;
@@ -1060,7 +1069,8 @@ public:
           std::visit(
               [&span, &aggFuncName, &map, byFlag](auto&& typedSpan) {
                 using Type = std::decay_t<decltype(typedSpan)>;
-                if constexpr(std::is_same_v<Type, Span<int64_t>> ||
+                if constexpr(std::is_same_v<Type, Span<int32_t>> ||
+                             std::is_same_v<Type, Span<int64_t>> ||
                              std::is_same_v<Type, Span<double>>) {
                   using ElementType = typename Type::element_type;
                   if(aggFuncName == "Sum") {
@@ -1082,15 +1092,15 @@ public:
                     }
                   } else if(aggFuncName == "Count") {
                     if(byFlag) {
-                      std::vector<int64_t> results;
+                      std::vector<int32_t> results;
                       results.reserve(map.size());
                       for(auto const& pair : map) {
-                        results.push_back(static_cast<int64_t>(pair.second.size()));
+                        results.push_back(static_cast<int32_t>(pair.second.size()));
                       }
-                      span = Span<int64_t>(std::vector(results));
+                      span = Span<int32_t>(std::vector(results));
                     } else {
-                      auto count = static_cast<int64_t>(typedSpan.size());
-                      span = Span<int64_t>({count});
+                      auto count = static_cast<int32_t>(typedSpan.size());
+                      span = Span<int32_t>({count});
                     }
                   } else {
                     throw std::runtime_error("unsupported aggregate function in group");
