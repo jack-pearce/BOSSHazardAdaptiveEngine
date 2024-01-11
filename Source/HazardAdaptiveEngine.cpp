@@ -441,13 +441,9 @@ private:
         [&span, &f](auto&& typedSpan1, auto&& typedSpan2) {
           using Type1 = std::decay_t<decltype(typedSpan1)>;
           using Type2 = std::decay_t<decltype(typedSpan2)>;
-          // TODO
-          if constexpr((std::is_same_v<Type1, Span<int32_t>> &&
-                        std::is_same_v<Type2, Span<int32_t>>) ||
-                       (std::is_same_v<Type1, Span<int64_t>> &&
-                        std::is_same_v<Type2, Span<int64_t>>) ||
-                       (std::is_same_v<Type1, Span<double>> &&
-                        std::is_same_v<Type2, Span<double>>)) {
+          if constexpr(std::is_same_v<Type1, Type2> && (std::is_same_v<Type1, Span<int32_t>> ||
+                                                        std::is_same_v<Type1, Span<int64_t>> ||
+                                                        std::is_same_v<Type2, Span<double>>)) {
             using ElementType1 = typename Type1::element_type;
             using ElementType2 = typename Type2::element_type;
             using OutputType = decltype(std::declval<decltype(f)>()(std::declval<ElementType1>(),
@@ -497,13 +493,9 @@ private:
         [&indexes, &f](auto&& typedSpan1, auto&& typedSpan2) {
           using Type1 = std::decay_t<decltype(typedSpan1)>;
           using Type2 = std::decay_t<decltype(typedSpan2)>;
-          // TODO
-          if constexpr((std::is_same_v<Type1, Span<int32_t>> &&
-                        std::is_same_v<Type2, Span<int32_t>>) ||
-                       (std::is_same_v<Type1, Span<int64_t>> &&
-                        std::is_same_v<Type2, Span<int64_t>>) ||
-                       (std::is_same_v<Type1, Span<double>> &&
-                        std::is_same_v<Type2, Span<double>>)) {
+          if constexpr(std::is_same_v<Type1, Type2> && (std::is_same_v<Type1, Span<int32_t>> ||
+                                                        std::is_same_v<Type1, Span<int64_t>> ||
+                                                        std::is_same_v<Type2, Span<double>>)) {
             using ElementType1 = typename Type1::element_type;
             using ElementType2 = typename Type2::element_type;
             using OutputType = decltype(std::declval<decltype(f)>()(std::declval<ElementType1>(),

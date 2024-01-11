@@ -110,12 +110,10 @@ void MachineConstants::calculateMissingMachineConstants() {
   while(dop <= logicalCoresCount()) {
     std::string dopStr = std::to_string(dop);
 
-#if False
     if(machineConstants.count("SelectLower_4B_elements_" + dopStr + "_dop") == 0 ||
        machineConstants.count("SelectUpper_4B_elements_" + dopStr + "_dop") == 0) {
       calculateSelectMachineConstants<int32_t>(dop);
     }
-#endif
 
     if(machineConstants.count("SelectLower_8B_elements_" + dopStr + "_dop") == 0 ||
        machineConstants.count("SelectUpper_8B_elements_" + dopStr + "_dop") == 0) {
