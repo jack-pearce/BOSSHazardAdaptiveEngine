@@ -439,24 +439,25 @@ private:
     ExpressionSpanArgument span;
     std::visit(
         [&span, &f](auto&& typedSpan1, auto&& typedSpan2) {
-          using Type1 = std::decay_t<decltype(typedSpan1)>;
-          using Type2 = std::decay_t<decltype(typedSpan2)>;
-          if constexpr(std::is_same_v<Type1, Type2> && (std::is_same_v<Type1, Span<int32_t>> ||
-                                                        std::is_same_v<Type1, Span<int64_t>> ||
-                                                        std::is_same_v<Type2, Span<double>>)) {
-            using ElementType1 = typename Type1::element_type;
-            using ElementType2 = typename Type2::element_type;
-            using OutputType = decltype(std::declval<decltype(f)>()(std::declval<ElementType1>(),
-                                                                    std::declval<ElementType2>()));
+          using SpanType1 = std::decay_t<decltype(typedSpan1)>;
+          using SpanType2 = std::decay_t<decltype(typedSpan2)>;
+          using Type1 = typename SpanType1::element_type;
+          using Type2 = typename SpanType2::element_type;
+          if constexpr((std::is_same_v<Type1, double> || std::is_same_v<Type1, int32_t> ||
+                        std::is_same_v<Type1, int64_t>)&&(std::is_same_v<Type2, double> ||
+                                                          std::is_same_v<Type2, int32_t> ||
+                                                          std::is_same_v<Type2, int64_t>)) {
+            using OutputType =
+                decltype(std::declval<decltype(f)>()(std::declval<Type1>(), std::declval<Type2>()));
             // If output of f is a bool, then we are performing a select so return indexes
             if constexpr(std::is_same_v<OutputType, bool>) {
               assert(typedSpan1.size() == 1 || typedSpan2.size() == 1);
               if(typedSpan2.size() == 1) {
-                span = adaptive::select(selectImplementation, typedSpan1, typedSpan2[0], true, f,
-                                        {}, DOP);
+                span = adaptive::select(selectImplementation, typedSpan1,
+                                        static_cast<Type1>(typedSpan2[0]), true, f, {}, DOP);
               } else {
-                span = adaptive::select(selectImplementation, typedSpan2, typedSpan1[0], false, f,
-                                        {}, DOP);
+                span = adaptive::select(selectImplementation, typedSpan2,
+                                        static_cast<Type2>(typedSpan1[0]), false, f, {}, DOP);
               }
             } else {
               std::vector<OutputType> output;
@@ -478,8 +479,10 @@ private:
               span = Span<OutputType>(std::move(std::vector(output)));
             }
           } else {
-            throw std::runtime_error("unsupported column type in lambda: " +
-                                     std::string(typeid(typename Type1::element_type).name()));
+            throw std::runtime_error("unsupported column types in lambda: " +
+                                     std::string(typeid(typename SpanType1::element_type).name()) +
+                                     ", " +
+                                     std::string(typeid(typename SpanType2::element_type).name()));
           }
         },
         std::forward<T1>(arg1), std::forward<T2>(arg2));
@@ -491,33 +494,38 @@ private:
                                                            Span<uint32_t>& indexes) {
     std::visit(
         [&indexes, &f](auto&& typedSpan1, auto&& typedSpan2) {
-          using Type1 = std::decay_t<decltype(typedSpan1)>;
-          using Type2 = std::decay_t<decltype(typedSpan2)>;
-          if constexpr(std::is_same_v<Type1, Type2> && (std::is_same_v<Type1, Span<int32_t>> ||
-                                                        std::is_same_v<Type1, Span<int64_t>> ||
-                                                        std::is_same_v<Type2, Span<double>>)) {
-            using ElementType1 = typename Type1::element_type;
-            using ElementType2 = typename Type2::element_type;
-            using OutputType = decltype(std::declval<decltype(f)>()(std::declval<ElementType1>(),
-                                                                    std::declval<ElementType2>()));
+          using SpanType1 = std::decay_t<decltype(typedSpan1)>;
+          using SpanType2 = std::decay_t<decltype(typedSpan2)>;
+          using Type1 = typename SpanType1::element_type;
+          using Type2 = typename SpanType2::element_type;
+          if constexpr((std::is_same_v<Type1, double> || std::is_same_v<Type1, int32_t> ||
+                        std::is_same_v<Type1, int64_t>)&&(std::is_same_v<Type2, double> ||
+                                                          std::is_same_v<Type2, int32_t> ||
+                                                          std::is_same_v<Type2, int64_t>)) {
+            using OutputType =
+                decltype(std::declval<decltype(f)>()(std::declval<Type1>(), std::declval<Type2>()));
 
             if constexpr(std::is_same_v<OutputType, bool>) {
               assert(typedSpan1.size() == 1 || typedSpan2.size() == 1);
               if(typedSpan2.size() == 1) {
-                indexes = adaptive::select(selectImplementation, typedSpan1, typedSpan2[0], true, f,
+                indexes = adaptive::select(selectImplementation, typedSpan1,
+                                           static_cast<Type1>(typedSpan2[0]), true, f,
                                            std::move(indexes), DOP);
               } else {
-                indexes = adaptive::select(selectImplementation, typedSpan2, typedSpan1[0], false,
-                                           f, std::move(indexes), DOP);
+                indexes = adaptive::select(selectImplementation, typedSpan2,
+                                           static_cast<Type2>(typedSpan1[0]), false, f,
+                                           std::move(indexes), DOP);
               }
             } else {
               throw std::runtime_error(
                   "function in createLambdaPipelineResult does not return bool: " +
-                  std::string(typeid(typename Type1::element_type).name()));
+                  std::string(typeid(typename SpanType1::element_type).name()));
             }
           } else {
             throw std::runtime_error("unsupported column type in lambda: " +
-                                     std::string(typeid(typename Type1::element_type).name()));
+                                     std::string(typeid(typename SpanType1::element_type).name()) +
+                                     ", " +
+                                     std::string(typeid(typename SpanType2::element_type).name()));
           }
         },
         std::forward<T1>(arg1), std::forward<T2>(arg2));
