@@ -26,6 +26,9 @@
 #include <variant>
 #include <vector>
 
+//#define DEBUG_MODE
+#define DEFER_TO_OTHER_ENGINE
+
 class Pred;
 
 using HAExpressionSystem = boss::expressions::generic::ExtensibleExpressionSystem<Pred, uint32_t>;
@@ -155,9 +158,6 @@ static Expression injectDebugInfoToSpansExtendedExpressionSystem(Expression&& ex
 } // namespace utilities
 #endif
 
-static Expression evaluateInternal(Expression&& e);
-
-// Q: Should tests all use spans for data - currently most using dynamics which requires this func
 template <typename... StaticArgumentTypes>
 ComplexExpressionWithStaticArguments<StaticArgumentTypes...>
 transformDynamicsToSpans(ComplexExpressionWithStaticArguments<StaticArgumentTypes...>&& input_) {
@@ -177,7 +177,7 @@ transformDynamicsToSpans(ComplexExpressionWithStaticArguments<StaticArgumentType
             }
           }
         },
-        evaluateInternal(*it));
+        *it);
   }
   dynamics.erase(dynamics.begin(), dynamics.end());
   ExpressionSpanArguments spans;
@@ -221,18 +221,27 @@ ExpressionArguments transformDynamicsInColumnsToSpans(ExpressionArguments&& colu
   return std::move(columns);
 }
 
-static boss::Expression toBOSSExpression(Expression&& expr) {
+static boss::Expression toBOSSExpression(Expression&& expr, bool isPredicate = false) {
   return std::visit(
       boss::utilities::overload(
           [&](ComplexExpression&& e) -> boss::Expression {
             auto [head, unused_, dynamics, spans] = std::move(e).decompose();
+            int NChildIsPredicate = dynamics.size(); // no child is a predicate as default
+            if(head == "Select"_) {
+              NChildIsPredicate = 1; // Select(relation, predicate)
+            } else if(head == "Join"_) {
+              NChildIsPredicate = 2; // Join(relation1, relation2, predicate)
+            }
             boss::ExpressionArguments bossDynamics;
             bossDynamics.reserve(dynamics.size());
-            std::transform(
-                std::make_move_iterator(dynamics.begin()), std::make_move_iterator(dynamics.end()),
-                std::back_inserter(bossDynamics),
-                [](auto&& arg) { return toBOSSExpression(std::forward<decltype(arg)>(arg)); });
+            std::transform(std::make_move_iterator(dynamics.begin()),
+                           std::make_move_iterator(dynamics.end()),
+                           std::back_inserter(bossDynamics), [&](auto&& arg) {
+                             return toBOSSExpression(std::forward<decltype(arg)>(arg),
+                                                     NChildIsPredicate-- == 0);
+                           });
             BOSSExpressionSpanArguments bossSpans;
+            bossSpans.reserve(spans.size());
             std::transform(
                 std::make_move_iterator(spans.begin()), std::make_move_iterator(spans.end()),
                 std::back_inserter(bossSpans), [](auto&& span) {
@@ -248,11 +257,26 @@ static boss::Expression toBOSSExpression(Expression&& expr) {
                       },
                       std::forward<decltype(span)>(span));
                 });
-            return boss::ComplexExpression(std::move(head), {}, std::move(bossDynamics),
-                                           std::move(bossSpans));
+            auto output = boss::ComplexExpression(std::move(head), {}, std::move(bossDynamics),
+                                                  std::move(bossSpans));
+            if(isPredicate && output.getHead() != "Where"_) {
+              // make sure to re-inject "Where" clause before the predicate
+              boss::ExpressionArguments whereArgs;
+              whereArgs.emplace_back(std::move(output));
+              return boss::ComplexExpression("Where"_, std::move(whereArgs));
+            }
+            return output;
           },
           [&](Pred&& e) -> boss::Expression {
-            boss::Expression output = static_cast<boss::Expression>(std::move(e));
+            // remaining unevaluated internal predicate, switch back to the initial expression
+            auto output = static_cast<boss::Expression>(std::move(e));
+            if(isPredicate && (!std::holds_alternative<boss::ComplexExpression>(output) ||
+                               std::get<boss::ComplexExpression>(output).getHead() != "Where"_)) {
+              // make sure to re-inject "Where" clause before the predicate
+              boss::ExpressionArguments whereArgs;
+              whereArgs.emplace_back(std::move(output));
+              return boss::ComplexExpression("Where"_, std::move(whereArgs));
+            }
             return output;
           },
           [](auto&& otherTypes) -> boss::Expression { return otherTypes; }),
@@ -349,14 +373,13 @@ private:
                   false);
             }
           },
-          evaluateInternal(std::move(dispatchArgument)));
+          std::move(dispatchArgument));
     } else {
       ExpressionArguments rest{};
       if(dynamics1.size() > sizeof...(Args)) {
-        std::transform(
-            std::move_iterator(next(dynamics1.begin(), sizeof...(Args))),
-            std::move_iterator(dynamics1.end()), std::back_inserter(rest),
-            [](auto&& arg) { return evaluateInternal(std::forward<decltype(arg)>(arg)); });
+        std::transform(std::move_iterator(next(dynamics1.begin(), sizeof...(Args))),
+                       std::move_iterator(dynamics1.end()), std::back_inserter(rest),
+                       [](auto&& arg) { return std::forward<decltype(arg)>(arg); });
       }
       return std::make_pair(
           func(ComplexExpressionWithStaticArguments<Args...>(std::move(head1), std::move(statics1),
@@ -532,8 +555,6 @@ private:
     return {};
   }
 
-  // Q: To create ComplexExpressionWithStaticArguments you must always explicitly call the
-  // constructor with the associated types?
   template <typename T, typename F>
   static Pred createLambdaExpression(ComplexExpressionWithStaticArguments<T>&& e, F&& f) {
     assert(e.getSpanArguments().empty());
@@ -556,7 +577,6 @@ private:
               return createLambdaResult(std::move(*arg1), std::move(*arg2), f);
             };
           },
-          // Q: Could this be a single funtion call, getDynamicArgumentAt(0)?
           e.getDynamicArguments().at(0));
       return {std::move(pred), toBOSSExpression(std::move(e))};
     } else {
@@ -657,7 +677,6 @@ private:
       for(auto& columnExpr : columns) {
         auto& column = get<ComplexExpression>(columnExpr);
         if(column.getHead().getName() == arg.getName()) {
-          // Q: get is a wrapper for std::get? When should get be used?
           auto& span = get<ComplexExpression>(column.getArguments().at(0)).getSpanArguments().at(0);
           return std::visit(
               []<typename T>(Span<T> const& typedSpan) -> std::optional<ExpressionSpanArgument> {
@@ -841,8 +860,6 @@ public:
       iss >> std::get_time(&tm, "%Y-%m-%d");
       auto t = std::mktime(&tm);
       static int const hoursInADay = 24;
-      // Q: How is a plain int like below stored as an Expression? Assume it is stored as an atomic
-      // and can be accessed as an int normally would?
       return (int32_t)(std::chrono::duration_cast<std::chrono::hours>(
                            std::chrono::system_clock::from_time_t(t).time_since_epoch())
                            .count() /
@@ -850,13 +867,18 @@ public:
     };
 
     (*this)["Project"_] = [](ComplexExpression&& inputExpr) -> Expression {
+      if(!holds_alternative<ComplexExpression>(*(inputExpr.getArguments().begin())) ||
+         get<ComplexExpression>(*(inputExpr.getArguments().begin())).getHead().getName() !=
+             "Table") {
+#ifdef DEBUG_MODE
+        std::cout << "Table is invalid, Project left unevaluated..." << std::endl;
+#endif
+        return toBOSSExpression(std::move(inputExpr));
+      }
       ExpressionArguments args = std::move(inputExpr).getArguments();
       auto it = std::make_move_iterator(args.begin());
       auto relation = get<ComplexExpression>(std::move(*it));
       auto asExpr = std::move(*++it);
-      if(relation.getHead().getName() != "Table") {
-        return "Project"_(std::move(relation), std::move(asExpr));
-      }
       auto columns = std::move(relation).getDynamicArguments();
       columns = transformDynamicsInColumnsToSpans(std::move(columns));
       ExpressionArguments asArgs = get<ComplexExpression>(std::move(asExpr)).getArguments();
@@ -907,6 +929,20 @@ public:
      * simply pass the candidate indexes Span onto the next operator.
      */
     (*this)["Select"_] = [](ComplexExpression&& inputExpr) -> Expression {
+      if(!holds_alternative<ComplexExpression>(*(inputExpr.getArguments().begin())) ||
+         get<ComplexExpression>(*(inputExpr.getArguments().begin())).getHead().getName() !=
+             "Table") {
+#ifdef DEBUG_MODE
+        std::cout << "Table is invalid, Select left unevaluated..." << std::endl;
+#endif
+        return toBOSSExpression(std::move(inputExpr));
+      }
+      if(!holds_alternative<Pred>(*++(inputExpr.getArguments().begin()))) {
+#ifdef DEBUG_MODE
+        std::cout << "Predicate is invalid, Select left unevaluated..." << std::endl;
+#endif
+        return toBOSSExpression(std::move(inputExpr));
+      }
       ExpressionArguments args = std::move(inputExpr).getArguments();
       auto it = std::make_move_iterator(args.begin());
       auto relation = get<ComplexExpression>(std::move(*it));
@@ -995,6 +1031,7 @@ public:
       return ComplexExpression("Table"_, std::move(columns));
     };
 
+#ifndef DEFER_TO_OTHER_ENGINE
     // TODO: Group currently only supports grouping on a single column (type long or double)
     (*this)["Group"_] = [](ComplexExpression&& inputExpr) -> Expression {
       ExpressionArguments args = std::move(inputExpr).getArguments();
@@ -1124,6 +1161,7 @@ public:
       }
       return ComplexExpression("Table"_, std::move(resultColumns));
     };
+#endif
   }
 };
 
@@ -1138,17 +1176,30 @@ static Expression operator|(Expression&& expression, auto&& function) {
 static Expression evaluateInternal(Expression&& e) {
   static OperatorMap operators;
   return std::move(e) | [](ComplexExpression&& e) -> Expression {
-    auto head = e.getHead();
-    auto it = operators.find(head);
+    auto [head, unused_, dynamics, spans] = std::move(e).decompose();
+    ExpressionArguments evaluatedDynamics;
+    evaluatedDynamics.reserve(dynamics.size());
+    std::transform(std::make_move_iterator(dynamics.begin()),
+                   std::make_move_iterator(dynamics.end()), std::back_inserter(evaluatedDynamics),
+                   [](auto&& arg) { return evaluateInternal(std::forward<decltype(arg)>(arg)); });
+    auto unevaluated =
+        ComplexExpression(std::move(head), {}, std::move(evaluatedDynamics), std::move(spans));
+    auto it = operators.find(unevaluated.getHead());
     if(it != operators.end())
-      return it->second(std::move(e));
-    return std::move(e);
+      return it->second(std::move(unevaluated));
+    return std::move(unevaluated);
   };
 }
 
 static boss::Expression evaluate(boss::Expression&& expr) {
   try {
+#ifdef DEBUG_MODE
+    expr = utilities::injectDebugInfoToSpans(std::move(expr));
+    std::cout << "Expression: " << expr << std::endl;
+    return std::move(expr);
+#else
     return toBOSSExpression(evaluateInternal(std::move(expr)));
+#endif
   } catch(std::exception const& e) {
     boss::ExpressionArguments args;
     args.reserve(2);
