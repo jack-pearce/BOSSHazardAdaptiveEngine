@@ -2613,4 +2613,4 @@ int main(int argc, char* argv[]) {
 }
 // NOLINTEND(readability-function-cognitive-complexity)
 // NOLINTEND(bugprone-exception-escape)
-// NOLINTEND(readability-magic-numb
+// NOLINTEND(readability-magic-numbers)
