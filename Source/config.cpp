@@ -2,8 +2,8 @@
 
 namespace adaptive::config {
 
-uint32_t DOP = 1;
-adaptive::Select selectImplementation = adaptive::Select::Branch;
+int32_t DOP = 1;
+adaptive::Select selectImplementation = adaptive::Select::AdaptiveParallel;
 
 uint32_t minTuplesPerThread = 100;
 

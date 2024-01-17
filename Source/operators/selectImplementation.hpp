@@ -28,16 +28,16 @@ template <typename T, typename P> class SelectOperator {
 public:
   virtual inline size_t processMicroBatch(size_t startCandidates, size_t numCandidates,
                                           const Span<T>& column, T value, bool columnIsFirstArg,
-                                          P& predicate, const Span<uint32_t>* candidateIndexes,
-                                          uint32_t* selectedIndexes) = 0;
+                                          P& predicate, const Span<int32_t>* candidateIndexes,
+                                          int32_t* selectedIndexes) = 0;
 };
 
 template <typename T, typename P> class SelectBranch : public SelectOperator<T, P> {
 public:
   inline size_t processMicroBatch(size_t startCandidates, size_t numCandidates,
                                   const Span<T>& column, T value, bool columnIsFirstArg,
-                                  P& predicate, const Span<uint32_t>* candidateIndexes,
-                                  uint32_t* selectedIndexes) final {
+                                  P& predicate, const Span<int32_t>* candidateIndexes,
+                                  int32_t* selectedIndexes) final {
     size_t numSelected = 0;
     if(!candidateIndexes) {
       if(columnIsFirstArg) {
@@ -76,8 +76,8 @@ template <typename T, typename P> class SelectPredication : public SelectOperato
 public:
   inline size_t processMicroBatch(size_t startCandidates, size_t numCandidates,
                                   const Span<T>& column, T value, bool columnIsFirstArg,
-                                  P& predicate, const Span<uint32_t>* candidateIndexes,
-                                  uint32_t* selectedIndexes) final {
+                                  P& predicate, const Span<int32_t>* candidateIndexes,
+                                  int32_t* selectedIndexes) final {
     size_t numSelected = 0;
     if(!candidateIndexes) {
       if(columnIsFirstArg) {
@@ -115,9 +115,9 @@ template <typename T, typename P> class MonitorSelect;
 template <typename T, typename P> class SelectAdaptive {
 public:
   SelectAdaptive(const Span<T>& column_, T value_, bool columnIsFirstArg_, P& predicate_,
-                 Span<uint32_t>&& candidateIndexes_);
+                 Span<int32_t>&& candidateIndexes_);
   void adjustRobustness(int adjustment);
-  Span<uint32_t> processInput();
+  Span<int32_t> processInput();
 
 private:
   inline void processMicroBatch();
@@ -126,26 +126,26 @@ private:
   T value;
   bool columnIsFirstArg;
   P& predicate;
-  Span<uint32_t> candidateIndexes;
+  Span<int32_t> candidateIndexes;
 
-  uint32_t tuplesPerHazardCheck;
-  uint32_t maxConsecutivePredications;
-  uint32_t tuplesInBranchBurst;
+  int32_t tuplesPerHazardCheck;
+  int32_t maxConsecutivePredications;
+  int32_t tuplesInBranchBurst;
 
-  uint32_t microBatchStartIndex;
-  uint32_t totalSelected;
-  uint32_t consecutivePredications;
+  int32_t microBatchStartIndex;
+  int32_t totalSelected;
+  int32_t consecutivePredications;
   SelectImplementation activeOperator;
 
   MonitorSelect<T, P> monitor;
   SelectBranch<T, P> branchOperator;
   SelectPredication<T, P> predicationOperator;
 
-  uint32_t remainingTuples;
-  Span<uint32_t>* candidateIndexesPtr;
-  uint32_t* selectedIndexes;
-  uint32_t microBatchSize{};
-  uint32_t microBatchSelected{};
+  int32_t remainingTuples;
+  Span<int32_t>* candidateIndexesPtr;
+  int32_t* selectedIndexes;
+  int32_t microBatchSize{};
+  int32_t microBatchSelected{};
 };
 
 template <typename T, typename P> class MonitorSelect {
@@ -166,7 +166,7 @@ public:
         (upperCrossoverSelectivity - lowerCrossoverSelectivity);
   }
 
-  void checkHazards(uint32_t n, uint32_t selected) {
+  void checkHazards(int32_t n, int32_t selected) {
     float selectivity = static_cast<float>(selected) / static_cast<float>(n);
 
     if(__builtin_expect(
@@ -193,7 +193,7 @@ private:
 
 template <typename T, typename P>
 SelectAdaptive<T, P>::SelectAdaptive(const Span<T>& column_, T value_, bool columnIsFirstArg_,
-                                     P& predicate_, Span<uint32_t>&& candidateIndexes_)
+                                     P& predicate_, Span<int32_t>&& candidateIndexes_)
     : column(column_), value(value_), columnIsFirstArg(columnIsFirstArg_), predicate(predicate_),
       candidateIndexes(std::move(candidateIndexes_)), tuplesPerHazardCheck(50000),
       maxConsecutivePredications(10), tuplesInBranchBurst(1000), microBatchStartIndex(0),
@@ -203,9 +203,9 @@ SelectAdaptive<T, P>::SelectAdaptive(const Span<T>& column_, T value_, bool colu
   remainingTuples = candidateIndexes.size() == 0 ? column.size() : candidateIndexes.size();
   candidateIndexesPtr = candidateIndexes.size() > 0 ? &candidateIndexes : nullptr;
   if(candidateIndexes.size() == 0) {
-    auto* indexesArray = new uint32_t[column.size()];
+    auto* indexesArray = new int32_t[column.size()];
     candidateIndexes =
-        Span<uint32_t>(indexesArray, column.size(), [indexesArray]() { delete[] indexesArray; });
+        Span<int32_t>(indexesArray, column.size(), [indexesArray]() { delete[] indexesArray; });
   }
   selectedIndexes = candidateIndexes.begin();
 }
@@ -226,7 +226,7 @@ template <typename T, typename P> void SelectAdaptive<T, P>::adjustRobustness(in
   }
 }
 
-template <typename T, typename P> Span<uint32_t> SelectAdaptive<T, P>::processInput() {
+template <typename T, typename P> Span<int32_t> SelectAdaptive<T, P>::processInput() {
 #ifdef PRINT_SELECTIVITY
   std::cout << candidateIndexes.size() << " input values into predicate" << std::endl;
 #endif
@@ -289,17 +289,17 @@ template <typename T, typename P> struct SelectThreadArgs {
   T value;
   bool columnIsFirstArg;
   P& predicate;
-  const Span<uint32_t>* candidateIndexes;
-  uint32_t* selectedIndexes;
-  std::atomic<uint32_t>* threadToMerge;
-  std::atomic<uint32_t>* positionToWrite;
-  uint32_t dop;
-  uint32_t threadNum;
+  const Span<int32_t>* candidateIndexes;
+  int32_t* selectedIndexes;
+  std::atomic<int32_t>* threadToMerge;
+  std::atomic<int32_t>* positionToWrite;
+  int32_t dop;
+  int32_t threadNum;
 
   SelectThreadArgs(size_t startCandidates_, size_t numCandidates_, const Span<T>& column_, T value_,
-                   bool columnIsFirstArg_, P& predicate_, const Span<uint32_t>* candidateIndexes_,
-                   uint32_t* selectedIndexes_, std::atomic<uint32_t>* threadToMerge_,
-                   std::atomic<uint32_t>* positionToWrite_, uint32_t dop_, uint32_t threadNum_)
+                   bool columnIsFirstArg_, P& predicate_, const Span<int32_t>* candidateIndexes_,
+                   int32_t* selectedIndexes_, std::atomic<int32_t>* threadToMerge_,
+                   std::atomic<int32_t>* positionToWrite_, int32_t dop_, int32_t threadNum_)
       : startCandidates(startCandidates_), numCandidates(numCandidates_), column(column_),
         value(value_), columnIsFirstArg(columnIsFirstArg_), predicate(predicate_),
         candidateIndexes(candidateIndexes_), selectedIndexes(selectedIndexes_),
@@ -326,13 +326,13 @@ private:
   T value;
   bool columnIsFirstArg;
   P& predicate;
-  const Span<uint32_t>* candidateIndexes;
-  uint32_t* selectedIndexes;
+  const Span<int32_t>* candidateIndexes;
+  int32_t* selectedIndexes;
 
-  std::atomic<uint32_t>* threadToMerge;
-  std::atomic<uint32_t>* positionToWrite;
-  uint32_t dop;
-  uint32_t threadNum;
+  std::atomic<int32_t>* threadToMerge;
+  std::atomic<int32_t>* positionToWrite;
+  int32_t dop;
+  int32_t threadNum;
 
   size_t tuplesPerHazardCheck;
   size_t maxConsecutivePredications;
@@ -342,8 +342,8 @@ private:
   SelectBranch<T, P> branchOperator;
   SelectPredication<T, P> predicationOperator;
 
-  uint32_t* threadSelectionBuffer;
-  uint32_t* threadSelection;
+  int32_t* threadSelectionBuffer;
+  int32_t* threadSelection;
   std::unique_ptr<long_long> branchMispredictions;
   std::unique_ptr<MonitorSelectParallel<T, P>> monitor;
   int eventSet;
@@ -357,7 +357,7 @@ private:
 
 template <typename T, typename P> class MonitorSelectParallel {
 public:
-  MonitorSelectParallel(SelectAdaptiveParallelAux<T, P>* selectOperator_, uint32_t dop,
+  MonitorSelectParallel(SelectAdaptiveParallelAux<T, P>* selectOperator_, int32_t dop,
                         long_long* branchMispredictions_)
       : branchMispredictions(branchMispredictions_), selectOperator(selectOperator_) {
 
@@ -416,7 +416,7 @@ SelectAdaptiveParallelAux<T, P>::SelectAdaptiveParallelAux(SelectThreadArgs<T, P
     threadSelectionBuffer = selectedIndexes;
     threadSelection = selectedIndexes;
   } else {
-    threadSelectionBuffer = new uint32_t[remainingTuples];
+    threadSelectionBuffer = new int32_t[remainingTuples];
     threadSelection = threadSelectionBuffer;
   }
 
@@ -500,7 +500,7 @@ template <typename T, typename P> void SelectAdaptiveParallelAux<T, P>::mergeOut
     return;
   }
 
-  memcpy(selectedIndexes + writeIndex, threadSelectionBuffer, threadSelected * sizeof(uint32_t));
+  memcpy(selectedIndexes + writeIndex, threadSelectionBuffer, threadSelected * sizeof(int32_t));
 }
 
 template <typename T, typename P> SelectAdaptiveParallelAux<T, P>::~SelectAdaptiveParallelAux() {
@@ -523,7 +523,7 @@ template <typename T, typename P> void* selectAdaptiveParallelAux(void* arg) {
 template <typename T, typename P> class SelectAdaptiveParallel {
 public:
   SelectAdaptiveParallel(const Span<T>& column_, T value_, bool columnIsFirstArg_, P& predicate_,
-                         Span<uint32_t>&& candidateIndexes_, uint32_t dop_, bool calibrationRun)
+                         Span<int32_t>&& candidateIndexes_, int32_t dop_, bool calibrationRun)
       : column(column_), value(value_), columnIsFirstArg(columnIsFirstArg_), predicate(predicate_),
         candidateIndexes(std::move(candidateIndexes_)), dop(dop_) {
     if(!calibrationRun) {
@@ -537,15 +537,15 @@ public:
 
     candidateIndexesPtr = candidateIndexes.size() > 0 ? &candidateIndexes : nullptr;
     if(candidateIndexes.size() == 0) {
-      auto* indexesArray = new uint32_t[column.size()];
+      auto* indexesArray = new int32_t[column.size()];
       candidateIndexes =
-          Span<uint32_t>(indexesArray, column.size(), [indexesArray]() { delete[] indexesArray; });
+          Span<int32_t>(indexesArray, column.size(), [indexesArray]() { delete[] indexesArray; });
     }
     Counters::getInstance();
     MachineConstants::getInstance();
   }
 
-  Span<uint32_t> processInput() {
+  Span<int32_t> processInput() {
 #ifdef PRINT_SELECTIVITY
     std::cout << candidateIndexes.size() << " input values into predicate" << std::endl;
 #endif
@@ -566,11 +566,11 @@ public:
       startIndex += threadIndex.second;
     }
 
-    std::atomic<uint32_t> threadToMerge = 0;
-    std::atomic<uint32_t> positionToWrite = 0;
+    std::atomic<int32_t> threadToMerge = 0;
+    std::atomic<int32_t> positionToWrite = 0;
     std::vector<std::unique_ptr<SelectThreadArgs<T, P>>> threadArgs;
 
-    for(uint32_t i = 0; i < dop; ++i) {
+    for(int32_t i = 0; i < dop; ++i) {
       threadArgs.push_back(std::make_unique<SelectThreadArgs<T, P>>(
           threadIndexes[i].first, threadIndexes[i].second, column, value, columnIsFirstArg,
           predicate, candidateIndexesPtr, candidateIndexes.begin(), &threadToMerge,
@@ -591,18 +591,18 @@ private:
   T value;
   bool columnIsFirstArg;
   P& predicate;
-  Span<uint32_t> candidateIndexes;
+  Span<int32_t> candidateIndexes;
 
-  uint32_t dop;
+  int32_t dop;
   size_t n;
-  Span<uint32_t>* candidateIndexesPtr;
+  Span<int32_t>* candidateIndexesPtr;
 };
 
 /****************************** ENTRY FUNCTION ******************************/
 
 template <typename T, typename P>
-Span<uint32_t> select(Select implementation, const Span<T>& column, T value, bool columnIsFirstArg,
-                      P& predicate, Span<uint32_t>&& candidateIndexes, size_t dop,
+Span<int32_t> select(Select implementation, const Span<T>& column, T value, bool columnIsFirstArg,
+                      P& predicate, Span<int32_t>&& candidateIndexes, size_t dop,
                       bool calibrationRun) {
   assert(1 <= dop && dop <= logicalCoresCount());
   if(implementation == Select::AdaptiveParallel) {
@@ -620,11 +620,11 @@ Span<uint32_t> select(Select implementation, const Span<T>& column, T value, boo
 
   auto candidateIndexesPtr = candidateIndexes.size() > 0 ? &candidateIndexes : nullptr;
   if(candidateIndexes.size() == 0) {
-    auto* indexesArray = new uint32_t[column.size()];
+    auto* indexesArray = new int32_t[column.size()];
     candidateIndexes =
-        Span<uint32_t>(indexesArray, column.size(), [indexesArray]() { delete[] indexesArray; });
+        Span<int32_t>(indexesArray, column.size(), [indexesArray]() { delete[] indexesArray; });
   }
-  uint32_t* selectedIndexes = candidateIndexes.begin();
+  int32_t* selectedIndexes = candidateIndexes.begin();
   size_t numSelected;
 
   if(implementation == Select::Branch) {

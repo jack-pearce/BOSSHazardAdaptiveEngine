@@ -31,7 +31,7 @@
 
 class Pred;
 
-using HAExpressionSystem = boss::expressions::generic::ExtensibleExpressionSystem<Pred, uint32_t>;
+using HAExpressionSystem = boss::expressions::generic::ExtensibleExpressionSystem<Pred>;
 using AtomicExpression = HAExpressionSystem::AtomicExpression;
 using ComplexExpression = HAExpressionSystem::ComplexExpression;
 template <typename... T>
@@ -56,7 +56,7 @@ using boss::Span;
 using boss::Symbol;
 using SpanInputs =
     std::variant<std::vector<std::int32_t>, std::vector<std::int64_t>, std::vector<std::double_t>,
-                 std::vector<std::string>, std::vector<uint32_t>>;
+                 std::vector<std::string>>;
 
 using namespace boss::algorithm;
 
@@ -65,10 +65,10 @@ using namespace boss::algorithm;
  * optional span in the form of an ExpressionSpanArgument.
  */
 class Pred : public std::function<std::optional<ExpressionSpanArgument>(ExpressionArguments&,
-                                                                        Span<uint32_t>*)> {
+                                                                        Span<int32_t>*)> {
 public:
   using Function =
-      std::function<std::optional<ExpressionSpanArgument>(ExpressionArguments&, Span<uint32_t>*)>;
+      std::function<std::optional<ExpressionSpanArgument>(ExpressionArguments&, Span<int32_t>*)>;
   template <typename F>
   Pred(F&& func, boss::Expression&& expr)
       : Function(std::forward<F>(func)), cachedExpr(std::move(expr)) {}
@@ -514,7 +514,7 @@ private:
 
   template <typename T1, typename T2, typename F>
   static ExpressionSpanArgument createLambdaPipelineResult(T1&& arg1, T2&& arg2, F& f,
-                                                           Span<uint32_t>& indexes) {
+                                                           Span<int32_t>& indexes) {
     std::visit(
         [&indexes, &f](auto&& typedSpan1, auto&& typedSpan2) {
           using SpanType1 = std::decay_t<decltype(typedSpan1)>;
@@ -565,7 +565,7 @@ private:
             return [pred1 = createLambdaArgument(get<0>(e.getStaticArguments())),
                     pred2 = createLambdaArgument(arg),
                     &f](ExpressionArguments& columns,
-                        Span<uint32_t>* indexes) mutable -> std::optional<ExpressionSpanArgument> {
+                        Span<int32_t>* indexes) mutable -> std::optional<ExpressionSpanArgument> {
               auto arg1 = pred1(columns, nullptr);
               auto arg2 = pred2(columns, nullptr);
               if(!arg1 || !arg2) {
@@ -587,7 +587,7 @@ private:
             return std::visit(
                 [&f, &acc](auto&& arg) -> Pred::Function {
                   return [acc, pred2 = createLambdaArgument(arg),
-                          &f](ExpressionArguments& columns, Span<uint32_t>* indexes) mutable
+                          &f](ExpressionArguments& columns, Span<int32_t>* indexes) mutable
                          -> std::optional<ExpressionSpanArgument> {
                     assert(!indexes);
                     auto arg1 = acc(columns, nullptr);
@@ -617,19 +617,19 @@ private:
     Pred::Function pred =
         [preds = std::move(preds)](
             ExpressionArguments& columns,
-            Span<uint32_t>* /*unused*/) mutable -> std::optional<ExpressionSpanArgument> {
+            Span<int32_t>* /*unused*/) mutable -> std::optional<ExpressionSpanArgument> {
       auto candidateIndexes = preds[0](columns, nullptr);
       ExpressionSpanArgument span;
       std::visit(
           [&span, &preds, &columns](auto&& candidateIndexes) {
-            if constexpr(std::is_same_v<std::decay_t<decltype(candidateIndexes)>, Span<uint32_t>>) {
+            if constexpr(std::is_same_v<std::decay_t<decltype(candidateIndexes)>, Span<int32_t>>) {
               for(auto it = std::next(preds.begin()); it != preds.end(); ++it) {
                 if(candidateIndexes.size() == 0) {
                   break;
                 }
                 (*it)(columns, &candidateIndexes);
               }
-              span = Span<uint32_t>(std::move(candidateIndexes));
+              span = Span<int32_t>(std::move(candidateIndexes));
             } else {
               throw std::runtime_error("Multi-predicate lambda column input is not indexes");
             }
@@ -647,19 +647,19 @@ private:
   template <typename ArgType> static Pred::Function createLambdaArgument(ArgType const& arg) {
     if constexpr(NumericType<ArgType>) {
       return [arg](ExpressionArguments& /*unused*/,
-                   Span<uint32_t>* /*unused*/) -> std::optional<ExpressionSpanArgument> {
+                   Span<int32_t>* /*unused*/) -> std::optional<ExpressionSpanArgument> {
         return Span<ArgType>(std::move(std::vector({arg})));
       };
     } else {
       throw std::runtime_error("unsupported argument type in predicate");
       return [](ExpressionArguments& /*unused*/,
-                Span<uint32_t>* /*unused*/) -> std::optional<ExpressionSpanArgument> { return {}; };
+                Span<int32_t>* /*unused*/) -> std::optional<ExpressionSpanArgument> { return {}; };
     }
   }
 
   static Pred::Function createLambdaArgument(Pred const& arg) {
     return [f = static_cast<Pred::Function const&>(arg)](ExpressionArguments& columns,
-                                                         Span<uint32_t>* indexes) {
+                                                         Span<int32_t>* indexes) {
       return f(columns, indexes);
     };
   }
@@ -673,7 +673,7 @@ private:
    */
   static Pred::Function createLambdaArgument(Symbol const& arg) {
     return [arg](ExpressionArguments& columns,
-                 Span<uint32_t>* /*unused*/) mutable -> std::optional<ExpressionSpanArgument> {
+                 Span<int32_t>* /*unused*/) mutable -> std::optional<ExpressionSpanArgument> {
       for(auto& columnExpr : columns) {
         auto& column = get<ComplexExpression>(columnExpr);
         if(column.getHead().getName() == arg.getName()) {
@@ -707,7 +707,7 @@ private:
    */
   static Pred::Function createLambdaArgumentMove(Symbol const& arg) {
     return [arg](ExpressionArguments& columns,
-                 Span<uint32_t>* /*unused*/) mutable -> std::optional<ExpressionSpanArgument> {
+                 Span<int32_t>* /*unused*/) mutable -> std::optional<ExpressionSpanArgument> {
       for(auto& columnExpr : columns) {
         auto& column = get<ComplexExpression>(columnExpr);
         if(column.getHead().getName() == arg.getName()) {
@@ -949,9 +949,23 @@ public:
       auto predFunc = get<Pred>(std::move(*++it));
       auto columns = std::move(relation).getDynamicArguments();
       columns = transformDynamicsInColumnsToSpans(std::move(columns));
+#ifdef DEFER_TO_OTHER_ENGINE
       if(auto predicate = predFunc(columns, nullptr)) {
-        assert(std::holds_alternative<Span<uint32_t>>(*predicate));
-        auto& indexes = std::get<Span<uint32_t>>(*predicate);
+        assert(std::holds_alternative<Span<int32_t>>(*predicate));
+        auto& indexes = std::get<Span<int32_t>>(*predicate);
+        ExpressionSpanArguments indexesArg;
+        indexesArg.emplace_back(std::move(indexes));
+        auto tableExpression = ComplexExpression("Table"_, std::move(columns));
+        ExpressionArguments tableArg;
+        tableArg.emplace_back(std::move(tableExpression));
+        return ComplexExpression("Gather"_, {}, std::move(tableArg), std::move(indexesArg));
+      } else {
+        throw std::runtime_error("Select did not return a Span of indexes");
+      }
+#else
+      if(auto predicate = predFunc(columns, nullptr)) {
+        assert(std::holds_alternative<Span<int32_t>>(*predicate));
+        auto& indexes = std::get<Span<int32_t>>(*predicate);
         const auto indexesPerThread = indexes.size() / DOP;
         if(DOP == 1 || indexesPerThread < adaptive::config::minTuplesPerThread) {
           for(auto& columnRef : columns) {
@@ -998,15 +1012,15 @@ public:
                                std::is_same_v<T, double_t> || std::is_same_v<T, std::string>) {
                     auto unfilteredColumn = std::move(typedSpan);
                     auto* filteredColumn = new T[indexes.size()];
-                    uint32_t startIndex = 0;
-                    for(uint32_t i = 0; i < DOP; ++i) {
-                      uint32_t indexesToProcess =
+                    int32_t startIndex = 0;
+                    for(int32_t i = 0; i < DOP; ++i) {
+                      int32_t indexesToProcess =
                           i + 1 < DOP ? indexesPerThread : indexes.size() - startIndex;
                       ThreadPool::getInstance().enqueue(
                           [startIndex, endIndex = startIndex + indexesToProcess,
                            indexesPtr = &*indexes.begin(), filteredPtr = filteredColumn,
                            unfilteredPtr = &*unfilteredColumn.begin()]() {
-                            for(uint32_t i = startIndex; i < endIndex; ++i) {
+                            for(int32_t i = startIndex; i < endIndex; ++i) {
                               filteredPtr[i] = unfilteredPtr[indexesPtr[i]];
                             }
                           });
@@ -1029,6 +1043,7 @@ public:
         }
       }
       return ComplexExpression("Table"_, std::move(columns));
+#endif
     };
 
 #ifndef DEFER_TO_OTHER_ENGINE

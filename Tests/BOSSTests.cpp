@@ -2433,6 +2433,28 @@ TEST_CASE("Partially evaluated", "[hazard-adaptive-engine]") {
   }
 }
 
+TEST_CASE("Gather", "[hazard-adaptive-engine]") {
+  auto engine = boss::engines::BootstrapEngine();
+  REQUIRE(!librariesToTest.empty());
+  auto eval = [&engine](boss::Expression&& expression) mutable {
+    return engine.evaluate("EvaluateInEngines"_("List"_(GENERATE(from_range(librariesToTest))),
+                                                std::move(expression)));
+  };
+
+  SECTION("Simple gather 1") {
+    auto intTable = "Table"_("Value"_("List"_(5, 3, 1, 4, 1))); // NOLINT
+    auto result = eval("Select"_(std::move(intTable), "Where"_("Equal"_("Value"_, 1))));
+    CHECK(result == "Gather"_("Table"_("Value"_("List"_(5, 3, 1, 4, 1))),2,4));
+  }
+
+  SECTION("Simple gather 2") {
+    auto intTable = "Table"_("Value"_("List"_(5, 3, 1, 4, 1))); // NOLINT
+    auto result = eval("Select"_("Project"_(std::move(intTable),
+                                            "As"_("key"_, "Value"_)), "Where"_("Equal"_("key"_, 1))));
+    CHECK(result == "Gather"_("Table"_("key"_("List"_(5, 3, 1, 4, 1))),2,4));
+  }
+}
+
 #if 0
  TEST_CASE("Select multiple predicates with OR", "[hazard-adaptive-engine]") {
    auto engine = boss::engines::BootstrapEngine();
@@ -2591,4 +2613,4 @@ int main(int argc, char* argv[]) {
 }
 // NOLINTEND(readability-function-cognitive-complexity)
 // NOLINTEND(bugprone-exception-escape)
-// NOLINTEND(readability-magic-numbers)
+// NOLINTEND(readability-magic-numb
