@@ -5,6 +5,9 @@
 #include <catch2/catch.hpp>
 #include <numeric>
 #include <variant>
+
+#define DEFERRED_TO_OTHER_ENGINE
+
 using boss::Expression;
 using std::string;
 using std::literals::string_literals::operator""s;
@@ -1814,7 +1817,8 @@ TEST_CASE("Plus, Divide and Times atoms", "[hazard-adaptive-engine]") { // NOLIN
 }
 
 // NOLINTNEXTLINE
-TEMPLATE_TEST_CASE("Plus spans", "[hazard-adaptive-engine]", std::int32_t, std::int64_t, std::double_t) {
+TEMPLATE_TEST_CASE("Plus spans", "[hazard-adaptive-engine]", std::int32_t, std::int64_t,
+                   std::double_t) {
   auto engine = boss::engines::BootstrapEngine();
   REQUIRE(!librariesToTest.empty());
   auto eval = [&engine](auto&& expression) mutable {
@@ -1845,39 +1849,67 @@ TEST_CASE("Select", "[hazard-adaptive-engine]") {
   SECTION("Selection single column 1") {
     auto intTable = "Table"_("Value"_("List"_(5, 3, 1, 4, 1))); // NOLINT
     auto result = eval("Select"_(std::move(intTable), "Where"_("Equal"_("Value"_, 1))));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(result == "Gather"_("Table"_("Value"_("List"_(5, 3, 1, 4, 1))), 2, 4));
+#else
     CHECK(result == "Table"_("Value"_("List"_(1, 1))));
+#endif
   }
 
   SECTION("Selection single column 2") {
     auto intTable = "Table"_("Value"_("List"_(5, 3, 1, 4, 1))); // NOLINT
     auto result = eval("Select"_(std::move(intTable), "Where"_("Greater"_("Value"_, 3))));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(result == "Gather"_("Table"_("Value"_("List"_(5, 3, 1, 4, 1))), 0, 3));
+#else
     CHECK(result == "Table"_("Value"_("List"_(5, 4))));
+#endif
   }
 
   SECTION("Selection single column 3") {
     auto intTable = "Table"_("Value"_("List"_(5, 3, 1, 4, 1))); // NOLINT
     auto result = eval("Select"_(std::move(intTable), "Where"_("Greater"_(3, "Value"_))));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(result == "Gather"_("Table"_("Value"_("List"_(5, 3, 1, 4, 1))), 2, 4));
+#else
     CHECK(result == "Table"_("Value"_("List"_(1, 1))));
+#endif
   }
 
   SECTION("Empty selection 1") {
     auto intTable = "Table"_("Value"_("List"_(5, 3, 1, 4, 1))); // NOLINT
     auto result = eval("Select"_(std::move(intTable), "Where"_("Equal"_("Value"_, 6))));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(result == "Gather"_("Table"_("Value"_("List"_(5, 3, 1, 4, 1)))));
+#else
     CHECK(result == "Table"_("Value"_("List"_())));
+#endif
   }
 
   SECTION("Selection multiple columns 1") {
     auto intTable =
         "Table"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))); // NOLINT
     auto result = eval("Select"_(std::move(intTable), "Where"_("Greater"_("Value1"_, 3))));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(result ==
+          "Gather"_("Table"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))),
+                    0, 3));
+#else
     CHECK(result == "Table"_("Value1"_("List"_(5, 4)), "Value2"_("List"_(1, 4))));
+#endif
   }
 
   SECTION("Selection multiple columns 2") {
     auto intTable =
         "Table"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))); // NOLINT
     auto result = eval("Select"_(std::move(intTable), "Where"_("Greater"_("Value2"_, 3))));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(result ==
+          "Gather"_("Table"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))),
+                    3, 4));
+#else
     CHECK(result == "Table"_("Value1"_("List"_(4, 1)), "Value2"_("List"_(4, 5))));
+#endif
   }
 
   SECTION("Selection nested 1") {
@@ -1885,7 +1917,14 @@ TEST_CASE("Select", "[hazard-adaptive-engine]") {
         "Table"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))); // NOLINT
     auto result = eval("Select"_("Select"_(std::move(intTable), "Where"_("Greater"_("Value1"_, 1))),
                                  "Where"_("Greater"_("Value2"_, 3))));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(result == "Select"_("Gather"_("Table"_("Value1"_("List"_(5, 3, 1, 4, 1)),
+                                                 "Value2"_("List"_(1, 2, 3, 4, 5))),
+                                        0, 1, 3),
+                              "Where"_("Greater"_("Value2"_, 3))));
+#else
     CHECK(result == "Table"_("Value1"_("List"_(4)), "Value2"_("List"_(4))));
+#endif
   }
 
   SECTION("Selection nested 2") {
@@ -1893,7 +1932,14 @@ TEST_CASE("Select", "[hazard-adaptive-engine]") {
         "Table"_("Value1"_("List"_(2, 5, 4, 3, 1)), "Value2"_("List"_(1, 3, 3, 4, 3))); // NOLINT
     auto result = eval("Select"_("Select"_(std::move(intTable), "Where"_("Equal"_("Value2"_, 3))),
                                  "Where"_("Greater"_("Value1"_, 3))));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(result == "Select"_("Gather"_("Table"_("Value1"_("List"_(2, 5, 4, 3, 1)),
+                                                 "Value2"_("List"_(1, 3, 3, 4, 3))),
+                                        1, 2, 4),
+                              "Where"_("Greater"_("Value1"_, 3))));
+#else
     CHECK(result == "Table"_("Value1"_("List"_(5, 4)), "Value2"_("List"_(3, 3))));
+#endif
   }
 
   SECTION("Empty selection 2") {
@@ -1901,7 +1947,13 @@ TEST_CASE("Select", "[hazard-adaptive-engine]") {
         "Table"_("Value1"_("List"_(2, 5, 4, 3, 1)), "Value2"_("List"_(1, 3, 3, 4, 3))); // NOLINT
     auto result = eval("Select"_("Select"_(std::move(intTable), "Where"_("Equal"_("Value2"_, 6))),
                                  "Where"_("Greater"_("Value1"_, 3))));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(result == "Select"_("Gather"_("Table"_("Value1"_("List"_(2, 5, 4, 3, 1)),
+                                                 "Value2"_("List"_(1, 3, 3, 4, 3)))),
+                              "Where"_("Greater"_("Value1"_, 3))));
+#else
     CHECK(result == "Table"_("Value1"_("List"_()), "Value2"_("List"_())));
+#endif
   }
 }
 
@@ -1917,7 +1969,11 @@ TEST_CASE("Select Spans", "[hazard-adaptive-engine]") {
 
   SECTION("Selection") {
     auto result = eval("Select"_(std::move(intTable), "Where"_("Greater"_("Value"_, 3L))));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(result == "Gather"_("Table"_("Value"_("List"_(5L, 3L, 1L, 4L, 1L))), 0, 3));
+#else
     CHECK(result == "Table"_("Value"_("List"_(5L, 4L))));
+#endif
   }
 }
 
@@ -2021,7 +2077,13 @@ TEST_CASE("Select multiple predicates", "[hazard-adaptive-engine]") {
         "Table"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))); // NOLINT
     auto result = eval("Select"_(
         std::move(intTable), "Where"_("And"_("Greater"_("Value1"_, 3), "Greater"_(5, "Value1"_)))));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(result ==
+          "Gather"_("Table"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))),
+                    3));
+#else
     CHECK(result == "Table"_("Value1"_("List"_(4)), "Value2"_("List"_(4))));
+#endif
   }
 
   SECTION("Selection multiple columns 2") {
@@ -2030,7 +2092,13 @@ TEST_CASE("Select multiple predicates", "[hazard-adaptive-engine]") {
     auto result = eval("Select"_(std::move(intTable),
                                  "Where"_("And"_("Greater"_("Value2"_, 1), "Greater"_(5, "Value2"_),
                                                  "Greater"_("Value1"_, 2)))));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(result ==
+          "Gather"_("Table"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))),
+                    1, 3));
+#else
     CHECK(result == "Table"_("Value1"_("List"_(3, 4)), "Value2"_("List"_(2, 4))));
+#endif
   }
 
   SECTION("Empty selection 3") {
@@ -2039,7 +2107,12 @@ TEST_CASE("Select multiple predicates", "[hazard-adaptive-engine]") {
     auto result = eval("Select"_(std::move(intTable),
                                  "Where"_("And"_("Greater"_("Value2"_, 6), "Greater"_(5, "Value2"_),
                                                  "Greater"_("Value1"_, 2)))));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(result == "Gather"_("Table"_("Value1"_("List"_(5, 3, 1, 4, 1)),
+                                       "Value2"_("List"_(1, 2, 3, 4, 5)))));
+#else
     CHECK(result == "Table"_("Value1"_("List"_()), "Value2"_("List"_())));
+#endif
   }
 
   SECTION("Empty selection 4") {
@@ -2048,7 +2121,12 @@ TEST_CASE("Select multiple predicates", "[hazard-adaptive-engine]") {
     auto result = eval("Select"_(std::move(intTable),
                                  "Where"_("And"_("Greater"_("Value2"_, 1), "Greater"_(0, "Value2"_),
                                                  "Greater"_("Value1"_, 2)))));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(result == "Gather"_("Table"_("Value1"_("List"_(5, 3, 1, 4, 1)),
+                                       "Value2"_("List"_(1, 2, 3, 4, 5)))));
+#else
     CHECK(result == "Table"_("Value1"_("List"_()), "Value2"_("List"_())));
+#endif
   }
 }
 
@@ -2146,56 +2224,191 @@ TEST_CASE("Dates and Group", "[hazard-adaptive-engine]") {
                              "As"_("L_QUANTITY"_, "L_QUANTITY"_, "L_SHIPDATE"_, "L_SHIPDATE"_)),
                   "Where"_("Greater"_("L_SHIPDATE"_, "DateObject"_("1995-01-01")))),
         "As"_("L_QUANTITY"_, "L_QUANTITY"_)));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(output == "Project"_("Gather"_("Table"_("L_QUANTITY"_("List"_(17, 21, 8, 5)),
+                                                  "L_SHIPDATE"_("List"_(8107, 8867, 9554, 9130))),
+                                         2),
+                               "As"_("L_QUANTITY"_, "L_QUANTITY"_)));
+#else
     CHECK(output == "Table"_("L_QUANTITY"_("List"_(8)))); // NOLINT
+#endif
   }
 
   SECTION("Group 1") {
     auto output = eval("Group"_(lineitem.clone(CloneReason::FOR_TESTING), "Sum"_("L_DISCOUNT"_)));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(output ==
+          "Group"_(
+              "Table"_("L_ORDERKEY"_("List"_(1, 1, 2, 3)),                                 // NOLINT
+                       "L_PARTKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
+                       "L_SUPPKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
+                       "L_RETURNFLAG"_("List"_("N", "N", "A", "A")),                       // NOLINT
+                       "L_LINESTATUS"_("List"_("O", "O", "F", "F")),                       // NOLINT
+                       "L_RETURNFLAG_INT"_("List"_('N'_i64, 'N'_i64, 'A'_i64, 'A'_i64)),   // NOLINT
+                       "L_LINESTATUS_INT"_("List"_('O'_i64, 'O'_i64, 'F'_i64, 'F'_i64)),   // NOLINT
+                       "L_QUANTITY"_("List"_(17, 21, 8, 5)),                               // NOLINT
+                       "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
+                       "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
+                       "L_TAX"_("List"_(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
+                       "L_SHIPDATE"_("List"_(8107, 8867, 9554, 9130))),
+              "Sum"_("L_DISCOUNT"_)));
+#else
     CHECK(output == "Table"_("L_DISCOUNT"_("List"_(0.27)))); // NOLINT
+#endif
   }
 
   SECTION("Group 2") {
     auto output = eval("Group"_(lineitem.clone(CloneReason::FOR_TESTING), "Sum"_("L_DISCOUNT"_),
                                 "Count"_("L_DISCOUNT"_)));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(output ==
+          "Group"_(
+              "Table"_("L_ORDERKEY"_("List"_(1, 1, 2, 3)),                                 // NOLINT
+                       "L_PARTKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
+                       "L_SUPPKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
+                       "L_RETURNFLAG"_("List"_("N", "N", "A", "A")),                       // NOLINT
+                       "L_LINESTATUS"_("List"_("O", "O", "F", "F")),                       // NOLINT
+                       "L_RETURNFLAG_INT"_("List"_('N'_i64, 'N'_i64, 'A'_i64, 'A'_i64)),   // NOLINT
+                       "L_LINESTATUS_INT"_("List"_('O'_i64, 'O'_i64, 'F'_i64, 'F'_i64)),   // NOLINT
+                       "L_QUANTITY"_("List"_(17, 21, 8, 5)),                               // NOLINT
+                       "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
+                       "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
+                       "L_TAX"_("List"_(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
+                       "L_SHIPDATE"_("List"_(8107, 8867, 9554, 9130))),
+              "Sum"_("L_DISCOUNT"_), "Count"_("L_DISCOUNT"_)));
+#else
     CHECK(output == "Table"_("L_DISCOUNT"_("List"_(0.27)),
                              "L_DISCOUNT"_("List"_(4)))); // NOLINT
+#endif
   }
 
   SECTION("Group 3") {
     auto output = eval("Group"_(lineitem.clone(CloneReason::FOR_TESTING),
                                 "As"_("total_discount"_, "Sum"_("L_DISCOUNT"_))));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(output ==
+          "Group"_(
+              "Table"_("L_ORDERKEY"_("List"_(1, 1, 2, 3)),                                 // NOLINT
+                       "L_PARTKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
+                       "L_SUPPKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
+                       "L_RETURNFLAG"_("List"_("N", "N", "A", "A")),                       // NOLINT
+                       "L_LINESTATUS"_("List"_("O", "O", "F", "F")),                       // NOLINT
+                       "L_RETURNFLAG_INT"_("List"_('N'_i64, 'N'_i64, 'A'_i64, 'A'_i64)),   // NOLINT
+                       "L_LINESTATUS_INT"_("List"_('O'_i64, 'O'_i64, 'F'_i64, 'F'_i64)),   // NOLINT
+                       "L_QUANTITY"_("List"_(17, 21, 8, 5)),                               // NOLINT
+                       "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
+                       "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
+                       "L_TAX"_("List"_(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
+                       "L_SHIPDATE"_("List"_(8107, 8867, 9554, 9130))),
+              "As"_("total_discount"_, "Sum"_("L_DISCOUNT"_))));
+#else
     CHECK(output == "Table"_("total_discount"_("List"_(0.27)))); // NOLINT
+#endif
   }
 
   SECTION("Group 4") {
     auto output = eval("Group"_(lineitem.clone(CloneReason::FOR_TESTING), "By"_("L_ORDERKEY"_),
                                 "As"_("sumParts"_, "Sum"_("L_PARTKEY"_))));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(output ==
+          "Group"_(
+              "Table"_("L_ORDERKEY"_("List"_(1, 1, 2, 3)),                                 // NOLINT
+                       "L_PARTKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
+                       "L_SUPPKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
+                       "L_RETURNFLAG"_("List"_("N", "N", "A", "A")),                       // NOLINT
+                       "L_LINESTATUS"_("List"_("O", "O", "F", "F")),                       // NOLINT
+                       "L_RETURNFLAG_INT"_("List"_('N'_i64, 'N'_i64, 'A'_i64, 'A'_i64)),   // NOLINT
+                       "L_LINESTATUS_INT"_("List"_('O'_i64, 'O'_i64, 'F'_i64, 'F'_i64)),   // NOLINT
+                       "L_QUANTITY"_("List"_(17, 21, 8, 5)),                               // NOLINT
+                       "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
+                       "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
+                       "L_TAX"_("List"_(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
+                       "L_SHIPDATE"_("List"_(8107, 8867, 9554, 9130))),
+              "By"_("L_ORDERKEY"_), "As"_("sumParts"_, "Sum"_("L_PARTKEY"_))));
+#else
     CHECK(output ==
           "Table"_("L_ORDERKEY"_("List"_(1, 2, 3)), "sumParts"_("List"_(3, 3, 4)))); // NOLINT
+#endif
   }
 
   SECTION("Group 5") {
     auto output = eval("Group"_(lineitem.clone(CloneReason::FOR_TESTING), "By"_("L_ORDERKEY"_),
                                 "As"_("count"_, "Count"_("L_ORDERKEY"_))));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(output ==
+          "Group"_(
+              "Table"_("L_ORDERKEY"_("List"_(1, 1, 2, 3)),                                 // NOLINT
+                       "L_PARTKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
+                       "L_SUPPKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
+                       "L_RETURNFLAG"_("List"_("N", "N", "A", "A")),                       // NOLINT
+                       "L_LINESTATUS"_("List"_("O", "O", "F", "F")),                       // NOLINT
+                       "L_RETURNFLAG_INT"_("List"_('N'_i64, 'N'_i64, 'A'_i64, 'A'_i64)),   // NOLINT
+                       "L_LINESTATUS_INT"_("List"_('O'_i64, 'O'_i64, 'F'_i64, 'F'_i64)),   // NOLINT
+                       "L_QUANTITY"_("List"_(17, 21, 8, 5)),                               // NOLINT
+                       "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
+                       "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
+                       "L_TAX"_("List"_(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
+                       "L_SHIPDATE"_("List"_(8107, 8867, 9554, 9130))),
+              "By"_("L_ORDERKEY"_), "As"_("count"_, "Count"_("L_ORDERKEY"_))));
+#else
     CHECK(output ==
           "Table"_("L_ORDERKEY"_("List"_(1, 2, 3)), "count"_("List"_(2, 1, 1)))); // NOLINT
+#endif
   }
 
   SECTION("Group 6") {
     auto output = eval(
         "Group"_(lineitem.clone(CloneReason::FOR_TESTING), "By"_("L_ORDERKEY"_),
                  "As"_("sum_quantity"_, "Sum"_("L_QUANTITY"_), "count"_, "Count"_("L_ORDERKEY"_))));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(output ==
+          "Group"_(
+              "Table"_("L_ORDERKEY"_("List"_(1, 1, 2, 3)),                                 // NOLINT
+                       "L_PARTKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
+                       "L_SUPPKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
+                       "L_RETURNFLAG"_("List"_("N", "N", "A", "A")),                       // NOLINT
+                       "L_LINESTATUS"_("List"_("O", "O", "F", "F")),                       // NOLINT
+                       "L_RETURNFLAG_INT"_("List"_('N'_i64, 'N'_i64, 'A'_i64, 'A'_i64)),   // NOLINT
+                       "L_LINESTATUS_INT"_("List"_('O'_i64, 'O'_i64, 'F'_i64, 'F'_i64)),   // NOLINT
+                       "L_QUANTITY"_("List"_(17, 21, 8, 5)),                               // NOLINT
+                       "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
+                       "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
+                       "L_TAX"_("List"_(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
+                       "L_SHIPDATE"_("List"_(8107, 8867, 9554, 9130))),
+              "By"_("L_ORDERKEY"_),
+              "As"_("sum_quantity"_, "Sum"_("L_QUANTITY"_), "count"_, "Count"_("L_ORDERKEY"_))));
+#else
     CHECK(output == "Table"_("L_ORDERKEY"_("List"_(1, 2, 3)), "sum_quantity"_("List"_(38, 8, 5)),
                              "count"_("List"_(2, 1, 1)))); // NOLINT
+#endif
   }
 
   SECTION("Group 7") {
     auto output = eval("Group"_(
         lineitem.clone(CloneReason::FOR_TESTING), "By"_("L_ORDERKEY"_),
         "As"_("sum_price"_, "Sum"_("L_EXTENDEDPRICE"_), "count"_, "Count"_("L_ORDERKEY"_))));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(output ==
+          "Group"_(
+              "Table"_("L_ORDERKEY"_("List"_(1, 1, 2, 3)),                                 // NOLINT
+                       "L_PARTKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
+                       "L_SUPPKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
+                       "L_RETURNFLAG"_("List"_("N", "N", "A", "A")),                       // NOLINT
+                       "L_LINESTATUS"_("List"_("O", "O", "F", "F")),                       // NOLINT
+                       "L_RETURNFLAG_INT"_("List"_('N'_i64, 'N'_i64, 'A'_i64, 'A'_i64)),   // NOLINT
+                       "L_LINESTATUS_INT"_("List"_('O'_i64, 'O'_i64, 'F'_i64, 'F'_i64)),   // NOLINT
+                       "L_QUANTITY"_("List"_(17, 21, 8, 5)),                               // NOLINT
+                       "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
+                       "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
+                       "L_TAX"_("List"_(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
+                       "L_SHIPDATE"_("List"_(8107, 8867, 9554, 9130))),
+              "By"_("L_ORDERKEY"_),
+              "As"_("sum_price"_, "Sum"_("L_EXTENDEDPRICE"_), "count"_, "Count"_("L_ORDERKEY"_))));
+#else
     CHECK(output == "Table"_("L_ORDERKEY"_("List"_(1, 2, 3)),
                              "sum_price"_("List"_(17954.55 + 34850.16, 7712.48, 25284.00)),
                              "count"_("List"_(2, 1, 1)))); // NOLINT
+#endif
   }
 }
 
@@ -2234,7 +2447,19 @@ TEST_CASE("TPC-H Q6", "[hazard-adaptive-engine]") {
                             "Greater"_("DateObject"_("1995-01-01"), "L_SHIPDATE"_),
                             "Greater"_("L_SHIPDATE"_, "DateObject"_("1993-12-31"))))),
         "As"_("revenue"_, "Times"_("L_EXTENDEDPRICE"_, "L_DISCOUNT"_))));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(output ==
+          "Project"_("Gather"_("Table"_("L_QUANTITY"_("List"_(17, 21, 8, 5)),           // NOLINT
+                                        "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)), // NOLINT
+                                        "L_SHIPDATE"_("List"_(8107, 8867, 9554, 9130)), // NOLINT
+                                        "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48,
+                                                                   25284.00))) // NOLINT
+                               ,
+                               1, 3),
+                     "As"_("revenue"_, "Times"_("L_EXTENDEDPRICE"_, "L_DISCOUNT"_))));
+#else
     CHECK(output == "Table"_("revenue"_("List"_(34850.16 * 0.05, 25284.00 * 0.06)))); // NOLINT
+#endif
   }
 
   SECTION("Q6") {
@@ -2251,7 +2476,21 @@ TEST_CASE("TPC-H Q6", "[hazard-adaptive-engine]") {
                                       "Greater"_("L_SHIPDATE"_, "DateObject"_("1993-12-31"))))),
             "As"_("revenue"_, "Times"_("L_EXTENDEDPRICE"_, "L_DISCOUNT"_))),
         "Sum"_("revenue"_)));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(output ==
+          "Group"_("Project"_(
+                       "Gather"_("Table"_("L_QUANTITY"_("List"_(17, 21, 8, 5)),           // NOLINT
+                                          "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)), // NOLINT
+                                          "L_SHIPDATE"_("List"_(8107, 8867, 9554, 9130)), // NOLINT
+                                          "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48,
+                                                                     25284.00))) // NOLINT
+                                 ,
+                                 1, 3),
+                       "As"_("revenue"_, "Times"_("L_EXTENDEDPRICE"_, "L_DISCOUNT"_))),
+                   "Sum"_("revenue"_)));
+#else
     CHECK(output == "Table"_("revenue"_("List"_(34850.16 * 0.05 + 25284.00 * 0.06)))); // NOLINT
+#endif
   }
 }
 
@@ -2314,6 +2553,25 @@ TEST_CASE("TPC-H Q1", "[hazard-adaptive-engine]") {
         "As"_("disc_price"_, "Times"_("L_EXTENDEDPRICE"_, "calc1"_), "charge"_,
               "Times"_("L_EXTENDEDPRICE"_, "calc1"_, "calc2"_), "L_QUANTITY"_, "L_QUANTITY"_,
               "L_EXTENDEDPRICE"_, "L_EXTENDEDPRICE"_, "L_DISCOUNT"_, "L_DISCOUNT"_)));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(
+        output ==
+        "Project"_(
+            "Project"_("Gather"_("Table"_("L_QUANTITY"_("List"_(17, 21, 8, 5)),           // NOLINT
+                                          "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)), // NOLINT
+                                          "L_SHIPDATE"_("List"_(8107, 8867, 9554, 9130)), // NOLINT
+                                          "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48,
+                                                                     25284.00)),     // NOLINT
+                                          "L_TAX"_("List"_(0.02, 0.06, 0.02, 0.06))) // NOLINT
+                                 ,
+                                 0, 1, 2, 3),
+                       "As"_("L_QUANTITY"_, "L_QUANTITY"_, "L_EXTENDEDPRICE"_, "L_EXTENDEDPRICE"_,
+                             "calc1"_, "Minus"_(1.0, "L_DISCOUNT"_), "calc2"_,
+                             "Plus"_("L_TAX"_, 1.0), "L_DISCOUNT"_, "L_DISCOUNT"_)),
+            "As"_("disc_price"_, "Times"_("L_EXTENDEDPRICE"_, "calc1"_), "charge"_,
+                  "Times"_("L_EXTENDEDPRICE"_, "calc1"_, "calc2"_), "L_QUANTITY"_, "L_QUANTITY"_,
+                  "L_EXTENDEDPRICE"_, "L_EXTENDEDPRICE"_, "L_DISCOUNT"_, "L_DISCOUNT"_)));
+#else
     CHECK(
         output ==
         "Table"_("disc_price"_("List"_(17954.55 * (1.0 - 0.10), 34850.16 * (1.0 - 0.05),  // NOLINT
@@ -2325,6 +2583,7 @@ TEST_CASE("TPC-H Q1", "[hazard-adaptive-engine]") {
                  "L_QUANTITY"_("List"_(17, 21, 8, 5)),                                    // NOLINT
                  "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48, 25284.00)),      // NOLINT
                  "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06))));                        // NOLINT
+#endif
   }
 }
 
@@ -2383,35 +2642,36 @@ TEST_CASE("Not evaluated", "[hazard-adaptive-engine]") {
   SECTION("Select - no table") {
     auto intTable =
         "Table"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))); // NOLINT
-    auto result = eval("Select"_(
-        "Dummy"_, "Where"_("And"_("Greater"_("Value1"_, 3), "Greater"_(5, "Value1"_)))));
-    CHECK(result == "Select"_("Dummy"_,
-                              "Where"_("And"_("Greater"_("Value1"_, 3), "Greater"_(5, "Value1"_)))));
+    auto result = eval(
+        "Select"_("Dummy"_, "Where"_("And"_("Greater"_("Value1"_, 3), "Greater"_(5, "Value1"_)))));
+    CHECK(result == "Select"_("Dummy"_, "Where"_("And"_("Greater"_("Value1"_, 3),
+                                                        "Greater"_(5, "Value1"_)))));
   }
 
   SECTION("Select - incorrectly named table") {
-    auto result = eval("Select"_(
-        "NotTable"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))),
-        "Where"_("And"_("Greater"_("Value1"_, 3), "Greater"_(5, "Value1"_)))));
-    CHECK(result == "Select"_(
-                        "NotTable"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))),
-                        "Where"_("And"_("Greater"_("Value1"_, 3), "Greater"_(5, "Value1"_)))));
+    auto result = eval(
+        "Select"_("NotTable"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))),
+                  "Where"_("And"_("Greater"_("Value1"_, 3), "Greater"_(5, "Value1"_)))));
+    CHECK(
+        result ==
+        "Select"_("NotTable"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))),
+                  "Where"_("And"_("Greater"_("Value1"_, 3), "Greater"_(5, "Value1"_)))));
   }
 
   SECTION("Select - no predicate") {
     auto intTable =
         "Table"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))); // NOLINT
-    auto result = eval("Select"_(
-        std::move(intTable), "Where"_("Dummy"_)));
-    CHECK(result == "Select"_("Table"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))),
-                              "Where"_("Dummy"_)));
+    auto result = eval("Select"_(std::move(intTable), "Where"_("Dummy"_)));
+    CHECK(result ==
+          "Select"_("Table"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))),
+                    "Where"_("Dummy"_)));
   }
 
   SECTION("Projection") {
-    auto result = eval("Project"_("Dummy"_,
-                                     "As"_("FirstName"_, "FirstName"_, "LastName"_, "LastName"_)));
-    CHECK(result == "Project"_("Dummy"_,
-                               "As"_("FirstName"_, "FirstName"_, "LastName"_, "LastName"_)));
+    auto result =
+        eval("Project"_("Dummy"_, "As"_("FirstName"_, "FirstName"_, "LastName"_, "LastName"_)));
+    CHECK(result ==
+          "Project"_("Dummy"_, "As"_("FirstName"_, "FirstName"_, "LastName"_, "LastName"_)));
   }
 }
 
@@ -2426,10 +2686,10 @@ TEST_CASE("Partially evaluated", "[hazard-adaptive-engine]") {
   SECTION("Evaluate project but not select") {
     auto intTable =
         "Table"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))); // NOLINT
-    auto result = eval("Select"_(
-        "Dummy"_, "Where"_("And"_("Greater"_("Value1"_, 3), "Greater"_(5, "Value1"_)))));
-    CHECK(result == "Select"_("Dummy"_,
-                              "Where"_("And"_("Greater"_("Value1"_, 3), "Greater"_(5, "Value1"_)))));
+    auto result = eval(
+        "Select"_("Dummy"_, "Where"_("And"_("Greater"_("Value1"_, 3), "Greater"_(5, "Value1"_)))));
+    CHECK(result == "Select"_("Dummy"_, "Where"_("And"_("Greater"_("Value1"_, 3),
+                                                        "Greater"_(5, "Value1"_)))));
   }
 }
 
@@ -2444,14 +2704,181 @@ TEST_CASE("Gather", "[hazard-adaptive-engine]") {
   SECTION("Simple gather 1") {
     auto intTable = "Table"_("Value"_("List"_(5, 3, 1, 4, 1))); // NOLINT
     auto result = eval("Select"_(std::move(intTable), "Where"_("Equal"_("Value"_, 1))));
-    CHECK(result == "Gather"_("Table"_("Value"_("List"_(5, 3, 1, 4, 1))),2,4));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(result == "Gather"_("Table"_("Value"_("List"_(5, 3, 1, 4, 1))), 2, 4));
+#else
+    CHECK(result == "Table"_("Value"_("List"_(1, 1))));
+#endif
   }
 
   SECTION("Simple gather 2") {
     auto intTable = "Table"_("Value"_("List"_(5, 3, 1, 4, 1))); // NOLINT
-    auto result = eval("Select"_("Project"_(std::move(intTable),
-                                            "As"_("key"_, "Value"_)), "Where"_("Equal"_("key"_, 1))));
-    CHECK(result == "Gather"_("Table"_("key"_("List"_(5, 3, 1, 4, 1))),2,4));
+    auto result = eval("Select"_("Project"_(std::move(intTable), "As"_("key"_, "Value"_)),
+                                 "Where"_("Equal"_("key"_, 1))));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(result == "Gather"_("Table"_("key"_("List"_(5, 3, 1, 4, 1))), 2, 4));
+#else
+    CHECK(result == "Table"_("key"_("List"_(1, 1))));
+#endif
+  }
+}
+
+using intType = int32_t;
+
+auto createTwoSpansIntStartingFrom = [](intType n) {
+  using SpanArguments = boss::expressions::ExpressionSpanArguments;
+  std::vector<intType> v1 = {0 + n, 1 + n};
+  std::vector<intType> v2 = {2 + n, 3 + n};
+  auto s1 = boss::Span<intType>(std::move(v1));
+  auto s2 = boss::Span<intType>(std::move(v2));
+  SpanArguments args;
+  args.emplace_back(std::move(s1));
+  args.emplace_back(std::move(s2));
+  return boss::expressions::ComplexExpression("List"_, {}, {}, std::move(args));
+};
+
+TEST_CASE("Project - multiple spans", "[hazard-adaptive-engine]") {
+  auto engine = boss::engines::BootstrapEngine();
+  REQUIRE(!librariesToTest.empty());
+  auto eval = [&engine](auto&& expression) mutable {
+    return engine.evaluate("EvaluateInEngines"_("List"_(GENERATE(from_range(librariesToTest))),
+                                                std::forward<decltype(expression)>(expression)));
+  };
+
+  auto table = "Table"_("key"_(createTwoSpansIntStartingFrom(0)),
+                        "payload"_(createTwoSpansIntStartingFrom(4)));
+
+  SECTION("Projection - multiple spans") {
+    auto updatedNames = eval(
+        "Project"_(std::move(table), "As"_("NewKeyName"_, "key"_, "NewPayloadName"_, "payload"_)));
+    CHECK(updatedNames ==
+          "Table"_("NewKeyName"_("List"_(0, 1, 2, 3)), "NewPayloadName"_("List"_(4, 5, 6, 7))));
+  }
+}
+
+TEST_CASE("Select - multiple spans", "[hazard-adaptive-engine]") {
+  auto engine = boss::engines::BootstrapEngine();
+  REQUIRE(!librariesToTest.empty());
+  auto eval = [&engine](auto&& expression) mutable {
+    return engine.evaluate("EvaluateInEngines"_("List"_(GENERATE(from_range(librariesToTest))),
+                                                std::forward<decltype(expression)>(expression)));
+  };
+
+  auto table = "Table"_("key"_(createTwoSpansIntStartingFrom(0)),
+                        "payload"_(createTwoSpansIntStartingFrom(4)));
+
+  SECTION("Select - multiple spans") {
+    auto result = eval("Select"_(std::move(table), "Where"_("Greater"_("key"_, 0))));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(
+        result ==
+        "Gather"_("Table"_("key"_("List"_(0, 1, 2, 3)), "payload"_("List"_(4, 5, 6, 7))), 1, 0, 1));
+#else
+    CHECK(result == "Table"_("key"_("List"_(1, 2, 3)), "payload"_("List"_(5, 6, 7))));
+#endif
+  }
+}
+
+TEST_CASE("Select multiple predicates and spans", "[hazard-adaptive-engine]") {
+  auto engine = boss::engines::BootstrapEngine();
+  REQUIRE(!librariesToTest.empty());
+  auto eval = [&engine](boss::Expression&& expression) mutable {
+    return engine.evaluate("EvaluateInEngines"_("List"_(GENERATE(from_range(librariesToTest))),
+                                                std::move(expression)));
+  };
+
+  SECTION("Selection multiple columns and spans 1") {
+    auto table = "Table"_("key"_(createTwoSpansIntStartingFrom(0)),
+                          "payload"_(createTwoSpansIntStartingFrom(4)));
+    auto result = eval("Select"_(std::move(table),
+                                 "Where"_("And"_("Greater"_("key"_, 0), "Greater"_(3, "key"_)))));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(result ==
+          "Gather"_("Table"_("key"_("List"_(0, 1, 2, 3)), "payload"_("List"_(4, 5, 6, 7))), 1, 0));
+#else
+    CHECK(result == "Table"_("key"_("List"_(1, 2)), "payload"_("List"_(5, 6))));
+#endif
+  }
+
+  SECTION("Selection multiple columns and spans 2") {
+    auto table = "Table"_("key"_(createTwoSpansIntStartingFrom(0)),
+                          "payload"_(createTwoSpansIntStartingFrom(4)));
+    auto result = eval("Select"_(
+        std::move(table), "Where"_("And"_("Greater"_("key"_, 0), "Greater"_(7, "payload"_)))));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(result ==
+          "Gather"_("Table"_("key"_("List"_(0, 1, 2, 3)), "payload"_("List"_(4, 5, 6, 7))), 1, 0));
+#else
+    CHECK(result == "Table"_("key"_("List"_(1, 2)), "payload"_("List"_(5, 6))));
+#endif
+  }
+}
+
+TEST_CASE("Plus - mulitple spans", "[hazard-adaptive-engine]") {
+  auto engine = boss::engines::BootstrapEngine();
+  REQUIRE(!librariesToTest.empty());
+  auto eval = [&engine](auto&& expression) mutable {
+    return engine.evaluate("EvaluateInEngines"_("List"_(GENERATE(from_range(librariesToTest))),
+                                                std::forward<decltype(expression)>(expression)));
+  };
+
+  SECTION("Project with calc 1") {
+    auto table = "Table"_("key"_(createTwoSpansIntStartingFrom(0)),
+                          "payload"_(createTwoSpansIntStartingFrom(4)));
+    auto output = eval("Project"_(std::move(table), "As"_("calc1"_, "Plus"_("key"_, 1))));
+    CHECK(output == "Table"_("calc1"_("List"_(1, 2, 3, 4)))); // NOLINT
+  }
+
+  SECTION("Project with calc 2") {
+    auto table = "Table"_("key"_(createTwoSpansIntStartingFrom(0)),
+                          "payload"_(createTwoSpansIntStartingFrom(4)));
+    auto output = eval("Project"_(std::move(table), "As"_("calc1"_, "Minus"_("key"_, 10))));
+    CHECK(output == "Table"_("calc1"_("List"_(-10, -9, -8, -7)))); // NOLINT
+  }
+}
+
+TEST_CASE("Group multiple spans", "[hazard-adaptive-engine]") {
+  auto engine = boss::engines::BootstrapEngine();
+  REQUIRE(!librariesToTest.empty());
+  auto eval = [&engine](boss::Expression&& expression) mutable {
+    return engine.evaluate("EvaluateInEngines"_("List"_(GENERATE(from_range(librariesToTest))),
+                                                std::move(expression)));
+  };
+
+  auto table = "Table"_("key"_(createTwoSpansIntStartingFrom(0)),
+                        "payload"_(createTwoSpansIntStartingFrom(4)));
+
+  SECTION("Group sum multiple spans") {
+    auto output = eval("Group"_(table.clone(CloneReason::FOR_TESTING), "Sum"_("key"_)));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(output == "Group"_("Table"_("key"_("List"_(0, 1, 2, 3)), // NOLINT
+                                      "payload"_("List"_(4, 5, 6, 7))), "Sum"_("key"_)));
+#else
+    CHECK(output == "Table"_("key"_("List"_(6)))); // NOLINT
+#endif
+  }
+
+  SECTION("Group count multiple spans") {
+    auto output = eval("Group"_(table.clone(CloneReason::FOR_TESTING), "Count"_("key"_)));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(output == "Group"_("Table"_("key"_("List"_(0, 1, 2, 3)), // NOLINT
+                                      "payload"_("List"_(4, 5, 6, 7))), "Count"_("key"_)));
+#else
+    CHECK(output == "Table"_("key"_("List"_(4)))); // NOLINT
+#endif
+  }
+
+  SECTION("Group count multiple spans with grouping") {
+    auto output = eval("Group"_(table.clone(CloneReason::FOR_TESTING), "By"_("key"_),
+                                "As"_("countKeys"_, "Count"_("key"_))));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(output == "Group"_("Table"_("key"_("List"_(0, 1, 2, 3)), // NOLINT
+                                      "payload"_("List"_(4, 5, 6, 7))), "By"_("key"_),
+                                      "As"_("countKeys"_, "Count"_("key"_))));
+#else
+    CHECK(output ==
+          "Table"_("key"_("List"_(0, 1, 2, 3)), "countKeys"_("List"_(1, 1, 1, 1)))); // NOLINT
+#endif
   }
 }
 

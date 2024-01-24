@@ -26,7 +26,7 @@
 #include <variant>
 #include <vector>
 
-//#define DEBUG_MODE
+// #define DEBUG_MODE
 #define DEFER_TO_OTHER_ENGINE
 
 class Pred;
@@ -54,9 +54,8 @@ using adaptive::config::selectImplementation;
 
 using boss::Span;
 using boss::Symbol;
-using SpanInputs =
-    std::variant<std::vector<std::int32_t>, std::vector<std::int64_t>, std::vector<std::double_t>,
-                 std::vector<std::string>>;
+using SpanInputs = std::variant<std::vector<std::int32_t>, std::vector<std::int64_t>,
+                                std::vector<std::double_t>, std::vector<std::string>>;
 
 using namespace boss::algorithm;
 
@@ -569,7 +568,7 @@ private:
               auto arg1 = pred1(columns, nullptr);
               auto arg2 = pred2(columns, nullptr);
               if(!arg1 || !arg2) {
-                return {};
+                return std::nullopt;
               }
               if(indexes) {
                 return createLambdaPipelineResult(std::move(*arg1), std::move(*arg2), f, *indexes);
@@ -586,17 +585,18 @@ private:
           [&f](auto&& acc, auto const& e) -> Pred::Function {
             return std::visit(
                 [&f, &acc](auto&& arg) -> Pred::Function {
-                  return [acc, pred2 = createLambdaArgument(arg),
-                          &f](ExpressionArguments& columns, Span<int32_t>* indexes) mutable
-                         -> std::optional<ExpressionSpanArgument> {
-                    assert(!indexes);
-                    auto arg1 = acc(columns, nullptr);
-                    auto arg2 = pred2(columns, nullptr);
-                    if(!arg1 || !arg2) {
-                      return {};
-                    }
-                    return createLambdaResult(std::move(*arg1), std::move(*arg2), f);
-                  };
+                  return
+                      [acc, pred2 = createLambdaArgument(arg), &f](
+                          ExpressionArguments& columns,
+                          Span<int32_t>* indexes) mutable -> std::optional<ExpressionSpanArgument> {
+                        assert(!indexes);
+                        auto arg1 = acc(columns, nullptr);
+                        auto arg2 = pred2(columns, nullptr);
+                        if(!arg1 || !arg2) {
+                          return {};
+                        }
+                        return createLambdaResult(std::move(*arg1), std::move(*arg2), f);
+                      };
                 },
                 e);
           });
@@ -619,6 +619,9 @@ private:
             ExpressionArguments& columns,
             Span<int32_t>* /*unused*/) mutable -> std::optional<ExpressionSpanArgument> {
       auto candidateIndexes = preds[0](columns, nullptr);
+      if(!candidateIndexes.has_value()) {
+        return std::nullopt;
+      }
       ExpressionSpanArgument span;
       std::visit(
           [&span, &preds, &columns](auto&& candidateIndexes) {
@@ -672,12 +675,18 @@ private:
    * in Project to return columns (instead columns must be moved, see createLambdaArgumentMove func)
    */
   static Pred::Function createLambdaArgument(Symbol const& arg) {
-    return [arg](ExpressionArguments& columns,
-                 Span<int32_t>* /*unused*/) mutable -> std::optional<ExpressionSpanArgument> {
+    return [arg, index = 0U](
+               ExpressionArguments& columns,
+               Span<int32_t>* /*unused*/) mutable -> std::optional<ExpressionSpanArgument> {
       for(auto& columnExpr : columns) {
         auto& column = get<ComplexExpression>(columnExpr);
         if(column.getHead().getName() == arg.getName()) {
-          auto& span = get<ComplexExpression>(column.getArguments().at(0)).getSpanArguments().at(0);
+          if(index >=
+             get<ComplexExpression>(column.getArguments().at(0)).getSpanArguments().size()) {
+            return std::nullopt;
+          }
+          auto& span =
+              get<ComplexExpression>(column.getArguments().at(0)).getSpanArguments().at(index++);
           return std::visit(
               []<typename T>(Span<T> const& typedSpan) -> std::optional<ExpressionSpanArgument> {
                 if constexpr(std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t> ||
@@ -706,14 +715,20 @@ private:
    * data would not exist outside of the project operator.
    */
   static Pred::Function createLambdaArgumentMove(Symbol const& arg) {
-    return [arg](ExpressionArguments& columns,
-                 Span<int32_t>* /*unused*/) mutable -> std::optional<ExpressionSpanArgument> {
+    return [arg, index = 0U](
+               ExpressionArguments& columns,
+               Span<int32_t>* /*unused*/) mutable -> std::optional<ExpressionSpanArgument> {
       for(auto& columnExpr : columns) {
         auto& column = get<ComplexExpression>(columnExpr);
         if(column.getHead().getName() == arg.getName()) {
-          auto [unused1, unused2, unused3, spans] =
-              std::move(get<ComplexExpression>(column.getArguments().at(0))).decompose();
-          return std::visit(
+          if(index >=
+             get<ComplexExpression>(column.getArguments().at(0)).getSpanArguments().size()) {
+            return std::nullopt;
+          }
+          auto [head, unused_, dynamics, spans] = std::move(column).decompose();
+          auto list = get<ComplexExpression>(std::move(dynamics.at(0)));
+          auto [listHead, listUnused_, listDynamics, listSpans] = std::move(list).decompose();
+          auto span = std::visit(
               []<typename T>(Span<T>&& typedSpan) -> std::optional<ExpressionSpanArgument> {
                 if constexpr(std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t> ||
                              std::is_same_v<T, double_t> || std::is_same_v<T, std::string>) {
@@ -722,7 +737,12 @@ private:
                   throw std::runtime_error("unsupported column type in predicate");
                 }
               },
-              std::move(spans.at(0)));
+              std::move(listSpans.at(index++)));
+          dynamics.at(0) = ComplexExpression(std::move(listHead), {}, std::move(listDynamics),
+                                             std::move(listSpans));
+          columnExpr =
+              ComplexExpression(std::move(head), {}, std::move(dynamics), std::move(spans));
+          return span;
         }
       }
       throw std::runtime_error("in predicate: unknown symbol " + arg.getName() + "_");
@@ -893,7 +913,7 @@ public:
           auto as = std::move(*++asIt);
           auto pred = get<Pred>(std::move(as));
           ExpressionSpanArguments spans{};
-          if(auto projected = pred(columns, nullptr)) {
+          while(auto projected = pred(columns, nullptr)) {
             std::visit([&spans](auto&& typedSpan) { spans.emplace_back(std::move(typedSpan)); },
                        std::move(*projected));
           }
@@ -911,7 +931,7 @@ public:
           auto as = std::move(*++asIt);
           auto pred = createLambdaArgumentMove(get<Symbol>(std::move(as)));
           ExpressionSpanArguments spans{};
-          if(auto projected = pred(columns, nullptr)) {
+          while(auto projected = pred(columns, nullptr)) {
             std::visit([&spans](auto&& typedSpan) { spans.emplace_back(std::move(typedSpan)); },
                        std::move(*projected));
           }
@@ -950,30 +970,37 @@ public:
       auto columns = std::move(relation).getDynamicArguments();
       columns = transformDynamicsInColumnsToSpans(std::move(columns));
 #ifdef DEFER_TO_OTHER_ENGINE
-      if(auto predicate = predFunc(columns, nullptr)) {
+      ExpressionSpanArguments indexesArg;
+      while(auto predicate = predFunc(columns, nullptr)) {
         assert(std::holds_alternative<Span<int32_t>>(*predicate));
         auto& indexes = std::get<Span<int32_t>>(*predicate);
-        ExpressionSpanArguments indexesArg;
         indexesArg.emplace_back(std::move(indexes));
-        auto tableExpression = ComplexExpression("Table"_, std::move(columns));
-        ExpressionArguments tableArg;
-        tableArg.emplace_back(std::move(tableExpression));
-        return ComplexExpression("Gather"_, {}, std::move(tableArg), std::move(indexesArg));
-      } else {
-        throw std::runtime_error("Select did not return a Span of indexes");
       }
+      auto tableExpression = ComplexExpression("Table"_, std::move(columns));
+      ExpressionArguments tableArg;
+      tableArg.emplace_back(std::move(tableExpression));
+      return ComplexExpression("Gather"_, {}, std::move(tableArg), std::move(indexesArg));
 #else
-      if(auto predicate = predFunc(columns, nullptr)) {
+      ExpressionSpanArguments indexesArg;
+      size_t totalIndexes = 0;
+      size_t spansCount = 0;
+      while(auto predicate = predFunc(columns, nullptr)) {
         assert(std::holds_alternative<Span<int32_t>>(*predicate));
         auto& indexes = std::get<Span<int32_t>>(*predicate);
-        const auto indexesPerThread = indexes.size() / DOP;
-        if(DOP == 1 || indexesPerThread < adaptive::config::minTuplesPerThread) {
-          for(auto& columnRef : columns) {
-            auto column = get<ComplexExpression>(std::move(columnRef));
-            auto [head, unused_, dynamics, spans] = std::move(column).decompose();
-            auto list = get<ComplexExpression>(std::move(dynamics.at(0)));
-            auto [listHead, listUnused_, listDynamics, listSpans] = std::move(list).decompose();
-            listSpans.at(0) = std::visit(
+        totalIndexes += indexes.size();
+        ++spansCount;
+        indexesArg.emplace_back(std::move(indexes));
+      }
+      const auto indexesPerThread = (totalIndexes / spansCount) / DOP;
+      if(DOP == 1 || indexesPerThread < adaptive::config::minTuplesPerThread) {
+        for(auto& columnRef : columns) {
+          auto column = get<ComplexExpression>(std::move(columnRef));
+          auto [head, unused_, dynamics, spans] = std::move(column).decompose();
+          auto list = get<ComplexExpression>(std::move(dynamics.at(0)));
+          auto [listHead, listUnused_, listDynamics, listSpans] = std::move(list).decompose();
+          for(size_t i = 0; i < listSpans.size(); ++i) {
+            const auto& indexes = std::get<Span<int32_t>>(indexesArg.at(i));
+            listSpans.at(i) = std::visit(
                 [&indexes]<typename T>(Span<T>&& typedSpan) -> ExpressionSpanArgument {
                   if constexpr(std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t> ||
                                std::is_same_v<T, double_t> || std::is_same_v<T, std::string>) {
@@ -990,22 +1017,24 @@ public:
                                              std::string(typeid(T).name()));
                   }
                 },
-                std::move(listSpans.at(0)));
-            dynamics.at(0) = ComplexExpression(std::move(listHead), {}, std::move(listDynamics),
-                                               std::move(listSpans));
-            columnRef =
-                ComplexExpression(std::move(head), {}, std::move(dynamics), std::move(spans));
+                std::move(listSpans.at(i)));
           }
-        } else {
-          /** Allocate memory for each new column sequentially, since jemalloc is not
-           * expected to be beneficial for few large memory allocations in parallel
-           */
-          for(auto& columnRef : columns) {
-            auto column = get<ComplexExpression>(std::move(columnRef));
-            auto [head, unused_, dynamics, spans] = std::move(column).decompose();
-            auto list = get<ComplexExpression>(std::move(dynamics.at(0)));
-            auto [listHead, listUnused_, listDynamics, listSpans] = std::move(list).decompose();
-            listSpans.at(0) = std::visit(
+          dynamics.at(0) = ComplexExpression(std::move(listHead), {}, std::move(listDynamics),
+                                             std::move(listSpans));
+          columnRef = ComplexExpression(std::move(head), {}, std::move(dynamics), std::move(spans));
+        }
+      } else {
+        /** Allocate memory for each new column sequentially, since jemalloc is not
+         * expected to be beneficial for few large memory allocations in parallel
+         */
+        for(auto& columnRef : columns) {
+          auto column = get<ComplexExpression>(std::move(columnRef));
+          auto [head, unused_, dynamics, spans] = std::move(column).decompose();
+          auto list = get<ComplexExpression>(std::move(dynamics.at(0)));
+          auto [listHead, listUnused_, listDynamics, listSpans] = std::move(list).decompose();
+          for(size_t i = 0; i < listSpans.size(); ++i) {
+            const auto& indexes = std::get<Span<int32_t>>(indexesArg.at(i));
+            listSpans.at(i) = std::visit(
                 [indexesPerThread,
                  &indexes]<typename T>(Span<T>&& typedSpan) -> ExpressionSpanArgument {
                   if constexpr(std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t> ||
@@ -1015,7 +1044,8 @@ public:
                     int32_t startIndex = 0;
                     for(int32_t i = 0; i < DOP; ++i) {
                       int32_t indexesToProcess =
-                          i + 1 < DOP ? indexesPerThread : indexes.size() - startIndex;
+                          i + 1 < DOP ? static_cast<int32_t>(indexesPerThread)
+                                      : static_cast<int32_t>(indexes.size()) - startIndex;
                       ThreadPool::getInstance().enqueue(
                           [startIndex, endIndex = startIndex + indexesToProcess,
                            indexesPtr = &*indexes.begin(), filteredPtr = filteredColumn,
@@ -1034,12 +1064,11 @@ public:
                                              std::string(typeid(T).name()));
                   }
                 },
-                std::move(listSpans.at(0)));
-            dynamics.at(0) = ComplexExpression(std::move(listHead), {}, std::move(listDynamics),
-                                               std::move(listSpans));
-            columnRef =
-                ComplexExpression(std::move(head), {}, std::move(dynamics), std::move(spans));
+                std::move(listSpans.at(i)));
           }
+          dynamics.at(0) = ComplexExpression(std::move(listHead), {}, std::move(listDynamics),
+                                             std::move(listSpans));
+          columnRef = ComplexExpression(std::move(head), {}, std::move(dynamics), std::move(spans));
         }
       }
       return ComplexExpression("Table"_, std::move(columns));
@@ -1066,15 +1095,22 @@ public:
         if(auto column = groupingPred(columns, nullptr)) {
           ExpressionSpanArgument span;
           std::visit(
-              [&map, &span](auto&& typedSpan) {
+              [&](auto&& typedSpan) {
                 using Type = std::decay_t<decltype(typedSpan)>;
                 if constexpr(std::is_same_v<Type, Span<int32_t>> ||
                              std::is_same_v<Type, Span<int64_t>> ||
                              std::is_same_v<Type, Span<double>>) {
                   using ElementType = typename Type::element_type;
                   std::vector<ElementType> uniqueList;
-                  for(size_t i = 0; i < typedSpan.size(); ++i) {
-                    map[static_cast<long>(typedSpan[i])].push_back(i);
+                  while(true) {
+                    for(size_t i = 0; i < typedSpan.size(); ++i) {
+                      map[static_cast<long>(typedSpan[i])].push_back(i);
+                    }
+                    auto column = groupingPred(columns, nullptr);
+                    if(!column.has_value()) {
+                      break;
+                    }
+                    typedSpan = std::get<Span<ElementType>>(std::move(*column));
                   }
                   uniqueList.reserve(map.size());
                   for(const auto& pair : map) {
@@ -1119,13 +1155,14 @@ public:
         if(auto column = pred(columns, nullptr)) {
           ExpressionSpanArgument span;
           std::visit(
-              [&span, &aggFuncName, &map, byFlag](auto&& typedSpan) {
+              [&](auto&& typedSpan) {
                 using Type = std::decay_t<decltype(typedSpan)>;
                 if constexpr(std::is_same_v<Type, Span<int32_t>> ||
                              std::is_same_v<Type, Span<int64_t>> ||
                              std::is_same_v<Type, Span<double>>) {
                   using ElementType = typename Type::element_type;
                   if(aggFuncName == "Sum") {
+                    // TODO: Group "Sum By" currently only works with single span columns
                     if(byFlag) {
                       std::vector<ElementType> results;
                       results.reserve(map.size());
@@ -1138,8 +1175,16 @@ public:
                       }
                       span = Span<ElementType>(std::move(std::vector(results)));
                     } else {
-                      auto sum = std::accumulate(typedSpan.begin(), typedSpan.end(),
-                                                 static_cast<ElementType>(0));
+                      ElementType sum = 0;
+                      while(true) {
+                        sum += std::accumulate(typedSpan.begin(), typedSpan.end(),
+                                               static_cast<ElementType>(0));
+                        auto column = pred(columns, nullptr);
+                        if(!column.has_value()) {
+                          break;
+                        }
+                        typedSpan = std::get<Span<ElementType>>(std::move(*column));
+                      }
                       span = Span<ElementType>({sum});
                     }
                   } else if(aggFuncName == "Count") {
@@ -1151,7 +1196,15 @@ public:
                       }
                       span = Span<int32_t>(std::vector(results));
                     } else {
-                      auto count = static_cast<int32_t>(typedSpan.size());
+                      int32_t count = 0;
+                      while(true) {
+                        count += static_cast<int32_t>(typedSpan.size());
+                        auto column = pred(columns, nullptr);
+                        if(!column.has_value()) {
+                          break;
+                        }
+                        typedSpan = std::get<Span<ElementType>>(std::move(*column));
+                      }
                       span = Span<int32_t>({count});
                     }
                   } else {
