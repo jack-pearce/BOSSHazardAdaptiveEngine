@@ -29,14 +29,8 @@ MachineConstants::MachineConstants() {
     std::cout << "Environment variable set, will get constants from '" << constantsPath << "'\n";
     machineConstantsFilePath = constantsPath;
   } else {
-    // TODO: currently hardcode since I can't find how to set environment variables in vtune
     machineConstantsFilePath =
-        "/home/jcp122/repos/BOSSHazardAdaptiveEngine/Source/constants/machineConstantValues.json";
-//    "/repos/BOSSHazardAdaptiveEngine/Source/constants/machineConstantValues.json";
-#if FALSE
-    machineConstantsFilePath =
-        getProjectRootDirectory() + "/Source/constants/machineConstantValues.json";
-#endif
+        getProjectRootDirectory() + "Source/constants/machineConstantValues.json";
     std::cout << "Environment variable for constants not set, will attempt to get constants from '"
               << machineConstantsFilePath << "'" << std::endl;
   }
@@ -120,7 +114,7 @@ void MachineConstants::calculateMissingMachineConstants() {
       calculateSelectMachineConstants<int64_t>(dop);
     }
 
-    if (dop == logicalCoresCount()) {
+    if(dop == logicalCoresCount()) {
       break;
     }
     dop = (dop * 2) <= logicalCoresCount() ? dop * 2 : logicalCoresCount();

@@ -6,7 +6,7 @@
 #include <numeric>
 #include <variant>
 
-#define DEFERRED_TO_OTHER_ENGINE
+//#define DEFERRED_TO_OTHER_ENGINE
 
 using boss::Expression;
 using std::string;

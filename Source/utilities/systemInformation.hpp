@@ -15,10 +15,10 @@ template <typename T> bool arrayIsSimd256Aligned(const T* array) {
   return reinterpret_cast<uintptr_t>(array) % simdAlignment == 0;
 }
 
-uint64_t l3cacheSize();
-uint32_t bytesPerCacheLine();
-uint32_t logicalCoresCount();
-std::string getProjectRootDirectory();
+inline uint64_t l3cacheSize() { return sysconf(_SC_LEVEL3_CACHE_SIZE); }
+inline uint32_t bytesPerCacheLine() { return sysconf(_SC_LEVEL1_DCACHE_LINESIZE); }
+inline uint32_t logicalCoresCount() { return adaptive::config::LOGICAL_CORE_COUNT; }
+inline std::string getProjectRootDirectory() { return adaptive::config::projectFilePath; }
 void printIntelTlbSpecifications();
 uint32_t l2TlbEntriesFor4KbytePages();
 

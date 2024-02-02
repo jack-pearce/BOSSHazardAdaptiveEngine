@@ -1,23 +1,10 @@
 #include <bitset>
-#include <filesystem>
 #include <iostream>
-#include <thread>
-#include <unistd.h>
 
+#include "config.hpp"
 #include "systemInformation.hpp"
 
 namespace adaptive {
-
-uint64_t l3cacheSize() { return sysconf(_SC_LEVEL3_CACHE_SIZE); }
-
-uint32_t bytesPerCacheLine() { return sysconf(_SC_LEVEL1_DCACHE_LINESIZE); }
-
-uint32_t logicalCoresCount() { return static_cast<uint32_t>(std::thread::hardware_concurrency()); }
-
-std::string getProjectRootDirectory() {
-  namespace fs = std::filesystem;
-  return fs::current_path().parent_path().string();
-}
 
 void printTlbSpecificationsFromLeaf0x18(unsigned int maxSubleaf) {
   unsigned int leaf = 0x18;

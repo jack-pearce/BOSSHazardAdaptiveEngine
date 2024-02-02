@@ -27,7 +27,7 @@
 #include <vector>
 
 // #define DEBUG_MODE
-#define DEFER_TO_OTHER_ENGINE
+// #define DEFER_TO_OTHER_ENGINE
 
 class Pred;
 
@@ -1005,14 +1005,17 @@ public:
                       filteredColumn[i] = unfilteredColumn[indexes[i]];
                     }
                   } else {
-                    const auto numThreads = std::min(DOP, static_cast<int32_t>(indexes.size() / adaptive::config::minTuplesPerThread));
+                    const auto numThreads =
+                        std::min(DOP, static_cast<int32_t>(indexes.size() /
+                                                           adaptive::config::minTuplesPerThread));
                     assert(numThreads >= 2);
                     const auto indexesPerThread = indexes.size() / numThreads;
                     int32_t startIndex = 0;
                     for(int32_t threadNum = 0; threadNum < numThreads; ++threadNum) {
                       int32_t indexesToProcess =
-                          threadNum + 1 < numThreads ? static_cast<int32_t>(indexesPerThread)
-                                              : static_cast<int32_t>(indexes.size()) - startIndex;
+                          threadNum + 1 < numThreads
+                              ? static_cast<int32_t>(indexesPerThread)
+                              : static_cast<int32_t>(indexes.size()) - startIndex;
                       ThreadPool::getInstance().enqueue(
                           [startIndex, endIndex = startIndex + indexesToProcess,
                            indexesPtr = &*indexes.begin(), filteredPtr = filteredColumn,
