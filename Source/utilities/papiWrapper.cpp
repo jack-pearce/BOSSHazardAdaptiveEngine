@@ -13,8 +13,9 @@ Counters& Counters::getInstance() {
 }
 
 Counters::Counters() {
-  sharedEventSet = PAPI_NULL;
-  std::vector<std::string> initialCounters = {"PERF_COUNT_HW_CPU_CYCLES"};
+  eventSet = PAPI_NULL;
+  auto counterNames =
+      std::vector<std::string>({"PERF_COUNT_HW_CPU_CYCLES", "PERF_COUNT_HW_BRANCH_MISSES"});
 
   if(PAPI_library_init(PAPI_VER_CURRENT) != PAPI_VER_CURRENT) {
     std::cerr << "PAPI library init error!" << std::endl;
@@ -26,81 +27,58 @@ Counters::Counters() {
     exit(1);
   }
 
-  if(PAPI_create_eventset(&sharedEventSet) != PAPI_OK) {
+  if(PAPI_create_eventset(&eventSet) != PAPI_OK) {
     std::cerr << "PAPI could not create event set!" << std::endl;
     exit(1);
   }
 
-  addEventsToSharedEventSet(initialCounters);
-  PAPI_start(sharedEventSet);
-}
-
-Counters::~Counters() {
-  PAPI_stop(sharedEventSet, counterValues);
-  PAPI_cleanup_eventset(sharedEventSet);
-  PAPI_destroy_eventset(&sharedEventSet);
-  PAPI_shutdown();
-}
-
-long_long* Counters::addEventsToSharedEventSet(std::vector<std::string>& counterNames) {
   int eventCode;
-  PAPI_stop(sharedEventSet, counterValues);
-
-  for(const std::string& counter : counterNames) {
-    if(__builtin_expect(PAPI_event_name_to_code(counter.c_str(), &eventCode) != PAPI_OK, false)) {
+  for(const std::string& counterName : counterNames) {
+    if(__builtin_expect(PAPI_event_name_to_code(counterName.c_str(), &eventCode) != PAPI_OK,
+                        false)) {
       std::cerr << "PAPI could not create event code!" << std::endl;
       exit(1);
     }
 
-    if(__builtin_expect(PAPI_add_event(sharedEventSet, eventCode) != PAPI_OK, 0)) {
-      std::cerr << "Could not add '" << counter << "' to event set!" << std::endl;
+    if(__builtin_expect(PAPI_add_event(eventSet, eventCode) != PAPI_OK, 0)) {
+      std::cerr << "Could not add '" << counterName << "' to event set!" << std::endl;
       exit(1);
     }
   }
 
-  counters.insert(counters.end(), counterNames.begin(), counterNames.end());
-  PAPI_start(sharedEventSet);
-  return &(counterValues[counters.size() - counterNames.size()]);
+  PAPI_start(eventSet);
 }
 
-long_long* Counters::eventsAlreadyInSharedEventSet(std::vector<std::string>& counterNames) {
-  for(size_t i = 0; i <= counters.size(); ++i) {
-    if(counters[i] == counterNames[0]) {
-      bool found = true;
-
-      for(size_t j = 1; j < counterNames.size(); ++j) {
-        if(counters[i + j] != counterNames[j]) {
-          found = false;
-          break;
-        }
-      }
-
-      if(found) {
-        return &(counterValues[i]);
-      }
-    }
-  }
-  return nullptr;
+Counters::~Counters() {
+  PAPI_stop(eventSet, counterValues);
+  PAPI_cleanup_eventset(eventSet);
+  PAPI_destroy_eventset(&eventSet);
+  PAPI_shutdown();
 }
 
-long_long* Counters::getSharedEventSetEvents(std::vector<std::string>& counterNames) {
-  long_long* eventValues = eventsAlreadyInSharedEventSet(counterNames);
-  if(__builtin_expect(eventValues != nullptr, true))
-    return eventValues;
+long_long* Counters::getBranchMisPredictionsCounter() { return &(counterValuesDiff[1]); }
 
-  return addEventsToSharedEventSet(counterNames);
-}
-
-long_long* Counters::readSharedEventSet() {
-  for(size_t i = 1; i < counters.size(); ++i) {
-    counterValues[i] = 0;
-  }
-
-  if(__builtin_expect(PAPI_accum(sharedEventSet, counterValues) != PAPI_OK, false)) {
+long_long* Counters::readEventSetAndGetCycles() {
+  if(__builtin_expect(PAPI_read(eventSet, counterValues) != PAPI_OK, false)) {
     std::cerr << "Could not read and zero event set!" << std::endl;
     exit(1);
   }
-  return counterValues;
+  return &(counterValuesDiff[0]);
+}
+
+void Counters::readEventSetAndCalculateDiff() {
+  for(auto i = 1; i < COUNTERS; ++i) {
+    counterValuesDiff[i] = counterValues[i];
+  }
+
+  if(__builtin_expect(PAPI_read(eventSet, counterValues) != PAPI_OK, false)) {
+    std::cerr << "Could not read and zero event set!" << std::endl;
+    exit(1);
+  }
+
+  for(auto i = 1; i < COUNTERS; ++i) {
+    counterValuesDiff[i] = counterValues[i] - counterValuesDiff[i];
+  }
 }
 
 void createThreadEventSet(int* eventSet, std::vector<std::string>& counterNames) {

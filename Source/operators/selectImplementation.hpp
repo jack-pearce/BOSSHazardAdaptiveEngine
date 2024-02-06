@@ -156,8 +156,7 @@ private:
 template <typename T, typename P> class MonitorSelect {
 public:
   explicit MonitorSelect(SelectAdaptive<T, P>* selectOperator_) : selectOperator(selectOperator_) {
-    std::vector<std::string> counters = {"PERF_COUNT_HW_BRANCH_MISSES"};
-    branchMispredictions = Counters::getInstance().getSharedEventSetEvents(counters);
+    branchMispredictions = Counters::getInstance().getBranchMisPredictionsCounter();
 
     std::string lowerName = "SelectLower_" + std::to_string(sizeof(T)) + "B_elements_1_dop";
     std::string upperName = "SelectUpper_" + std::to_string(sizeof(T)) + "B_elements_1_dop";
@@ -340,20 +339,20 @@ template <typename T, typename P> inline void SelectAdaptive<T, P>::processMicro
 #ifdef VERBOSE_DEBUG
     std::cout << "Processing micro-batch with Branch" << std::endl;
 #endif
-    Counters::getInstance().readSharedEventSet();
+    Counters::getInstance().readEventSetAndGetCycles();
     microBatchSelected = branchOperator.processMicroBatch(
         microBatchStartIndex, microBatchSize, column, value, columnIsFirstArg, predicate,
         candidateIndexesPtr, selectedIndexes);
-    Counters::getInstance().readSharedEventSet();
+    Counters::getInstance().readEventSetAndCalculateDiff();
   } else {
 #ifdef VERBOSE_DEBUG
     std::cout << "Processing micro-batch with Predication" << std::endl;
 #endif
-    Counters::getInstance().readSharedEventSet();
+    Counters::getInstance().readEventSetAndGetCycles();
     microBatchSelected = predicationOperator.processMicroBatch(
         microBatchStartIndex, microBatchSize, column, value, columnIsFirstArg, predicate,
         candidateIndexesPtr, selectedIndexes);
-    Counters::getInstance().readSharedEventSet();
+    Counters::getInstance().readEventSetAndCalculateDiff();
   }
   remainingTuples -= microBatchSize;
   microBatchStartIndex += microBatchSize;

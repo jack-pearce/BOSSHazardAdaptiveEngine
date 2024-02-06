@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#define COUNTERS 2 // "PERF_COUNT_HW_CPU_CYCLES", "PERF_COUNT_HW_BRANCH_MISSES"
+
 namespace adaptive {
 
 class Counters {
@@ -13,18 +15,17 @@ public:
   Counters(const Counters&) = delete;
   void operator=(const Counters&) = delete;
 
-  long_long* getSharedEventSetEvents(std::vector<std::string>& counterNames);
-  long_long* readSharedEventSet();
+  long_long* getBranchMisPredictionsCounter();
+  long_long* readEventSetAndGetCycles();
+  void readEventSetAndCalculateDiff();
 
 private:
   Counters();
   ~Counters();
-  long_long* addEventsToSharedEventSet(std::vector<std::string>& counterNames);
-  long_long* eventsAlreadyInSharedEventSet(std::vector<std::string>& counterNames);
 
-  int sharedEventSet;
-  std::vector<std::string> counters;
-  long_long counterValues[20] = {0};
+  int eventSet;
+  long_long counterValues[COUNTERS] = {0};
+  long_long counterValuesDiff[COUNTERS] = {0};
 };
 
 void createThreadEventSet(int* eventSet, std::vector<std::string>& counterNames);

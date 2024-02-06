@@ -42,10 +42,10 @@ template <typename T> double calculateSelectLowerMachineConstant(uint32_t dop) {
       Span<T> columnSpan1 = Span<T>(std::move(std::vector(column1)));
 
       if(dop == 1) {
-        branchCycles = *Counters::getInstance().readSharedEventSet();
+        branchCycles = *Counters::getInstance().readEventSetAndGetCycles();
         select(Select::Branch, columnSpan1, 1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity),
                false, predicate, {});
-        branchCycles = *Counters::getInstance().readSharedEventSet() - branchCycles;
+        branchCycles = *Counters::getInstance().readEventSetAndGetCycles() - branchCycles;
       } else {
         MachineConstants::getInstance().updateMachineConstant(machineConstantLowerName, 1);
         MachineConstants::getInstance().updateMachineConstant(machineConstantUpperName, 0);
@@ -62,10 +62,10 @@ template <typename T> double calculateSelectLowerMachineConstant(uint32_t dop) {
       Span<T> columnSpan2 = Span<T>(std::move(std::vector(column2)));
 
       if(dop == 1) {
-        predicationCycles = *Counters::getInstance().readSharedEventSet();
+        predicationCycles = *Counters::getInstance().readEventSetAndGetCycles();
         select(Select::Predication, columnSpan2,
                1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity), false, predicate, {});
-        predicationCycles = *Counters::getInstance().readSharedEventSet() - predicationCycles;
+        predicationCycles = *Counters::getInstance().readEventSetAndGetCycles() - predicationCycles;
       } else {
         MachineConstants::getInstance().updateMachineConstant(machineConstantLowerName, 0);
         MachineConstants::getInstance().updateMachineConstant(machineConstantUpperName, 1);
@@ -120,10 +120,10 @@ template <typename T> double calculateSelectUpperMachineConstant(uint32_t dop) {
       Span<T> columnSpan1 = Span<T>(std::move(std::vector(column1)));
 
       if(dop == 1) {
-        branchCycles = *Counters::getInstance().readSharedEventSet();
+        branchCycles = *Counters::getInstance().readEventSetAndGetCycles();
         select(Select::Branch, columnSpan1, 1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity),
                false, predicate, {});
-        branchCycles = *Counters::getInstance().readSharedEventSet() - branchCycles;
+        branchCycles = *Counters::getInstance().readEventSetAndGetCycles() - branchCycles;
       } else {
         MachineConstants::getInstance().updateMachineConstant(machineConstantLowerName, 1);
         MachineConstants::getInstance().updateMachineConstant(machineConstantUpperName, 0);
@@ -140,10 +140,10 @@ template <typename T> double calculateSelectUpperMachineConstant(uint32_t dop) {
       Span<T> columnSpan2 = Span<T>(std::move(std::vector(column2)));
 
       if(dop == 1) {
-        predicationCycles = *Counters::getInstance().readSharedEventSet();
+        predicationCycles = *Counters::getInstance().readEventSetAndGetCycles();
         select(Select::Predication, columnSpan2,
                1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity), false, predicate, {});
-        predicationCycles = *Counters::getInstance().readSharedEventSet() - predicationCycles;
+        predicationCycles = *Counters::getInstance().readEventSetAndGetCycles() - predicationCycles;
       } else {
         MachineConstants::getInstance().updateMachineConstant(machineConstantLowerName, 0);
         MachineConstants::getInstance().updateMachineConstant(machineConstantUpperName, 1);
