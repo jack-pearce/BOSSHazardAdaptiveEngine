@@ -3,7 +3,7 @@
 namespace adaptive::config {
 
 int32_t DOP = 1;
-adaptive::Select selectImplementation = adaptive::Select::Predication;
+adaptive::Select selectImplementation = adaptive::Select::Adaptive;
 uint32_t minTuplesPerThread = 100;
 
 // TODO - machine config, these should be determined and set during the build process

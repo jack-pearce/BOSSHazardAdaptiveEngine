@@ -4,6 +4,7 @@
 #include <ExpressionUtilities.hpp>
 
 #include "config.hpp"
+#include "operators/operatorStats.hpp"
 #include "operators/select.hpp"
 #include "utilities/memory.hpp"
 
@@ -26,8 +27,8 @@
 #include <variant>
 #include <vector>
 
-// #define DEBUG_MODE
-// #define DEFER_TO_OTHER_ENGINE
+//#define DEBUG_MODE
+//#define DEFER_TO_OTHER_ENGINE
 
 class Pred;
 
@@ -46,9 +47,13 @@ static ExpressionBuilder operator""_(const char* name, size_t /*unused*/) {
   return ExpressionBuilder(name);
 }
 
+using boss::expressions::CloneReason;
 using BOSSExpressionSpanArguments = boss::DefaultExpressionSystem::ExpressionSpanArguments;
 using BOSSExpressionSpanArgument = boss::DefaultExpressionSystem::ExpressionSpanArgument;
 
+using adaptive::SelectOperatorState;
+using adaptive::SelectOperatorStates;
+using adaptive::SelectOperatorStats;
 using adaptive::config::DOP;
 using adaptive::config::selectImplementation;
 
@@ -457,10 +462,12 @@ template <typename T> concept NumericType = requires(T param) {
 class OperatorMap : public std::unordered_map<boss::Symbol, StatelessOperator> {
 private:
   template <typename T1, typename T2, typename F>
-  static ExpressionSpanArgument createLambdaResult(T1&& arg1, T2&& arg2, F& f) {
+  static ExpressionSpanArgument createLambdaResult(T1&& arg1, T2&& arg2, F& f, int predicateID) {
+    SelectOperatorState* state =
+        predicateID >= 0 ? &SelectOperatorStats::getInstance().getStateOfID(predicateID) : nullptr;
     ExpressionSpanArgument span;
     std::visit(
-        [&span, &f](auto&& typedSpan1, auto&& typedSpan2) {
+        [&span, &f, state](auto&& typedSpan1, auto&& typedSpan2) {
           using SpanType1 = std::decay_t<decltype(typedSpan1)>;
           using SpanType2 = std::decay_t<decltype(typedSpan2)>;
           using Type1 = typename SpanType1::element_type;
@@ -476,10 +483,11 @@ private:
               assert(typedSpan1.size() == 1 || typedSpan2.size() == 1);
               if(typedSpan2.size() == 1) {
                 span = adaptive::select(selectImplementation, typedSpan1,
-                                        static_cast<Type1>(typedSpan2[0]), true, f, {}, DOP);
+                                        static_cast<Type1>(typedSpan2[0]), true, f, {}, DOP, state);
               } else {
-                span = adaptive::select(selectImplementation, typedSpan2,
-                                        static_cast<Type2>(typedSpan1[0]), false, f, {}, DOP);
+                span =
+                    adaptive::select(selectImplementation, typedSpan2,
+                                     static_cast<Type2>(typedSpan1[0]), false, f, {}, DOP, state);
               }
             } else {
               std::vector<OutputType> output;
@@ -512,10 +520,12 @@ private:
   }
 
   template <typename T1, typename T2, typename F>
-  static ExpressionSpanArgument createLambdaPipelineResult(T1&& arg1, T2&& arg2, F& f,
-                                                           Span<int32_t>& indexes) {
+  static ExpressionSpanArgument
+  createLambdaPipelineResult(T1&& arg1, T2&& arg2, F& f, Span<int32_t>& indexes, int predicateID) {
+    SelectOperatorState* state =
+        predicateID >= 0 ? &SelectOperatorStats::getInstance().getStateOfID(predicateID) : nullptr;
     std::visit(
-        [&indexes, &f](auto&& typedSpan1, auto&& typedSpan2) {
+        [&indexes, &f, state](auto&& typedSpan1, auto&& typedSpan2) {
           using SpanType1 = std::decay_t<decltype(typedSpan1)>;
           using SpanType2 = std::decay_t<decltype(typedSpan2)>;
           using Type1 = typename SpanType1::element_type;
@@ -532,11 +542,11 @@ private:
               if(typedSpan2.size() == 1) {
                 indexes = adaptive::select(selectImplementation, typedSpan1,
                                            static_cast<Type1>(typedSpan2[0]), true, f,
-                                           std::move(indexes), DOP);
+                                           std::move(indexes), DOP, state);
               } else {
                 indexes = adaptive::select(selectImplementation, typedSpan2,
                                            static_cast<Type2>(typedSpan1[0]), false, f,
-                                           std::move(indexes), DOP);
+                                           std::move(indexes), DOP, state);
               }
             } else {
               throw std::runtime_error(
@@ -558,22 +568,32 @@ private:
   static Pred createLambdaExpression(ComplexExpressionWithStaticArguments<T>&& e, F&& f) {
     assert(e.getSpanArguments().empty());
     assert(e.getDynamicArguments().size() >= 1);
-    if(e.getDynamicArguments().size() == 1) {
+    auto numDynamicArgs = e.getDynamicArguments().size();
+    int predicateID = -1;
+    if(numDynamicArgs > 1 &&
+       std::holds_alternative<ComplexExpression>(e.getDynamicArguments().at(1)) &&
+       get<ComplexExpression>(e.getDynamicArguments().at(1)).getHead() == "PredicateID"_) {
+      numDynamicArgs = 1;
+      predicateID = get<int>(
+          get<ComplexExpression>(e.getDynamicArguments().at(1)).getDynamicArguments().at(0));
+    }
+    if(numDynamicArgs == 1) {
       Pred::Function pred = std::visit(
-          [&e, &f](auto&& arg) -> Pred::Function {
+          [&e, &f, predicateID](auto&& arg) -> Pred::Function {
             return [pred1 = createLambdaArgument(get<0>(e.getStaticArguments())),
-                    pred2 = createLambdaArgument(arg),
-                    &f](ExpressionArguments& columns,
-                        Span<int32_t>* indexes) mutable -> std::optional<ExpressionSpanArgument> {
+                    pred2 = createLambdaArgument(arg), &f, predicateID](
+                       ExpressionArguments& columns,
+                       Span<int32_t>* indexes) mutable -> std::optional<ExpressionSpanArgument> {
               auto arg1 = pred1(columns, nullptr);
               auto arg2 = pred2(columns, nullptr);
               if(!arg1 || !arg2) {
                 return std::nullopt;
               }
               if(indexes) {
-                return createLambdaPipelineResult(std::move(*arg1), std::move(*arg2), f, *indexes);
+                return createLambdaPipelineResult(std::move(*arg1), std::move(*arg2), f, *indexes,
+                                                  predicateID);
               }
-              return createLambdaResult(std::move(*arg1), std::move(*arg2), f);
+              return createLambdaResult(std::move(*arg1), std::move(*arg2), f, predicateID);
             };
           },
           e.getDynamicArguments().at(0));
@@ -595,7 +615,7 @@ private:
                         if(!arg1 || !arg2) {
                           return {};
                         }
-                        return createLambdaResult(std::move(*arg1), std::move(*arg2), f);
+                        return createLambdaResult(std::move(*arg1), std::move(*arg2), f, -1);
                       };
                 },
                 e);
@@ -838,7 +858,7 @@ public:
         []<NumericType FirstArgument>(
             ComplexExpressionWithStaticArguments<FirstArgument>&& input) -> Expression {
       assert(input.getSpanArguments().empty());
-      assert(input.getDynamicArguments().size() == 1);
+      assert(input.getDynamicArguments().size() >= 1);
       if(std::holds_alternative<Symbol>(input.getDynamicArguments().at(0)) ||
          std::holds_alternative<Pred>(input.getDynamicArguments().at(0))) {
         return createLambdaExpression(std::move(input), std::greater());
@@ -1232,12 +1252,27 @@ static Expression evaluateInternal(Expression&& e) {
 static boss::Expression evaluate(boss::Expression&& expr) {
   try {
 #ifdef DEBUG_MODE
-    expr = utilities::injectDebugInfoToSpans(std::move(expr));
-    std::cout << "Expression: " << expr << std::endl;
-    return std::move(expr);
-#else
-    return toBOSSExpression(evaluateInternal(std::move(expr)));
+    std::cout << "Input expression: "
+              << utilities::injectDebugInfoToSpans(expr.clone(CloneReason::FOR_TESTING))
+              << std::endl;
 #endif
+    if(std::holds_alternative<boss::ComplexExpression>(expr) &&
+       get<boss::ComplexExpression>(expr).getHead() == "Let"_) {
+      auto [head, unused_, dynamics, spans] =
+          std::move(get<boss::ComplexExpression>(expr)).decompose();
+      auto query = std::move(dynamics.at(0));
+      auto statsExpr = get<boss::ComplexExpression>(std::move(dynamics.at(1)));
+      if(statsExpr.getHead() != "Stats"_)
+        throw std::runtime_error("Expected second argument of 'Let'_ to be 'Stats'_ for operators");
+      auto [statsHead, unused1, statsArgs, unused2] = std::move(statsExpr).decompose();
+      if(statsArgs.empty())
+        throw std::runtime_error("No pointers to operator states in stats expression");
+      auto selectOperatorStates =
+          reinterpret_cast<SelectOperatorStates*>(get<int64_t>(statsArgs.at(0)));
+      SelectOperatorStats::getInstance().setStatsPtr(selectOperatorStates);
+      return toBOSSExpression(evaluateInternal(std::move(query)));
+    }
+    return toBOSSExpression(evaluateInternal(std::move(expr)));
   } catch(std::exception const& e) {
     boss::ExpressionArguments args;
     args.reserve(2);

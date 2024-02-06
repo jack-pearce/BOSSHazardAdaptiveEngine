@@ -199,6 +199,7 @@ set(ImplementationFiles
         Source/constants/machineConstants.cpp
         Source/config.cpp
         Source/utilities/utilities.cpp
+        Source/utilities/sharedDataTypes.cpp
 )
 
 # Plugin

@@ -1,4 +1,4 @@
-#include "utilities.h"
+#include "utilities.hpp"
 
 uint32_t roundDownToPowerOf2(uint32_t num) {
   if(num <= 2) {
