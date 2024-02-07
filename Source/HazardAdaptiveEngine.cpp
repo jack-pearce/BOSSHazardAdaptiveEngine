@@ -934,8 +934,7 @@ public:
           auto pred = get<Pred>(std::move(as));
           ExpressionSpanArguments spans{};
           while(auto projected = pred(columns, nullptr)) {
-            std::visit([&spans](auto&& typedSpan) { spans.emplace_back(std::move(typedSpan)); },
-                       std::move(*projected));
+            spans.push_back(std::move(*projected));
           }
           auto dynamics = ExpressionArguments{};
           dynamics.emplace_back(ComplexExpression("List"_, {}, {}, std::move(spans)));
@@ -952,8 +951,7 @@ public:
           auto pred = createLambdaArgumentMove(get<Symbol>(std::move(as)));
           ExpressionSpanArguments spans{};
           while(auto projected = pred(columns, nullptr)) {
-            std::visit([&spans](auto&& typedSpan) { spans.emplace_back(std::move(typedSpan)); },
-                       std::move(*projected));
+            spans.push_back(std::move(*projected));
           }
           auto dynamics = ExpressionArguments{};
           dynamics.emplace_back(ComplexExpression("List"_, {}, {}, std::move(spans)));
