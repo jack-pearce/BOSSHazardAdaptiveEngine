@@ -111,32 +111,38 @@ public:
   }
 };
 
+template <typename T, typename P> static SelectBranch<T, P>& getSelectBranchOperator() {
+  static SelectBranch<T, P> selectBranchOperator;
+  return selectBranchOperator;
+}
+
+template <typename T, typename P> static SelectPredication<T, P>& getSelectPredicationOperator() {
+  static SelectPredication<T, P> selectPredicationOperator;
+  return selectPredicationOperator;
+}
+
 /****************************** SINGLE-THREADED ******************************/
 
 template <typename T, typename P> class MonitorSelect;
 
 template <typename T, typename P> class SelectAdaptive {
 public:
-  SelectAdaptive(const Span<T>& column_, T value_, bool columnIsFirstArg_, P& predicate_,
-                 Span<int32_t>&& candidateIndexes_, SelectOperatorState* state_);
+  SelectAdaptive();
   void adjustRobustness(int adjustment);
-  Span<int32_t> processInput();
+  Span<int32_t> processInput(const Span<T>& column, T value, bool columnIsFirstArg, P& predicate,
+                             Span<int32_t>&& candidateIndexes_, SelectOperatorState* state);
 
 private:
-  inline void processMicroBatch();
-
-  const Span<T>& column;
-  T value;
-  bool columnIsFirstArg;
-  P& predicate;
-  Span<int32_t> candidateIndexes;
+  inline void processMicroBatch(const Span<T>& column, T value, bool columnIsFirstArg,
+                                P& predicate);
+  Span<int32_t> candidateIndexes = {};
 
   int32_t tuplesPerHazardCheck;
   int32_t maxConsecutivePredications;
   int32_t tuplesInBranchBurst;
 
-  int32_t microBatchStartIndex;
-  int32_t totalSelected;
+  int32_t microBatchStartIndex = {};
+  int32_t totalSelected = {};
   int32_t consecutivePredications;
   SelectImplementation activeOperator;
 
@@ -144,13 +150,11 @@ private:
   SelectBranch<T, P> branchOperator;
   SelectPredication<T, P> predicationOperator;
 
-  int32_t remainingTuples;
-  Span<int32_t>* candidateIndexesPtr;
-  int32_t* selectedIndexes;
-  int32_t microBatchSize{};
-  int32_t microBatchSelected{};
-
-  SelectOperatorState* state;
+  int32_t remainingTuples = {};
+  Span<int32_t>* candidateIndexesPtr = nullptr;
+  int32_t* selectedIndexes = {};
+  int32_t microBatchSize = {};
+  int32_t microBatchSelected = {};
 };
 
 template <typename T, typename P> class MonitorSelect {
@@ -216,25 +220,11 @@ private:
 };
 
 template <typename T, typename P>
-SelectAdaptive<T, P>::SelectAdaptive(const Span<T>& column_, T value_, bool columnIsFirstArg_,
-                                     P& predicate_, Span<int32_t>&& candidateIndexes_,
-                                     SelectOperatorState* state_)
-    : column(column_), value(value_), columnIsFirstArg(columnIsFirstArg_), predicate(predicate_),
-      candidateIndexes(std::move(candidateIndexes_)), tuplesPerHazardCheck(50000),
-      maxConsecutivePredications(10), tuplesInBranchBurst(1000), microBatchStartIndex(0),
-      totalSelected(0), consecutivePredications(maxConsecutivePredications),
+SelectAdaptive<T, P>::SelectAdaptive()
+    : tuplesPerHazardCheck(50000), maxConsecutivePredications(10), tuplesInBranchBurst(1000),
+      consecutivePredications(maxConsecutivePredications),
       activeOperator(SelectImplementation::Predication_), monitor(MonitorSelect<T, P>(this)),
-      branchOperator(SelectBranch<T, P>()), predicationOperator(SelectPredication<T, P>()),
-      state(state_) {
-  remainingTuples = candidateIndexes.size() == 0 ? column.size() : candidateIndexes.size();
-  candidateIndexesPtr = candidateIndexes.size() > 0 ? &candidateIndexes : nullptr;
-  if(candidateIndexes.size() == 0) {
-    auto* indexesArray = new int32_t[column.size()];
-    candidateIndexes =
-        Span<int32_t>(indexesArray, column.size(), [indexesArray]() { delete[] indexesArray; });
-  }
-  selectedIndexes = candidateIndexes.begin();
-}
+      branchOperator(SelectBranch<T, P>()), predicationOperator(SelectPredication<T, P>()) {}
 
 template <typename T, typename P> void SelectAdaptive<T, P>::adjustRobustness(int adjustment) {
   if(__builtin_expect((adjustment > 0) && activeOperator == SelectImplementation::Branch_, false)) {
@@ -252,7 +242,24 @@ template <typename T, typename P> void SelectAdaptive<T, P>::adjustRobustness(in
   }
 }
 
-template <typename T, typename P> Span<int32_t> SelectAdaptive<T, P>::processInput() {
+template <typename T, typename P>
+Span<int32_t> SelectAdaptive<T, P>::processInput(const Span<T>& column, T value,
+                                                 bool columnIsFirstArg, P& predicate,
+                                                 Span<int32_t>&& candidateIndexes_,
+                                                 SelectOperatorState* state) {
+  microBatchStartIndex = 0; // Reset tracking parameters
+  totalSelected = 0;
+
+  candidateIndexes = std::move(candidateIndexes_);
+  remainingTuples = candidateIndexes.size() == 0 ? column.size() : candidateIndexes.size();
+  candidateIndexesPtr = candidateIndexes.size() > 0 ? &candidateIndexes : nullptr;
+  if(candidateIndexes.size() == 0) {
+    auto* indexesArray = new int32_t[column.size()];
+    candidateIndexes =
+        Span<int32_t>(indexesArray, column.size(), [indexesArray]() { delete[] indexesArray; });
+  }
+  selectedIndexes = candidateIndexes.begin();
+
 #ifdef PRINT_SELECTIVITY
   std::cout << candidateIndexes.size() << " input values into predicate" << std::endl;
 #endif
@@ -262,7 +269,7 @@ template <typename T, typename P> Span<int32_t> SelectAdaptive<T, P>::processInp
     activeOperator = state->activeOperator;               // Load operator state
     if(state->tuplesUntilHazardCheck > remainingTuples) { // We will not complete a hazard check
       microBatchSize = remainingTuples;
-      processMicroBatch();
+      processMicroBatch(column, value, columnIsFirstArg, predicate);
 
       state->tuplesProcessed += microBatchSize; // Update state with operator results and return
       state->branchMispredictions += monitor.getMispredictions();
@@ -280,7 +287,7 @@ template <typename T, typename P> Span<int32_t> SelectAdaptive<T, P>::processInp
     } else {
       consecutivePredications = state->consecutivePredications;
       microBatchSize = state->tuplesUntilHazardCheck;
-      processMicroBatch();
+      processMicroBatch(column, value, columnIsFirstArg, predicate);
       consecutivePredications += activeOperator == SelectImplementation::Predication_;
       monitor.checkHazards(microBatchSize + state->tuplesProcessed,
                            microBatchSelected + state->selected, state->branchMispredictions);
@@ -302,7 +309,7 @@ template <typename T, typename P> Span<int32_t> SelectAdaptive<T, P>::processInp
       microBatchSize = tuplesPerHazardCheck;
     }
 
-    processMicroBatch();
+    processMicroBatch(column, value, columnIsFirstArg, predicate);
     consecutivePredications += activeOperator == SelectImplementation::Predication_;
     monitor.checkHazards(microBatchSize, microBatchSelected);
   }
@@ -310,7 +317,7 @@ template <typename T, typename P> Span<int32_t> SelectAdaptive<T, P>::processInp
   // Run final (partial-)microBatch without updating robustness (either we are at the final tuple of
   // the whole input so no reason to update robustness, or it will be updated on the next chunk)
   microBatchSize = remainingTuples;
-  processMicroBatch();
+  processMicroBatch(column, value, columnIsFirstArg, predicate);
 
   if(state) {
     state->activeOperator = activeOperator; // Save operator state
@@ -333,7 +340,9 @@ template <typename T, typename P> Span<int32_t> SelectAdaptive<T, P>::processInp
   return std::move(candidateIndexes).subspan(0, totalSelected);
 }
 
-template <typename T, typename P> inline void SelectAdaptive<T, P>::processMicroBatch() {
+template <typename T, typename P>
+inline void SelectAdaptive<T, P>::processMicroBatch(const Span<T>& column, T value,
+                                                    bool columnIsFirstArg, P& predicate) {
   microBatchSelected = 0;
   if(activeOperator == SelectImplementation::Branch_) {
 #ifdef VERBOSE_DEBUG
@@ -358,6 +367,11 @@ template <typename T, typename P> inline void SelectAdaptive<T, P>::processMicro
   microBatchStartIndex += microBatchSize;
   selectedIndexes += microBatchSelected;
   totalSelected += microBatchSelected;
+}
+
+template <typename T, typename P> static SelectAdaptive<T, P>& getSelectAdaptiveOperator() {
+  static SelectAdaptive<T, P> selectAdaptiveOperator;
+  return selectAdaptiveOperator;
 }
 
 /****************************** MULTI-THREADED ******************************/
@@ -695,9 +709,8 @@ Span<int32_t> select(Select implementation, const Span<T>& column, T value, bool
 
   assert(dop == 1);
   if(implementation == Select::Adaptive) {
-    SelectAdaptive<T, P> selectOperator(column, value, columnIsFirstArg, predicate,
-                                        std::move(candidateIndexes), state);
-    return std::move(selectOperator.processInput());
+    return std::move(getSelectAdaptiveOperator<T, P>().processInput(
+        column, value, columnIsFirstArg, predicate, std::move(candidateIndexes), state));
   }
 
   auto candidateIndexesPtr = candidateIndexes.size() > 0 ? &candidateIndexes : nullptr;
@@ -710,13 +723,11 @@ Span<int32_t> select(Select implementation, const Span<T>& column, T value, bool
   size_t numSelected;
 
   if(implementation == Select::Branch) {
-    SelectBranch<T, P> selectOperator;
-    numSelected = selectOperator.processMicroBatch(
+    numSelected = getSelectBranchOperator<T, P>().processMicroBatch(
         0, candidateIndexesPtr ? candidateIndexes.size() : column.size(), column, value,
         columnIsFirstArg, predicate, candidateIndexesPtr, selectedIndexes);
   } else {
-    SelectPredication<T, P> selectOperator;
-    numSelected = selectOperator.processMicroBatch(
+    numSelected = getSelectPredicationOperator<T, P>().processMicroBatch(
         0, candidateIndexesPtr ? candidateIndexes.size() : column.size(), column, value,
         columnIsFirstArg, predicate, candidateIndexesPtr, selectedIndexes);
   }
