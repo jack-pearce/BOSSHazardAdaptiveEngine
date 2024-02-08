@@ -162,69 +162,6 @@ static Expression injectDebugInfoToSpansExtendedExpressionSystem(Expression&& ex
 } // namespace utilities
 #endif
 
-template <typename... StaticArgumentTypes>
-ComplexExpressionWithStaticArguments<StaticArgumentTypes...>
-transformDynamicsToSpans(ComplexExpressionWithStaticArguments<StaticArgumentTypes...>&& input_) {
-  std::vector<SpanInputs> spanInputs;
-  auto [head, statics, dynamics, oldSpans] = std::move(input_).decompose();
-  for(auto it = std::move_iterator(dynamics.begin()); it != std::move_iterator(dynamics.end());
-      ++it) {
-    std::visit(
-        [&spanInputs]<typename InputType>(InputType&& argument) {
-          using Type = std::decay_t<InputType>;
-          if constexpr(boss::utilities::isVariantMember<std::vector<Type>, SpanInputs>::value) {
-            if(!spanInputs.empty() &&
-               std::holds_alternative<std::vector<Type>>(spanInputs.back())) {
-              std::get<std::vector<Type>>(spanInputs.back()).push_back(argument);
-            } else {
-              spanInputs.push_back(std::vector<Type>{argument});
-            }
-          }
-        },
-        *it);
-  }
-  dynamics.erase(dynamics.begin(), dynamics.end());
-  ExpressionSpanArguments spans;
-  std::transform(std::move_iterator(spanInputs.begin()), std::move_iterator(spanInputs.end()),
-                 std::back_inserter(spans), [](auto&& untypedInput) {
-                   return std::visit(
-                       []<typename Element>(std::vector<Element>&& input)
-                           -> ExpressionSpanArgument { return Span<Element>(std::move(input)); },
-                       std::move(untypedInput));
-                 });
-
-  std::copy(std::move_iterator(oldSpans.begin()), std::move_iterator(oldSpans.end()),
-            std::back_inserter(spans));
-  return {head, std::move(statics), std::move(dynamics), std::move(spans)};
-}
-
-Expression transformDynamicsToSpans(Expression&& input) {
-  return std::visit(
-      [](auto&& x) -> Expression {
-        if constexpr(std::is_same_v<std::decay_t<decltype(x)>, ComplexExpression>)
-          return transformDynamicsToSpans(std::move(x));
-        else
-          return x;
-      },
-      std::move(input));
-}
-
-ExpressionArguments transformDynamicsInColumnsToSpans(ExpressionArguments&& columns) {
-  std::transform(
-      std::make_move_iterator(columns.begin()), std::make_move_iterator(columns.end()),
-      columns.begin(), [](auto&& columnExpr) {
-        auto column = get<ComplexExpression>(std::forward<decltype(columnExpr)>(columnExpr));
-        auto [head, unused_, dynamics, spans] = std::move(column).decompose();
-        auto list = get<ComplexExpression>(std::move(dynamics.at(0)));
-        if(list.getDynamicArguments().size() > 0) {
-          list = transformDynamicsToSpans(std::move(list));
-        }
-        dynamics.at(0) = std::move(list);
-        return ComplexExpression(std::move(head), {}, std::move(dynamics), std::move(spans));
-      });
-  return std::move(columns);
-}
-
 static boss::Expression toBOSSExpression(Expression&& expr, bool isPredicate = false) {
   return std::visit(
       boss::utilities::overload(
@@ -920,7 +857,6 @@ public:
       auto relation = get<ComplexExpression>(std::move(*it));
       auto asExpr = std::move(*++it);
       auto columns = std::move(relation).getDynamicArguments();
-      columns = transformDynamicsInColumnsToSpans(std::move(columns));
       ExpressionArguments asArgs = get<ComplexExpression>(std::move(asExpr)).getArguments();
       auto projectedColumns = ExpressionArguments(asArgs.size() / 2);
       size_t index = 0; // Process all calculation columns, each creating a new column
@@ -986,7 +922,6 @@ public:
       auto relation = get<ComplexExpression>(std::move(*it));
       auto predFunc = get<Pred>(std::move(*++it));
       auto columns = std::move(relation).getDynamicArguments();
-      columns = transformDynamicsInColumnsToSpans(std::move(columns));
 #ifdef DEFER_TO_OTHER_ENGINE
       ExpressionSpanArguments indexesArg;
       while(auto predicate = predFunc(columns, nullptr)) {
@@ -1070,8 +1005,6 @@ public:
       auto it = std::make_move_iterator(args.begin());
       auto relation = get<ComplexExpression>(std::move(*it++));
       auto columns = std::move(relation).getDynamicArguments();
-      columns = transformDynamicsInColumnsToSpans(std::move(columns));
-
       auto resultColumns = ExpressionArguments{};
 
       auto byFlag = get<ComplexExpression>(args.at(1)).getHead().getName() == "By";

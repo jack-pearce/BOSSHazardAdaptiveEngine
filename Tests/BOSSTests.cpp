@@ -1765,6 +1765,44 @@ TEMPLATE_TEST_CASE("Summation of numeric Spans", "[spans]", std::int32_t, std::i
   }
 }
 
+auto createInt64SpanOf = [](auto... values) {
+  using SpanArguments = boss::expressions::ExpressionSpanArguments;
+  std::vector<int64_t> v = {values...};
+  auto s = boss::Span<int64_t>(std::move(v));
+  SpanArguments args;
+  args.emplace_back(std::move(s));
+  return boss::expressions::ComplexExpression("List"_, {}, {}, std::move(args));
+};
+
+using intType = int32_t;
+
+auto createIntSpanOf = [](auto... values) {
+  using SpanArguments = boss::expressions::ExpressionSpanArguments;
+  std::vector<intType> v = {values...};
+  auto s = boss::Span<intType>(std::move(v));
+  SpanArguments args;
+  args.emplace_back(std::move(s));
+  return boss::expressions::ComplexExpression("List"_, {}, {}, std::move(args));
+};
+
+auto createFloatSpanOf = [](auto... values) {
+  using SpanArguments = boss::expressions::ExpressionSpanArguments;
+  std::vector<double_t> v = {values...};
+  auto s = boss::Span<double_t>(std::move(v));
+  SpanArguments args;
+  args.emplace_back(std::move(s));
+  return boss::expressions::ComplexExpression("List"_, {}, {}, std::move(args));
+};
+
+auto createStringSpanOf = [](auto... values) {
+  using SpanArguments = boss::expressions::ExpressionSpanArguments;
+  std::vector<std::string> v = {values...};
+  auto s = boss::Span<std::string>(std::move(v));
+  SpanArguments args;
+  args.emplace_back(std::move(s));
+  return boss::expressions::ComplexExpression("List"_, {}, {}, std::move(args));
+};
+
 TEST_CASE("Plus, Divide and Times atoms", "[hazard-adaptive-engine]") { // NOLINT
   auto engine = boss::engines::BootstrapEngine();
   REQUIRE(!librariesToTest.empty());
@@ -1847,7 +1885,7 @@ TEST_CASE("Select", "[hazard-adaptive-engine]") {
   };
 
   SECTION("Selection single column 1") {
-    auto intTable = "Table"_("Value"_("List"_(5, 3, 1, 4, 1))); // NOLINT
+    auto intTable = "Table"_("Value"_(createIntSpanOf(5, 3, 1, 4, 1))); // NOLINT
     auto result = eval("Select"_(std::move(intTable), "Where"_("Equal"_("Value"_, 1))));
 #ifdef DEFERRED_TO_OTHER_ENGINE
     CHECK(result == "Gather"_("Table"_("Value"_("List"_(5, 3, 1, 4, 1))), 2, 4));
@@ -1857,7 +1895,7 @@ TEST_CASE("Select", "[hazard-adaptive-engine]") {
   }
 
   SECTION("Selection single column 2") {
-    auto intTable = "Table"_("Value"_("List"_(5, 3, 1, 4, 1))); // NOLINT
+    auto intTable = "Table"_("Value"_(createIntSpanOf(5, 3, 1, 4, 1))); // NOLINT
     auto result = eval("Select"_(std::move(intTable), "Where"_("Greater"_("Value"_, 3))));
 #ifdef DEFERRED_TO_OTHER_ENGINE
     CHECK(result == "Gather"_("Table"_("Value"_("List"_(5, 3, 1, 4, 1))), 0, 3));
@@ -1867,7 +1905,7 @@ TEST_CASE("Select", "[hazard-adaptive-engine]") {
   }
 
   SECTION("Selection single column 3") {
-    auto intTable = "Table"_("Value"_("List"_(5, 3, 1, 4, 1))); // NOLINT
+    auto intTable = "Table"_("Value"_(createIntSpanOf(5, 3, 1, 4, 1))); // NOLINT
     auto result = eval("Select"_(std::move(intTable), "Where"_("Greater"_(3, "Value"_))));
 #ifdef DEFERRED_TO_OTHER_ENGINE
     CHECK(result == "Gather"_("Table"_("Value"_("List"_(5, 3, 1, 4, 1))), 2, 4));
@@ -1877,7 +1915,7 @@ TEST_CASE("Select", "[hazard-adaptive-engine]") {
   }
 
   SECTION("Empty selection 1") {
-    auto intTable = "Table"_("Value"_("List"_(5, 3, 1, 4, 1))); // NOLINT
+    auto intTable = "Table"_("Value"_(createIntSpanOf(5, 3, 1, 4, 1))); // NOLINT
     auto result = eval("Select"_(std::move(intTable), "Where"_("Equal"_("Value"_, 6))));
 #ifdef DEFERRED_TO_OTHER_ENGINE
     CHECK(result == "Gather"_("Table"_("Value"_("List"_(5, 3, 1, 4, 1)))));
@@ -1888,7 +1926,7 @@ TEST_CASE("Select", "[hazard-adaptive-engine]") {
 
   SECTION("Selection multiple columns 1") {
     auto intTable =
-        "Table"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))); // NOLINT
+        "Table"_("Value1"_(createIntSpanOf(5, 3, 1, 4, 1)), "Value2"_(createIntSpanOf(1, 2, 3, 4, 5))); // NOLINT
     auto result = eval("Select"_(std::move(intTable), "Where"_("Greater"_("Value1"_, 3))));
 #ifdef DEFERRED_TO_OTHER_ENGINE
     CHECK(result ==
@@ -1901,7 +1939,7 @@ TEST_CASE("Select", "[hazard-adaptive-engine]") {
 
   SECTION("Selection multiple columns 2") {
     auto intTable =
-        "Table"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))); // NOLINT
+        "Table"_("Value1"_(createIntSpanOf(5, 3, 1, 4, 1)), "Value2"_(createIntSpanOf(1, 2, 3, 4, 5))); // NOLINT
     auto result = eval("Select"_(std::move(intTable), "Where"_("Greater"_("Value2"_, 3))));
 #ifdef DEFERRED_TO_OTHER_ENGINE
     CHECK(result ==
@@ -1914,7 +1952,7 @@ TEST_CASE("Select", "[hazard-adaptive-engine]") {
 
   SECTION("Selection nested 1") {
     auto intTable =
-        "Table"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))); // NOLINT
+        "Table"_("Value1"_(createIntSpanOf(5, 3, 1, 4, 1)), "Value2"_(createIntSpanOf(1, 2, 3, 4, 5))); // NOLINT
     auto result = eval("Select"_("Select"_(std::move(intTable), "Where"_("Greater"_("Value1"_, 1))),
                                  "Where"_("Greater"_("Value2"_, 3))));
 #ifdef DEFERRED_TO_OTHER_ENGINE
@@ -1929,7 +1967,7 @@ TEST_CASE("Select", "[hazard-adaptive-engine]") {
 
   SECTION("Selection nested 2") {
     auto intTable =
-        "Table"_("Value1"_("List"_(2, 5, 4, 3, 1)), "Value2"_("List"_(1, 3, 3, 4, 3))); // NOLINT
+        "Table"_("Value1"_(createIntSpanOf(2, 5, 4, 3, 1)), "Value2"_(createIntSpanOf(1, 3, 3, 4, 3))); // NOLINT
     auto result = eval("Select"_("Select"_(std::move(intTable), "Where"_("Equal"_("Value2"_, 3))),
                                  "Where"_("Greater"_("Value1"_, 3))));
 #ifdef DEFERRED_TO_OTHER_ENGINE
@@ -1944,7 +1982,7 @@ TEST_CASE("Select", "[hazard-adaptive-engine]") {
 
   SECTION("Empty selection 2") {
     auto intTable =
-        "Table"_("Value1"_("List"_(2, 5, 4, 3, 1)), "Value2"_("List"_(1, 3, 3, 4, 3))); // NOLINT
+        "Table"_("Value1"_(createIntSpanOf(2, 5, 4, 3, 1)), "Value2"_(createIntSpanOf(1, 3, 3, 4, 3))); // NOLINT
     auto result = eval("Select"_("Select"_(std::move(intTable), "Where"_("Equal"_("Value2"_, 6))),
                                  "Where"_("Greater"_("Value1"_, 3))));
 #ifdef DEFERRED_TO_OTHER_ENGINE
@@ -1985,8 +2023,8 @@ TEST_CASE("Project", "[hazard-adaptive-engine]") {
                                                 std::forward<decltype(expression)>(expression)));
   };
 
-  auto customerTable = "Table"_("FirstName"_("List"_("John", "Sam", "Barbara")),
-                                "LastName"_("List"_("McCarthy", "Madden", "Liskov")));
+  auto customerTable = "Table"_("FirstName"_(createStringSpanOf("John", "Sam", "Barbara")),
+                                "LastName"_(createStringSpanOf("McCarthy", "Madden", "Liskov")));
 
   SECTION("Projection") {
     auto fullnames = eval("Project"_(customerTable.clone(CloneReason::FOR_TESTING),
@@ -2015,12 +2053,12 @@ TEST_CASE("Plus, Times and Divide Cols", "[hazard-adaptive-engine]") {
                                                 std::move(expression)));
   };
 
-  auto intTable = "Table"_("Value"_("List"_(10, 20, 30, 40, 50))); // NOLINT
+  auto intTable = "Table"_("Value"_(createIntSpanOf(10, 20, 30, 40, 50))); // NOLINT
 
   SECTION("Plus") {
     CHECK(eval("Project"_(intTable.clone(CloneReason::FOR_TESTING),
                           "As"_("Result"_, "Plus"_("Value"_, 5)))) ==
-          "Table"_("Result"_("List"_(15, 25, 35, 45, 55)))); // NOLINT
+          "Table"_("Result"_(createIntSpanOf(15, 25, 35, 45, 55)))); // NOLINT
   }
 
   SECTION("Times") {
@@ -2074,7 +2112,7 @@ TEST_CASE("Select multiple predicates", "[hazard-adaptive-engine]") {
 
   SECTION("Selection multiple columns 1") {
     auto intTable =
-        "Table"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))); // NOLINT
+        "Table"_("Value1"_(createIntSpanOf(5, 3, 1, 4, 1)), "Value2"_(createIntSpanOf(1, 2, 3, 4, 5))); // NOLINT
     auto result = eval("Select"_(
         std::move(intTable), "Where"_("And"_("Greater"_("Value1"_, 3), "Greater"_(5, "Value1"_)))));
 #ifdef DEFERRED_TO_OTHER_ENGINE
@@ -2088,7 +2126,7 @@ TEST_CASE("Select multiple predicates", "[hazard-adaptive-engine]") {
 
   SECTION("Selection multiple columns 2") {
     auto intTable =
-        "Table"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))); // NOLINT
+        "Table"_("Value1"_(createIntSpanOf(5, 3, 1, 4, 1)), "Value2"_(createIntSpanOf(1, 2, 3, 4, 5))); // NOLINT
     auto result = eval("Select"_(std::move(intTable),
                                  "Where"_("And"_("Greater"_("Value2"_, 1), "Greater"_(5, "Value2"_),
                                                  "Greater"_("Value1"_, 2)))));
@@ -2103,7 +2141,7 @@ TEST_CASE("Select multiple predicates", "[hazard-adaptive-engine]") {
 
   SECTION("Empty selection 3") {
     auto intTable =
-        "Table"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))); // NOLINT
+        "Table"_("Value1"_(createIntSpanOf(5, 3, 1, 4, 1)), "Value2"_(createIntSpanOf(1, 2, 3, 4, 5))); // NOLINT
     auto result = eval("Select"_(std::move(intTable),
                                  "Where"_("And"_("Greater"_("Value2"_, 6), "Greater"_(5, "Value2"_),
                                                  "Greater"_("Value1"_, 2)))));
@@ -2117,7 +2155,7 @@ TEST_CASE("Select multiple predicates", "[hazard-adaptive-engine]") {
 
   SECTION("Empty selection 4") {
     auto intTable =
-        "Table"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))); // NOLINT
+        "Table"_("Value1"_(createIntSpanOf(5, 3, 1, 4, 1)), "Value2"_(createIntSpanOf(1, 2, 3, 4, 5))); // NOLINT
     auto result = eval("Select"_(std::move(intTable),
                                  "Where"_("And"_("Greater"_("Value2"_, 1), "Greater"_(0, "Value2"_),
                                                  "Greater"_("Value1"_, 2)))));
@@ -2138,7 +2176,7 @@ TEST_CASE("Plus, Divide and Times 2", "[hazard-adaptive-engine]") {
                                                 std::move(expression)));
   };
 
-  auto intTable = "Table"_("Value"_("List"_(10, 20, 30, 40, 50))); // NOLINT
+  auto intTable = "Table"_("Value"_(createIntSpanOf(10, 20, 30, 40, 50))); // NOLINT
 
   SECTION("Plus") {
     CHECK(eval("Project"_(intTable.clone(CloneReason::FOR_TESTING),
@@ -2174,19 +2212,18 @@ TEST_CASE("Project with calculation", "[hazard-adaptive-engine]") {
   };
 
   auto lineitem =
-      "Table"_("L_ORDERKEY"_("List"_(1, 1, 2, 3)),                                 // NOLINT
-               "L_PARTKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
-               "L_SUPPKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
-               "L_RETURNFLAG"_("List"_("N", "N", "A", "A")),                       // NOLINT
-               "L_LINESTATUS"_("List"_("O", "O", "F", "F")),                       // NOLINT
-               "L_RETURNFLAG_INT"_("List"_('N'_i64, 'N'_i64, 'A'_i64, 'A'_i64)),   // NOLINT
-               "L_LINESTATUS_INT"_("List"_('O'_i64, 'O'_i64, 'F'_i64, 'F'_i64)),   // NOLINT
-               "L_QUANTITY"_("List"_(17, 21, 8, 5)),                               // NOLINT
-               "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
-               "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
-               "L_TAX"_("List"_(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
-               "L_SHIPDATE"_("List"_("DateObject"_("1992-03-13"), "DateObject"_("1994-04-12"),
-                                     "DateObject"_("1996-02-28"), "DateObject"_("1994-12-31"))));
+      "Table"_("L_ORDERKEY"_(createIntSpanOf(1, 1, 2, 3)),                                 // NOLINT
+               "L_PARTKEY"_(createIntSpanOf(1, 2, 3, 4)),                                  // NOLINT
+               "L_SUPPKEY"_(createIntSpanOf(1, 2, 3, 4)),                                  // NOLINT
+               "L_RETURNFLAG"_(createStringSpanOf("N", "N", "A", "A")),                       // NOLINT
+               "L_LINESTATUS"_(createStringSpanOf("O", "O", "F", "F")),                       // NOLINT
+               "L_RETURNFLAG_INT"_(createInt64SpanOf('N'_i64, 'N'_i64, 'A'_i64, 'A'_i64)),   // NOLINT
+               "L_LINESTATUS_INT"_(createInt64SpanOf('O'_i64, 'O'_i64, 'F'_i64, 'F'_i64)),   // NOLINT
+               "L_QUANTITY"_(createIntSpanOf(17, 21, 8, 5)),                               // NOLINT
+               "L_EXTENDEDPRICE"_(createFloatSpanOf(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
+               "L_DISCOUNT"_(createFloatSpanOf(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
+               "L_TAX"_(createFloatSpanOf(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
+               "L_SHIPDATE"_(createIntSpanOf(8400, 9130, 9861, 9130)));
 
   SECTION("Project with calc") {
     auto output = eval("Project"_(lineitem.clone(CloneReason::FOR_TESTING),
@@ -2204,19 +2241,18 @@ TEST_CASE("Dates and Group", "[hazard-adaptive-engine]") {
   };
 
   auto lineitem =
-      "Table"_("L_ORDERKEY"_("List"_(1, 1, 2, 3)),                                 // NOLINT
-               "L_PARTKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
-               "L_SUPPKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
-               "L_RETURNFLAG"_("List"_("N", "N", "A", "A")),                       // NOLINT
-               "L_LINESTATUS"_("List"_("O", "O", "F", "F")),                       // NOLINT
-               "L_RETURNFLAG_INT"_("List"_('N'_i64, 'N'_i64, 'A'_i64, 'A'_i64)),   // NOLINT
-               "L_LINESTATUS_INT"_("List"_('O'_i64, 'O'_i64, 'F'_i64, 'F'_i64)),   // NOLINT
-               "L_QUANTITY"_("List"_(17, 21, 8, 5)),                               // NOLINT
-               "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
-               "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
-               "L_TAX"_("List"_(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
-               "L_SHIPDATE"_("List"_("DateObject"_("1992-03-13"), "DateObject"_("1994-04-12"),
-                                     "DateObject"_("1996-02-28"), "DateObject"_("1994-12-31"))));
+      "Table"_("L_ORDERKEY"_(createIntSpanOf(1, 1, 2, 3)),                                 // NOLINT
+               "L_PARTKEY"_(createIntSpanOf(1, 2, 3, 4)),                                  // NOLINT
+               "L_SUPPKEY"_(createIntSpanOf(1, 2, 3, 4)),                                  // NOLINT
+               "L_RETURNFLAG"_(createStringSpanOf("N", "N", "A", "A")),                       // NOLINT
+               "L_LINESTATUS"_(createStringSpanOf("O", "O", "F", "F")),                       // NOLINT
+               "L_RETURNFLAG_INT"_(createInt64SpanOf('N'_i64, 'N'_i64, 'A'_i64, 'A'_i64)),   // NOLINT
+               "L_LINESTATUS_INT"_(createInt64SpanOf('O'_i64, 'O'_i64, 'F'_i64, 'F'_i64)),   // NOLINT
+               "L_QUANTITY"_(createIntSpanOf(17, 21, 8, 5)),                               // NOLINT
+               "L_EXTENDEDPRICE"_(createFloatSpanOf(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
+               "L_DISCOUNT"_(createFloatSpanOf(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
+               "L_TAX"_(createFloatSpanOf(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
+               "L_SHIPDATE"_(createIntSpanOf(8400, 9130, 9861, 9130)));
 
   SECTION("Dates") {
     auto output = eval("Project"_(
@@ -2226,7 +2262,7 @@ TEST_CASE("Dates and Group", "[hazard-adaptive-engine]") {
         "As"_("L_QUANTITY"_, "L_QUANTITY"_)));
 #ifdef DEFERRED_TO_OTHER_ENGINE
     CHECK(output == "Project"_("Gather"_("Table"_("L_QUANTITY"_("List"_(17, 21, 8, 5)),
-                                                  "L_SHIPDATE"_("List"_(8107, 8867, 9554, 9130))),
+                                                  "L_SHIPDATE"_("List"_(8400, 9130, 9861, 9130))),
                                          2),
                                "As"_("L_QUANTITY"_, "L_QUANTITY"_)));
 #else
@@ -2250,7 +2286,7 @@ TEST_CASE("Dates and Group", "[hazard-adaptive-engine]") {
                        "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
                        "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
                        "L_TAX"_("List"_(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
-                       "L_SHIPDATE"_("List"_(8107, 8867, 9554, 9130))),
+                       "L_SHIPDATE"_("List"_(8400, 9130, 9861, 9130))),
               "Sum"_("L_DISCOUNT"_)));
 #else
     CHECK(output == "Table"_("L_DISCOUNT"_("List"_(0.27)))); // NOLINT
@@ -2274,7 +2310,7 @@ TEST_CASE("Dates and Group", "[hazard-adaptive-engine]") {
                        "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
                        "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
                        "L_TAX"_("List"_(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
-                       "L_SHIPDATE"_("List"_(8107, 8867, 9554, 9130))),
+                       "L_SHIPDATE"_("List"_(8400, 9130, 9861, 9130))),
               "Sum"_("L_DISCOUNT"_), "Count"_("L_DISCOUNT"_)));
 #else
     CHECK(output == "Table"_("L_DISCOUNT"_("List"_(0.27)),
@@ -2299,7 +2335,7 @@ TEST_CASE("Dates and Group", "[hazard-adaptive-engine]") {
                        "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
                        "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
                        "L_TAX"_("List"_(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
-                       "L_SHIPDATE"_("List"_(8107, 8867, 9554, 9130))),
+                       "L_SHIPDATE"_("List"_(8400, 9130, 9861, 9130))),
               "As"_("total_discount"_, "Sum"_("L_DISCOUNT"_))));
 #else
     CHECK(output == "Table"_("total_discount"_("List"_(0.27)))); // NOLINT
@@ -2323,7 +2359,7 @@ TEST_CASE("Dates and Group", "[hazard-adaptive-engine]") {
                        "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
                        "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
                        "L_TAX"_("List"_(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
-                       "L_SHIPDATE"_("List"_(8107, 8867, 9554, 9130))),
+                       "L_SHIPDATE"_("List"_(8400, 9130, 9861, 9130))),
               "By"_("L_ORDERKEY"_), "As"_("sumParts"_, "Sum"_("L_PARTKEY"_))));
 #else
     CHECK(output ==
@@ -2348,7 +2384,7 @@ TEST_CASE("Dates and Group", "[hazard-adaptive-engine]") {
                        "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
                        "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
                        "L_TAX"_("List"_(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
-                       "L_SHIPDATE"_("List"_(8107, 8867, 9554, 9130))),
+                       "L_SHIPDATE"_("List"_(8400, 9130, 9861, 9130))),
               "By"_("L_ORDERKEY"_), "As"_("count"_, "Count"_("L_ORDERKEY"_))));
 #else
     CHECK(output ==
@@ -2374,7 +2410,7 @@ TEST_CASE("Dates and Group", "[hazard-adaptive-engine]") {
                        "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
                        "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
                        "L_TAX"_("List"_(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
-                       "L_SHIPDATE"_("List"_(8107, 8867, 9554, 9130))),
+                       "L_SHIPDATE"_("List"_(8400, 9130, 9861, 9130))),
               "By"_("L_ORDERKEY"_),
               "As"_("sum_quantity"_, "Sum"_("L_QUANTITY"_), "count"_, "Count"_("L_ORDERKEY"_))));
 #else
@@ -2401,7 +2437,7 @@ TEST_CASE("Dates and Group", "[hazard-adaptive-engine]") {
                        "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
                        "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
                        "L_TAX"_("List"_(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
-                       "L_SHIPDATE"_("List"_(8107, 8867, 9554, 9130))),
+                       "L_SHIPDATE"_("List"_(8400, 9130, 9861, 9130))),
               "By"_("L_ORDERKEY"_),
               "As"_("sum_price"_, "Sum"_("L_EXTENDEDPRICE"_), "count"_, "Count"_("L_ORDERKEY"_))));
 #else
@@ -2421,19 +2457,18 @@ TEST_CASE("TPC-H Q6", "[hazard-adaptive-engine]") {
   };
 
   auto lineitem =
-      "Table"_("L_ORDERKEY"_("List"_(1, 1, 2, 3)),                                 // NOLINT
-               "L_PARTKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
-               "L_SUPPKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
-               "L_RETURNFLAG"_("List"_("N", "N", "A", "A")),                       // NOLINT
-               "L_LINESTATUS"_("List"_("O", "O", "F", "F")),                       // NOLINT
-               "L_RETURNFLAG_INT"_("List"_('N'_i64, 'N'_i64, 'A'_i64, 'A'_i64)),   // NOLINT
-               "L_LINESTATUS_INT"_("List"_('O'_i64, 'O'_i64, 'F'_i64, 'F'_i64)),   // NOLINT
-               "L_QUANTITY"_("List"_(17, 21, 8, 5)),                               // NOLINT
-               "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
-               "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
-               "L_TAX"_("List"_(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
-               "L_SHIPDATE"_("List"_("DateObject"_("1992-03-13"), "DateObject"_("1994-04-12"),
-                                     "DateObject"_("1996-02-28"), "DateObject"_("1994-12-31"))));
+      "Table"_("L_ORDERKEY"_(createIntSpanOf(1, 1, 2, 3)),                                 // NOLINT
+               "L_PARTKEY"_(createIntSpanOf(1, 2, 3, 4)),                                  // NOLINT
+               "L_SUPPKEY"_(createIntSpanOf(1, 2, 3, 4)),                                  // NOLINT
+               "L_RETURNFLAG"_(createStringSpanOf("N", "N", "A", "A")),                       // NOLINT
+               "L_LINESTATUS"_(createStringSpanOf("O", "O", "F", "F")),                       // NOLINT
+               "L_RETURNFLAG_INT"_(createInt64SpanOf('N'_i64, 'N'_i64, 'A'_i64, 'A'_i64)),   // NOLINT
+               "L_LINESTATUS_INT"_(createInt64SpanOf('O'_i64, 'O'_i64, 'F'_i64, 'F'_i64)),   // NOLINT
+               "L_QUANTITY"_(createIntSpanOf(17, 21, 8, 5)),                               // NOLINT
+               "L_EXTENDEDPRICE"_(createFloatSpanOf(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
+               "L_DISCOUNT"_(createFloatSpanOf(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
+               "L_TAX"_(createFloatSpanOf(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
+               "L_SHIPDATE"_(createIntSpanOf(8400, 9130, 9861, 9130)));
 
   SECTION("Q6 (No Grouping)") {
     auto output = eval("Project"_(
@@ -2451,7 +2486,7 @@ TEST_CASE("TPC-H Q6", "[hazard-adaptive-engine]") {
     CHECK(output ==
           "Project"_("Gather"_("Table"_("L_QUANTITY"_("List"_(17, 21, 8, 5)),           // NOLINT
                                         "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)), // NOLINT
-                                        "L_SHIPDATE"_("List"_(8107, 8867, 9554, 9130)), // NOLINT
+                                        "L_SHIPDATE"_("List"_(8400, 9130, 9861, 9130)), // NOLINT
                                         "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48,
                                                                    25284.00))) // NOLINT
                                ,
@@ -2481,7 +2516,7 @@ TEST_CASE("TPC-H Q6", "[hazard-adaptive-engine]") {
           "Group"_("Project"_(
                        "Gather"_("Table"_("L_QUANTITY"_("List"_(17, 21, 8, 5)),           // NOLINT
                                           "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)), // NOLINT
-                                          "L_SHIPDATE"_("List"_(8107, 8867, 9554, 9130)), // NOLINT
+                                          "L_SHIPDATE"_("List"_(8400, 9130, 9861, 9130)), // NOLINT
                                           "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48,
                                                                      25284.00))) // NOLINT
                                  ,
@@ -2503,19 +2538,18 @@ TEST_CASE("TPC-H Q1", "[hazard-adaptive-engine]") {
   };
 
   auto lineitem =
-      "Table"_("L_ORDERKEY"_("List"_(1, 1, 2, 3)),                                 // NOLINT
-               "L_PARTKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
-               "L_SUPPKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
-               "L_RETURNFLAG"_("List"_("N", "N", "A", "A")),                       // NOLINT
-               "L_LINESTATUS"_("List"_("O", "O", "F", "F")),                       // NOLINT
-               "L_RETURNFLAG_INT"_("List"_('N'_i64, 'N'_i64, 'A'_i64, 'A'_i64)),   // NOLINT
-               "L_LINESTATUS_INT"_("List"_('O'_i64, 'O'_i64, 'F'_i64, 'F'_i64)),   // NOLINT
-               "L_QUANTITY"_("List"_(17, 21, 8, 5)),                               // NOLINT
-               "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
-               "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
-               "L_TAX"_("List"_(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
-               "L_SHIPDATE"_("List"_("DateObject"_("1992-03-13"), "DateObject"_("1994-04-12"),
-                                     "DateObject"_("1996-02-28"), "DateObject"_("1994-12-31"))));
+      "Table"_("L_ORDERKEY"_(createIntSpanOf(1, 1, 2, 3)),                                 // NOLINT
+               "L_PARTKEY"_(createIntSpanOf(1, 2, 3, 4)),                                  // NOLINT
+               "L_SUPPKEY"_(createIntSpanOf(1, 2, 3, 4)),                                  // NOLINT
+               "L_RETURNFLAG"_(createStringSpanOf("N", "N", "A", "A")),                       // NOLINT
+               "L_LINESTATUS"_(createStringSpanOf("O", "O", "F", "F")),                       // NOLINT
+               "L_RETURNFLAG_INT"_(createInt64SpanOf('N'_i64, 'N'_i64, 'A'_i64, 'A'_i64)),   // NOLINT
+               "L_LINESTATUS_INT"_(createInt64SpanOf('O'_i64, 'O'_i64, 'F'_i64, 'F'_i64)),   // NOLINT
+               "L_QUANTITY"_(createIntSpanOf(17, 21, 8, 5)),                               // NOLINT
+               "L_EXTENDEDPRICE"_(createFloatSpanOf(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
+               "L_DISCOUNT"_(createFloatSpanOf(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
+               "L_TAX"_(createFloatSpanOf(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
+               "L_SHIPDATE"_(createIntSpanOf(8400, 9130, 9861, 9130)));
 
   SECTION("Q1 (Project only)") {
     auto output = eval("Project"_(
@@ -2559,7 +2593,7 @@ TEST_CASE("TPC-H Q1", "[hazard-adaptive-engine]") {
         "Project"_(
             "Project"_("Gather"_("Table"_("L_QUANTITY"_("List"_(17, 21, 8, 5)),           // NOLINT
                                           "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)), // NOLINT
-                                          "L_SHIPDATE"_("List"_(8107, 8867, 9554, 9130)), // NOLINT
+                                          "L_SHIPDATE"_("List"_(8400, 9130, 9861, 9130)), // NOLINT
                                           "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48,
                                                                      25284.00)),     // NOLINT
                                           "L_TAX"_("List"_(0.02, 0.06, 0.02, 0.06))) // NOLINT
@@ -2596,19 +2630,18 @@ TEST_CASE("Project with calculation 2", "[hazard-adaptive-engine]") {
   };
 
   auto lineitem =
-      "Table"_("L_ORDERKEY"_("List"_(1, 1, 2, 3)),                                 // NOLINT
-               "L_PARTKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
-               "L_SUPPKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
-               "L_RETURNFLAG"_("List"_("N", "N", "A", "A")),                       // NOLINT
-               "L_LINESTATUS"_("List"_("O", "O", "F", "F")),                       // NOLINT
-               "L_RETURNFLAG_INT"_("List"_('N'_i64, 'N'_i64, 'A'_i64, 'A'_i64)),   // NOLINT
-               "L_LINESTATUS_INT"_("List"_('O'_i64, 'O'_i64, 'F'_i64, 'F'_i64)),   // NOLINT
-               "L_QUANTITY"_("List"_(17, 21, 8, 5)),                               // NOLINT
-               "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
-               "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
-               "L_TAX"_("List"_(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
-               "L_SHIPDATE"_("List"_("DateObject"_("1992-03-13"), "DateObject"_("1994-04-12"),
-                                     "DateObject"_("1996-02-28"), "DateObject"_("1994-12-31"))));
+      "Table"_("L_ORDERKEY"_(createIntSpanOf(1, 1, 2, 3)),                                 // NOLINT
+               "L_PARTKEY"_(createIntSpanOf(1, 2, 3, 4)),                                  // NOLINT
+               "L_SUPPKEY"_(createIntSpanOf(1, 2, 3, 4)),                                  // NOLINT
+               "L_RETURNFLAG"_(createStringSpanOf("N", "N", "A", "A")),                       // NOLINT
+               "L_LINESTATUS"_(createStringSpanOf("O", "O", "F", "F")),                       // NOLINT
+               "L_RETURNFLAG_INT"_(createInt64SpanOf('N'_i64, 'N'_i64, 'A'_i64, 'A'_i64)),   // NOLINT
+               "L_LINESTATUS_INT"_(createInt64SpanOf('O'_i64, 'O'_i64, 'F'_i64, 'F'_i64)),   // NOLINT
+               "L_QUANTITY"_(createIntSpanOf(17, 21, 8, 5)),                               // NOLINT
+               "L_EXTENDEDPRICE"_(createFloatSpanOf(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
+               "L_DISCOUNT"_(createFloatSpanOf(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
+               "L_TAX"_(createFloatSpanOf(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
+               "L_SHIPDATE"_(createIntSpanOf(8400, 9130, 9861, 9130)));
 
   SECTION("Project without calc") {
     auto output = eval("Project"_(lineitem.clone(CloneReason::FOR_TESTING),
@@ -2641,7 +2674,7 @@ TEST_CASE("Not evaluated", "[hazard-adaptive-engine]") {
 
   SECTION("Select - no table") {
     auto intTable =
-        "Table"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))); // NOLINT
+        "Table"_("Value1"_(createIntSpanOf(5, 3, 1, 4, 1)), "Value2"_(createIntSpanOf(1, 2, 3, 4, 5))); // NOLINT
     auto result = eval(
         "Select"_("Dummy"_, "Where"_("And"_("Greater"_("Value1"_, 3), "Greater"_(5, "Value1"_)))));
     CHECK(result == "Select"_("Dummy"_, "Where"_("And"_("Greater"_("Value1"_, 3),
@@ -2650,20 +2683,20 @@ TEST_CASE("Not evaluated", "[hazard-adaptive-engine]") {
 
   SECTION("Select - incorrectly named table") {
     auto result = eval(
-        "Select"_("NotTable"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))),
+        "Select"_("NotTable"_("Value1"_(createIntSpanOf(5, 3, 1, 4, 1)), "Value2"_(createIntSpanOf(1, 2, 3, 4, 5))),
                   "Where"_("And"_("Greater"_("Value1"_, 3), "Greater"_(5, "Value1"_)))));
     CHECK(
         result ==
-        "Select"_("NotTable"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))),
+        "Select"_("NotTable"_("Value1"_(createIntSpanOf(5, 3, 1, 4, 1)), "Value2"_(createIntSpanOf(1, 2, 3, 4, 5))),
                   "Where"_("And"_("Greater"_("Value1"_, 3), "Greater"_(5, "Value1"_)))));
   }
 
   SECTION("Select - no predicate") {
     auto intTable =
-        "Table"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))); // NOLINT
+        "Table"_("Value1"_(createIntSpanOf(5, 3, 1, 4, 1)), "Value2"_(createIntSpanOf(1, 2, 3, 4, 5))); // NOLINT
     auto result = eval("Select"_(std::move(intTable), "Where"_("Dummy"_)));
     CHECK(result ==
-          "Select"_("Table"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))),
+          "Select"_("Table"_("Value1"_(createIntSpanOf(5, 3, 1, 4, 1)), "Value2"_(createIntSpanOf(1, 2, 3, 4, 5))),
                     "Where"_("Dummy"_)));
   }
 
@@ -2685,7 +2718,7 @@ TEST_CASE("Partially evaluated", "[hazard-adaptive-engine]") {
 
   SECTION("Evaluate project but not select") {
     auto intTable =
-        "Table"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))); // NOLINT
+        "Table"_("Value1"_(createIntSpanOf(5, 3, 1, 4, 1)), "Value2"_(createIntSpanOf(1, 2, 3, 4, 5))); // NOLINT
     auto result = eval(
         "Select"_("Dummy"_, "Where"_("And"_("Greater"_("Value1"_, 3), "Greater"_(5, "Value1"_)))));
     CHECK(result == "Select"_("Dummy"_, "Where"_("And"_("Greater"_("Value1"_, 3),
@@ -2702,7 +2735,7 @@ TEST_CASE("Gather", "[hazard-adaptive-engine]") {
   };
 
   SECTION("Simple gather 1") {
-    auto intTable = "Table"_("Value"_("List"_(5, 3, 1, 4, 1))); // NOLINT
+    auto intTable = "Table"_("Value"_(createIntSpanOf(5, 3, 1, 4, 1))); // NOLINT
     auto result = eval("Select"_(std::move(intTable), "Where"_("Equal"_("Value"_, 1))));
 #ifdef DEFERRED_TO_OTHER_ENGINE
     CHECK(result == "Gather"_("Table"_("Value"_("List"_(5, 3, 1, 4, 1))), 2, 4));
@@ -2712,7 +2745,7 @@ TEST_CASE("Gather", "[hazard-adaptive-engine]") {
   }
 
   SECTION("Simple gather 2") {
-    auto intTable = "Table"_("Value"_("List"_(5, 3, 1, 4, 1))); // NOLINT
+    auto intTable = "Table"_("Value"_(createIntSpanOf(5, 3, 1, 4, 1))); // NOLINT
     auto result = eval("Select"_("Project"_(std::move(intTable), "As"_("key"_, "Value"_)),
                                  "Where"_("Equal"_("key"_, 1))));
 #ifdef DEFERRED_TO_OTHER_ENGINE
@@ -2722,8 +2755,6 @@ TEST_CASE("Gather", "[hazard-adaptive-engine]") {
 #endif
   }
 }
-
-using intType = int32_t;
 
 auto createTwoSpansIntStartingFrom = [](intType n) {
   using SpanArguments = boss::expressions::ExpressionSpanArguments;
