@@ -18,29 +18,22 @@
 #include <iostream>
 #include <memory>
 
-//#define PRINT_SELECTIVITY
-//#define STATE_DEBUG
-//#define DEBUG
-//#define VERBOSE_DEBUG
+// #define PRINT_SELECTIVITY
+// #define STATE_DEBUG
+// #define CONSTRUCT_DEBUG
+// #define DEBUG
+// #define VERBOSE_DEBUG
 
 namespace adaptive {
 
 /****************************** FOUNDATIONAL ALGORITHMS ******************************/
 
-template <typename T, typename P> class SelectOperator {
-public:
-  virtual inline size_t processMicroBatch(size_t startCandidates, size_t numCandidates,
-                                          const Span<T>& column, T value, bool columnIsFirstArg,
-                                          P& predicate, const Span<int32_t>* candidateIndexes,
-                                          int32_t* selectedIndexes) = 0;
-};
-
-template <typename T, typename P> class SelectBranch : public SelectOperator<T, P> {
+template <typename T, typename P> class SelectBranch {
 public:
   inline size_t processMicroBatch(size_t startCandidates, size_t numCandidates,
                                   const Span<T>& column, T value, bool columnIsFirstArg,
                                   P& predicate, const Span<int32_t>* candidateIndexes,
-                                  int32_t* selectedIndexes) final {
+                                  int32_t* selectedIndexes) {
     size_t numSelected = 0;
     if(!candidateIndexes) {
       if(columnIsFirstArg) {
@@ -75,12 +68,12 @@ public:
   }
 };
 
-template <typename T, typename P> class SelectPredication : public SelectOperator<T, P> {
+template <typename T, typename P> class SelectPredication {
 public:
   inline size_t processMicroBatch(size_t startCandidates, size_t numCandidates,
                                   const Span<T>& column, T value, bool columnIsFirstArg,
                                   P& predicate, const Span<int32_t>* candidateIndexes,
-                                  int32_t* selectedIndexes) final {
+                                  int32_t* selectedIndexes) {
     size_t numSelected = 0;
     if(!candidateIndexes) {
       if(columnIsFirstArg) {
@@ -123,6 +116,11 @@ template <typename T, typename P> static SelectPredication<T, P>& getSelectPredi
 
 /****************************** SINGLE-THREADED ******************************/
 
+static inline PAPI_eventSet& getEventSet() {
+  static PAPI_eventSet eventSet({"PERF_COUNT_HW_BRANCH_MISSES"});
+  return eventSet;
+}
+
 template <typename T, typename P> class MonitorSelect;
 
 template <typename T, typename P> class SelectAdaptive {
@@ -146,6 +144,7 @@ private:
   int32_t consecutivePredications;
   SelectImplementation activeOperator;
 
+  PAPI_eventSet& eventSet;
   MonitorSelect<T, P> monitor;
   SelectBranch<T, P> branchOperator;
   SelectPredication<T, P> predicationOperator;
@@ -159,11 +158,14 @@ private:
 
 template <typename T, typename P> class MonitorSelect {
 public:
-  explicit MonitorSelect(SelectAdaptive<T, P>* selectOperator_) : selectOperator(selectOperator_) {
-    branchMispredictions = Counters::getInstance().getBranchMisPredictionsCounter();
+  explicit MonitorSelect(SelectAdaptive<T, P>* selectOperator_, int32_t dop,
+                         const long_long* branchMispredictions_)
+      : selectOperator(selectOperator_), branchMispredictions(branchMispredictions_) {
 
-    std::string lowerName = "SelectLower_" + std::to_string(sizeof(T)) + "B_elements_1_dop";
-    std::string upperName = "SelectUpper_" + std::to_string(sizeof(T)) + "B_elements_1_dop";
+    std::string lowerName =
+        "SelectLower_" + std::to_string(sizeof(T)) + "B_elements_" + std::to_string(dop) + "_dop";
+    std::string upperName =
+        "SelectUpper_" + std::to_string(sizeof(T)) + "B_elements_" + std::to_string(dop) + "_dop";
     lowerCrossoverSelectivity =
         static_cast<float>(MachineConstants::getInstance().getMachineConstant(lowerName));
     upperCrossoverSelectivity =
@@ -212,19 +214,25 @@ public:
   int32_t getMispredictions() { return static_cast<int32_t>(*branchMispredictions); }
 
 private:
-  const long_long* branchMispredictions;
   float lowerCrossoverSelectivity;
   float upperCrossoverSelectivity;
   float m;
   SelectAdaptive<T, P>* selectOperator;
+  const long_long* branchMispredictions;
 };
 
+// TODO - correct dop should be passed into the monitor object here
 template <typename T, typename P>
 SelectAdaptive<T, P>::SelectAdaptive()
     : tuplesPerHazardCheck(50000), maxConsecutivePredications(10), tuplesInBranchBurst(1000),
       consecutivePredications(maxConsecutivePredications),
-      activeOperator(SelectImplementation::Predication_), monitor(MonitorSelect<T, P>(this)),
-      branchOperator(SelectBranch<T, P>()), predicationOperator(SelectPredication<T, P>()) {}
+      activeOperator(SelectImplementation::Predication_), eventSet(getEventSet()),
+      monitor(MonitorSelect<T, P>(this, 1, eventSet.getCounterDiffsPtr())),
+      branchOperator(SelectBranch<T, P>()), predicationOperator(SelectPredication<T, P>()) {
+#ifdef CONSTRUCT_DEBUG
+  std::cout << "Constructing Select Adaptive operator object" << std::endl;
+#endif
+}
 
 template <typename T, typename P> void SelectAdaptive<T, P>::adjustRobustness(int adjustment) {
   if(__builtin_expect((adjustment > 0) && activeOperator == SelectImplementation::Branch_, false)) {
@@ -348,20 +356,20 @@ inline void SelectAdaptive<T, P>::processMicroBatch(const Span<T>& column, T val
 #ifdef VERBOSE_DEBUG
     std::cout << "Processing micro-batch with Branch" << std::endl;
 #endif
-    Counters::getInstance().readEventSetAndGetCycles();
+    eventSet.readCounters();
     microBatchSelected = branchOperator.processMicroBatch(
         microBatchStartIndex, microBatchSize, column, value, columnIsFirstArg, predicate,
         candidateIndexesPtr, selectedIndexes);
-    Counters::getInstance().readEventSetAndCalculateDiff();
+    eventSet.readCountersAndUpdateDiff();
   } else {
 #ifdef VERBOSE_DEBUG
     std::cout << "Processing micro-batch with Predication" << std::endl;
 #endif
-    Counters::getInstance().readEventSetAndGetCycles();
+    eventSet.readCounters();
     microBatchSelected = predicationOperator.processMicroBatch(
         microBatchStartIndex, microBatchSize, column, value, columnIsFirstArg, predicate,
         candidateIndexesPtr, selectedIndexes);
-    Counters::getInstance().readEventSetAndCalculateDiff();
+    eventSet.readCountersAndUpdateDiff();
   }
   remainingTuples -= microBatchSize;
   microBatchStartIndex += microBatchSize;
@@ -438,9 +446,8 @@ private:
 
   int32_t* threadSelectionBuffer;
   int32_t* threadSelection;
-  std::unique_ptr<long_long> branchMispredictions;
-  std::unique_ptr<MonitorSelectParallel<T, P>> monitor;
-  int eventSet;
+  PAPI_eventSet eventSet;
+  MonitorSelectParallel<T, P> monitor;
 
   size_t consecutivePredications;
   size_t threadSelected;
@@ -452,8 +459,8 @@ private:
 template <typename T, typename P> class MonitorSelectParallel {
 public:
   MonitorSelectParallel(SelectAdaptiveParallelAux<T, P>* selectOperator_, int32_t dop,
-                        long_long* branchMispredictions_)
-      : branchMispredictions(branchMispredictions_), selectOperator(selectOperator_) {
+                        const long_long* branchMispredictions_)
+      : selectOperator(selectOperator_), branchMispredictions(branchMispredictions_) {
 
     std::string lowerName =
         "SelectLower_" + std::to_string(sizeof(T)) + "B_elements_" + std::to_string(dop) + "_dop";
@@ -487,11 +494,11 @@ public:
   }
 
 private:
-  long_long* branchMispredictions;
   float lowerCrossoverSelectivity;
   float upperCrossoverSelectivity;
   float m;
   SelectAdaptiveParallelAux<T, P>* selectOperator;
+  const long_long* branchMispredictions;
 };
 
 template <typename T, typename P>
@@ -503,7 +510,8 @@ SelectAdaptiveParallelAux<T, P>::SelectAdaptiveParallelAux(SelectThreadArgs<T, P
       positionToWrite(args->positionToWrite), dop(args->dop), threadNum(args->threadNum),
       tuplesPerHazardCheck(50000), maxConsecutivePredications(10), tuplesInBranchBurst(1000),
       activeOperator(SelectImplementation::Predication_), branchOperator(SelectBranch<T, P>()),
-      predicationOperator(SelectPredication<T, P>()),
+      predicationOperator(SelectPredication<T, P>()), eventSet({"PERF_COUNT_HW_BRANCH_MISSES"}),
+      monitor(MonitorSelectParallel<T, P>(this, dop, eventSet.getCounterDiffsPtr())),
       consecutivePredications(maxConsecutivePredications), threadSelected(0) {
 
   if(threadNum == 0) {
@@ -513,13 +521,6 @@ SelectAdaptiveParallelAux<T, P>::SelectAdaptiveParallelAux(SelectThreadArgs<T, P
     threadSelectionBuffer = new int32_t[remainingTuples];
     threadSelection = threadSelectionBuffer;
   }
-
-  eventSet = PAPI_NULL;
-  std::vector<std::string> counters = {"PERF_COUNT_HW_BRANCH_MISSES"};
-  createThreadEventSet(&eventSet, counters);
-
-  branchMispredictions = std::make_unique<long_long>();
-  monitor = std::make_unique<MonitorSelectParallel<T, P>>(this, dop, branchMispredictions.get());
 }
 
 template <typename T, typename P>
@@ -552,7 +553,7 @@ template <typename T, typename P> void SelectAdaptiveParallelAux<T, P>::processI
       microBatchSize = std::min(remainingTuples, tuplesPerHazardCheck);
     }
     processMicroBatch();
-    monitor->checkHazards(microBatchSize, microBatchSelected);
+    monitor.checkHazards(microBatchSize, microBatchSelected);
   }
 }
 
@@ -562,20 +563,20 @@ template <typename T, typename P> inline void SelectAdaptiveParallelAux<T, P>::p
 #ifdef VERBOSE_DEBUG
     std::cout << "Processing micro-batch with Branch" << std::endl;
 #endif
-    readThreadEventSet(eventSet, 1, branchMispredictions.get());
+    eventSet.readCounters();
     microBatchSelected = branchOperator.processMicroBatch(
         microBatchStartIndex, microBatchSize, column, value, columnIsFirstArg, predicate,
         candidateIndexes, threadSelection);
-    readThreadEventSet(eventSet, 1, branchMispredictions.get());
+    eventSet.readCountersAndUpdateDiff();
   } else {
 #ifdef VERBOSE_DEBUG
     std::cout << "Processing micro-batch with Predication" << std::endl;
 #endif
-    readThreadEventSet(eventSet, 1, branchMispredictions.get());
+    eventSet.readCounters();
     microBatchSelected = predicationOperator.processMicroBatch(
         microBatchStartIndex, microBatchSize, column, value, columnIsFirstArg, predicate,
         candidateIndexes, threadSelection);
-    readThreadEventSet(eventSet, 1, branchMispredictions.get());
+    eventSet.readCountersAndUpdateDiff();
     consecutivePredications++;
   }
   remainingTuples -= microBatchSize;
@@ -601,7 +602,6 @@ template <typename T, typename P> SelectAdaptiveParallelAux<T, P>::~SelectAdapti
   if(threadNum != 0) {
     delete[] threadSelectionBuffer;
   }
-  destroyThreadEventSet(eventSet, branchMispredictions.get());
 }
 
 template <typename T, typename P> void* selectAdaptiveParallelAux(void* arg) {
@@ -635,7 +635,6 @@ public:
       candidateIndexes =
           Span<int32_t>(indexesArray, column.size(), [indexesArray]() { delete[] indexesArray; });
     }
-    Counters::getInstance();
     MachineConstants::getInstance();
   }
 
@@ -699,8 +698,6 @@ Span<int32_t> select(Select implementation, const Span<T>& column, T value, bool
                      P& predicate, Span<int32_t>&& candidateIndexes, size_t dop,
                      SelectOperatorState* state, bool calibrationRun) {
   assert(1 <= dop && dop <= logicalCoresCount());
-  // TODO - update adaptive parallel to use the select operator state
-  // TODO - this is the chance to unify the AdaptiveParallel and Adaptive objects into one
   if(implementation == Select::AdaptiveParallel) {
     SelectAdaptiveParallel<T, P> selectOperator(column, value, columnIsFirstArg, predicate,
                                                 std::move(candidateIndexes), dop, calibrationRun);

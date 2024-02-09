@@ -22,6 +22,7 @@ template <typename T> double calculateSelectLowerMachineConstant(uint32_t dop) {
 
   auto predicate = std::greater();
 
+  auto eventSet = PAPI_eventSet({"PERF_COUNT_HW_CPU_CYCLES"});
   long_long branchCycles, predicationCycles;
   double upperSelectivity = 0.5;
   double lowerSelectivity = 0;
@@ -42,16 +43,18 @@ template <typename T> double calculateSelectLowerMachineConstant(uint32_t dop) {
       Span<T> columnSpan1 = Span<T>(std::move(std::vector(column1)));
 
       if(dop == 1) {
-        branchCycles = *Counters::getInstance().readEventSetAndGetCycles();
+        eventSet.readCounters();
         select(Select::Branch, columnSpan1, 1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity),
                false, predicate, {});
-        branchCycles = *Counters::getInstance().readEventSetAndGetCycles() - branchCycles;
+        eventSet.readCountersAndUpdateDiff();
+        branchCycles = *eventSet.getCounterDiffsPtr();
       } else {
         MachineConstants::getInstance().updateMachineConstant(machineConstantLowerName, 1);
         MachineConstants::getInstance().updateMachineConstant(machineConstantUpperName, 0);
         branchCycles = PAPI_get_real_usec();
-        select(Select::AdaptiveParallel, columnSpan1, 1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity),
-               false, predicate, {}, dop, nullptr, true);
+        select(Select::AdaptiveParallel, columnSpan1,
+               1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity), false, predicate, {}, dop,
+               nullptr, true);
         branchCycles = PAPI_get_real_usec() - branchCycles;
       }
     }
@@ -62,16 +65,18 @@ template <typename T> double calculateSelectLowerMachineConstant(uint32_t dop) {
       Span<T> columnSpan2 = Span<T>(std::move(std::vector(column2)));
 
       if(dop == 1) {
-        predicationCycles = *Counters::getInstance().readEventSetAndGetCycles();
+        eventSet.readCounters();
         select(Select::Predication, columnSpan2,
                1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity), false, predicate, {});
-        predicationCycles = *Counters::getInstance().readEventSetAndGetCycles() - predicationCycles;
+        eventSet.readCountersAndUpdateDiff();
+        predicationCycles = *eventSet.getCounterDiffsPtr();
       } else {
         MachineConstants::getInstance().updateMachineConstant(machineConstantLowerName, 0);
         MachineConstants::getInstance().updateMachineConstant(machineConstantUpperName, 1);
         predicationCycles = PAPI_get_real_usec();
-        select(Select::AdaptiveParallel, columnSpan2, 1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity),
-               false, predicate, {}, dop, nullptr, true);
+        select(Select::AdaptiveParallel, columnSpan2,
+               1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity), false, predicate, {}, dop,
+               nullptr, true);
         predicationCycles = PAPI_get_real_usec() - predicationCycles;
       }
     }
@@ -100,6 +105,7 @@ template <typename T> double calculateSelectUpperMachineConstant(uint32_t dop) {
 
   auto predicate = std::greater();
 
+  auto eventSet = PAPI_eventSet({"PERF_COUNT_HW_CPU_CYCLES"});
   long_long branchCycles, predicationCycles;
   double upperSelectivity = 1.0;
   double lowerSelectivity = 0.5;
@@ -120,16 +126,18 @@ template <typename T> double calculateSelectUpperMachineConstant(uint32_t dop) {
       Span<T> columnSpan1 = Span<T>(std::move(std::vector(column1)));
 
       if(dop == 1) {
-        branchCycles = *Counters::getInstance().readEventSetAndGetCycles();
+        eventSet.readCounters();
         select(Select::Branch, columnSpan1, 1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity),
                false, predicate, {});
-        branchCycles = *Counters::getInstance().readEventSetAndGetCycles() - branchCycles;
+        eventSet.readCountersAndUpdateDiff();
+        branchCycles = *eventSet.getCounterDiffsPtr();
       } else {
         MachineConstants::getInstance().updateMachineConstant(machineConstantLowerName, 1);
         MachineConstants::getInstance().updateMachineConstant(machineConstantUpperName, 0);
         branchCycles = PAPI_get_real_usec();
-        select(Select::AdaptiveParallel, columnSpan1, 1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity),
-               false, predicate, {}, dop, nullptr, true);
+        select(Select::AdaptiveParallel, columnSpan1,
+               1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity), false, predicate, {}, dop,
+               nullptr, true);
         branchCycles = PAPI_get_real_usec() - branchCycles;
       }
     }
@@ -140,16 +148,18 @@ template <typename T> double calculateSelectUpperMachineConstant(uint32_t dop) {
       Span<T> columnSpan2 = Span<T>(std::move(std::vector(column2)));
 
       if(dop == 1) {
-        predicationCycles = *Counters::getInstance().readEventSetAndGetCycles();
+        eventSet.readCounters();
         select(Select::Predication, columnSpan2,
                1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity), false, predicate, {});
-        predicationCycles = *Counters::getInstance().readEventSetAndGetCycles() - predicationCycles;
+        eventSet.readCountersAndUpdateDiff();
+        predicationCycles = *eventSet.getCounterDiffsPtr();
       } else {
         MachineConstants::getInstance().updateMachineConstant(machineConstantLowerName, 0);
         MachineConstants::getInstance().updateMachineConstant(machineConstantUpperName, 1);
         predicationCycles = PAPI_get_real_usec();
-        select(Select::AdaptiveParallel, columnSpan2, 1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity),
-               false, predicate, {}, dop, nullptr, true);
+        select(Select::AdaptiveParallel, columnSpan2,
+               1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity), false, predicate, {}, dop,
+               nullptr, true);
         predicationCycles = PAPI_get_real_usec() - predicationCycles;
       }
     }

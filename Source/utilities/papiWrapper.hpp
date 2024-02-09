@@ -5,32 +5,27 @@
 #include <string>
 #include <vector>
 
-#define COUNTERS 2 // "PERF_COUNT_HW_CPU_CYCLES", "PERF_COUNT_HW_BRANCH_MISSES"
-
 namespace adaptive {
 
-class Counters {
-public:
-  static Counters& getInstance();
-  Counters(const Counters&) = delete;
-  void operator=(const Counters&) = delete;
+void initialisePapi();
+void shutdownPapi();
 
-  long_long* getBranchMisPredictionsCounter();
-  long_long* readEventSetAndGetCycles();
-  void readEventSetAndCalculateDiff();
+class PAPI_eventSet {
+public:
+  PAPI_eventSet(const PAPI_eventSet&) = delete;
+  void operator=(const PAPI_eventSet&) = delete;
+
+  explicit PAPI_eventSet(const std::vector<std::string>& counterNames);
+  ~PAPI_eventSet();
+  long_long* getCounterDiffsPtr();
+  void readCounters();
+  void readCountersAndUpdateDiff();
 
 private:
-  Counters();
-  ~Counters();
-
   int eventSet;
-  long_long counterValues[COUNTERS] = {0};
-  long_long counterValuesDiff[COUNTERS] = {0};
+  std::vector<long_long> counterValues;
+  std::vector<long_long> counterValuesDiff;
 };
-
-void createThreadEventSet(int* eventSet, std::vector<std::string>& counterNames);
-void readThreadEventSet(int eventSet, int numEvents, long_long* values);
-void destroyThreadEventSet(int eventSet, long_long* values);
 
 } // namespace adaptive
 
