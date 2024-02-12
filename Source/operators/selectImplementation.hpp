@@ -117,7 +117,7 @@ template <typename T, typename P> static SelectPredication<T, P>& getSelectPredi
 /****************************** SINGLE-THREADED ******************************/
 
 static inline PAPI_eventSet& getEventSet() {
-  static PAPI_eventSet eventSet({"PERF_COUNT_HW_BRANCH_MISSES"});
+  thread_local static PAPI_eventSet eventSet({"PERF_COUNT_HW_BRANCH_MISSES"});
   return eventSet;
 }
 
@@ -378,7 +378,7 @@ inline void SelectAdaptive<T, P>::processMicroBatch(const Span<T>& column, T val
 }
 
 template <typename T, typename P> static SelectAdaptive<T, P>& getSelectAdaptiveOperator() {
-  static SelectAdaptive<T, P> selectAdaptiveOperator;
+  thread_local static SelectAdaptive<T, P> selectAdaptiveOperator;
   return selectAdaptiveOperator;
 }
 
@@ -446,7 +446,7 @@ private:
 
   int32_t* threadSelectionBuffer;
   int32_t* threadSelection;
-  PAPI_eventSet eventSet;
+  PAPI_eventSet& eventSet;
   MonitorSelectParallel<T, P> monitor;
 
   size_t consecutivePredications;
@@ -510,7 +510,7 @@ SelectAdaptiveParallelAux<T, P>::SelectAdaptiveParallelAux(SelectThreadArgs<T, P
       positionToWrite(args->positionToWrite), dop(args->dop), threadNum(args->threadNum),
       tuplesPerHazardCheck(50000), maxConsecutivePredications(10), tuplesInBranchBurst(1000),
       activeOperator(SelectImplementation::Predication_), branchOperator(SelectBranch<T, P>()),
-      predicationOperator(SelectPredication<T, P>()), eventSet({"PERF_COUNT_HW_BRANCH_MISSES"}),
+      predicationOperator(SelectPredication<T, P>()), eventSet(getEventSet()),
       monitor(MonitorSelectParallel<T, P>(this, dop, eventSet.getCounterDiffsPtr())),
       consecutivePredications(maxConsecutivePredications), threadSelected(0) {
 
@@ -617,12 +617,9 @@ template <typename T, typename P> void* selectAdaptiveParallelAux(void* arg) {
 template <typename T, typename P> class SelectAdaptiveParallel {
 public:
   SelectAdaptiveParallel(const Span<T>& column_, T value_, bool columnIsFirstArg_, P& predicate_,
-                         Span<int32_t>&& candidateIndexes_, int32_t dop_, bool calibrationRun)
+                         Span<int32_t>&& candidateIndexes_, int32_t dop_)
       : column(column_), value(value_), columnIsFirstArg(columnIsFirstArg_), predicate(predicate_),
         candidateIndexes(std::move(candidateIndexes_)), dop(dop_) {
-    if(!calibrationRun) {
-      MachineConstants::getInstance().calculateMissingMachineConstants();
-    }
 
     n = candidateIndexes.size() == 0 ? column.size() : candidateIndexes.size();
     while(dop > 1 && (n / dop) < adaptive::config::minTuplesPerThread) {
@@ -635,7 +632,6 @@ public:
       candidateIndexes =
           Span<int32_t>(indexesArray, column.size(), [indexesArray]() { delete[] indexesArray; });
     }
-    MachineConstants::getInstance();
   }
 
   Span<int32_t> processInput() {
@@ -696,11 +692,11 @@ private:
 template <typename T, typename P>
 Span<int32_t> select(Select implementation, const Span<T>& column, T value, bool columnIsFirstArg,
                      P& predicate, Span<int32_t>&& candidateIndexes, size_t dop,
-                     SelectOperatorState* state, bool calibrationRun) {
+                     SelectOperatorState* state) {
   assert(1 <= dop && dop <= logicalCoresCount());
   if(implementation == Select::AdaptiveParallel) {
     SelectAdaptiveParallel<T, P> selectOperator(column, value, columnIsFirstArg, predicate,
-                                                std::move(candidateIndexes), dop, calibrationRun);
+                                                std::move(candidateIndexes), dop);
     return std::move(selectOperator.processInput());
   }
 

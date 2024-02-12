@@ -7,7 +7,7 @@
 #include <pthread.h>
 #include <queue>
 
-//#define MEMORY_INFO
+#define MEMORY_INFO
 
 class ThreadPool {
 public:

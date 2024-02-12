@@ -8,16 +8,6 @@
 
 namespace adaptive {
 
-void calculateMissingMachineConstants() {
-  MachineConstants::getInstance().calculateMissingMachineConstants();
-}
-
-void clearAndRecalculateMachineConstants() {
-  MachineConstants::getInstance().clearAndRecalculateMachineConstants();
-}
-
-void printMachineConstants() { MachineConstants::getInstance().printMachineConstants(); }
-
 MachineConstants& MachineConstants::getInstance() {
   static MachineConstants instance;
   return instance;
@@ -37,15 +27,12 @@ MachineConstants::MachineConstants() {
   loadMachineConstants();
 }
 
-double MachineConstants::getMachineConstant(std::string& key) {
+double MachineConstants::getMachineConstant(const std::string& key) const {
   if(machineConstants.count(key) == 0) {
-    std::cout << "Machine constant for " << key
-              << " does not exist, calculating all missing values now. "
-                 "This may take a while."
-              << std::endl;
-    calculateMissingMachineConstants();
+    std::cout << "Machine constant for " << key << " not found. Exiting..." << std::endl;
+    exit(1);
   }
-  return machineConstants[key];
+  return machineConstants.at(key);
 }
 
 void MachineConstants::updateMachineConstant(const std::string& key, double value) {
@@ -87,6 +74,7 @@ void MachineConstants::loadMachineConstants() {
     writeEmptyFile();
     machineConstants = {};
   }
+  calculateMissingMachineConstants();
 }
 
 void MachineConstants::writeEmptyFile() {
@@ -106,11 +94,17 @@ void MachineConstants::calculateMissingMachineConstants() {
 
     if(machineConstants.count("SelectLower_4B_elements_" + dopStr + "_dop") == 0 ||
        machineConstants.count("SelectUpper_4B_elements_" + dopStr + "_dop") == 0) {
+      std::cout << "Machine constant for Select (4B elements, dop=" + dopStr +
+                       ") does not exist. Calculating now (this may take a while)."
+                << std::endl;
       calculateSelectMachineConstants<int32_t>(dop);
     }
 
     if(machineConstants.count("SelectLower_8B_elements_" + dopStr + "_dop") == 0 ||
        machineConstants.count("SelectUpper_8B_elements_" + dopStr + "_dop") == 0) {
+      std::cout << "Machine constant for Select (8B elements, dop=" + dopStr +
+                       ") does not exist. Calculating now (this may take a while)."
+                << std::endl;
       calculateSelectMachineConstants<int64_t>(dop);
     }
 
@@ -118,20 +112,6 @@ void MachineConstants::calculateMissingMachineConstants() {
       break;
     }
     dop = (dop * 2) <= logicalCoresCount() ? dop * 2 : logicalCoresCount();
-  }
-}
-
-void MachineConstants::clearAndRecalculateMachineConstants() {
-  writeEmptyFile();
-  loadMachineConstants();
-  calculateMissingMachineConstants();
-}
-
-void MachineConstants::printMachineConstants() {
-  std::cout << "Machine Constants:" << std::endl;
-  for(const auto& machineConstant : machineConstants) {
-    std::cout << "Constant: '" << machineConstant.first << "', Value: " << machineConstant.second
-              << std::endl;
   }
 }
 

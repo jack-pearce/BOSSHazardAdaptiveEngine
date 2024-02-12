@@ -53,8 +53,7 @@ template <typename T> double calculateSelectLowerMachineConstant(uint32_t dop) {
         MachineConstants::getInstance().updateMachineConstant(machineConstantUpperName, 0);
         branchCycles = PAPI_get_real_usec();
         select(Select::AdaptiveParallel, columnSpan1,
-               1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity), false, predicate, {}, dop,
-               nullptr, true);
+               1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity), false, predicate, {}, dop);
         branchCycles = PAPI_get_real_usec() - branchCycles;
       }
     }
@@ -75,8 +74,7 @@ template <typename T> double calculateSelectLowerMachineConstant(uint32_t dop) {
         MachineConstants::getInstance().updateMachineConstant(machineConstantUpperName, 1);
         predicationCycles = PAPI_get_real_usec();
         select(Select::AdaptiveParallel, columnSpan2,
-               1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity), false, predicate, {}, dop,
-               nullptr, true);
+               1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity), false, predicate, {}, dop);
         predicationCycles = PAPI_get_real_usec() - predicationCycles;
       }
     }
@@ -136,8 +134,7 @@ template <typename T> double calculateSelectUpperMachineConstant(uint32_t dop) {
         MachineConstants::getInstance().updateMachineConstant(machineConstantUpperName, 0);
         branchCycles = PAPI_get_real_usec();
         select(Select::AdaptiveParallel, columnSpan1,
-               1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity), false, predicate, {}, dop,
-               nullptr, true);
+               1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity), false, predicate, {}, dop);
         branchCycles = PAPI_get_real_usec() - branchCycles;
       }
     }
@@ -158,8 +155,7 @@ template <typename T> double calculateSelectUpperMachineConstant(uint32_t dop) {
         MachineConstants::getInstance().updateMachineConstant(machineConstantUpperName, 1);
         predicationCycles = PAPI_get_real_usec();
         select(Select::AdaptiveParallel, columnSpan2,
-               1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity), false, predicate, {}, dop,
-               nullptr, true);
+               1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity), false, predicate, {}, dop);
         predicationCycles = PAPI_get_real_usec() - predicationCycles;
       }
     }

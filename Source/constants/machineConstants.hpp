@@ -7,21 +7,15 @@
 
 namespace adaptive {
 
-void printMachineConstants();
-void calculateMissingMachineConstants();
-void clearAndRecalculateMachineConstants();
-
 class MachineConstants {
 public:
     static MachineConstants& getInstance();
     MachineConstants(const MachineConstants&) = delete;
     void operator=(const MachineConstants&) = delete;
 
-    double getMachineConstant(std::string &key);
+    [[nodiscard]] double getMachineConstant(const std::string &key) const;
     void updateMachineConstant(const std::string& key, double value);
-    void printMachineConstants();
     void calculateMissingMachineConstants();
-    void clearAndRecalculateMachineConstants();
 
 private:
     MachineConstants();

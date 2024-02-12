@@ -9,24 +9,15 @@ using adaptive::SelectOperatorStates;
 namespace adaptive {
 
 class SelectOperatorStats {
-private:
-  SelectOperatorStates* selectOperatorStates;
-
-  SelectOperatorStats() : selectOperatorStates(nullptr) {}
-
 public:
-  static SelectOperatorStats& getInstance() {
-    static SelectOperatorStats instance;
-    return instance;
-  }
-
+  SelectOperatorStats() : selectOperatorStates(nullptr) {}
   void setStatsPtr(SelectOperatorStates* newPtr) { selectOperatorStates = newPtr; }
-
-  [[nodiscard]] SelectOperatorStates* getStatsPtr() const { return selectOperatorStates; }
-
   [[nodiscard]] SelectOperatorState& getStateOfID(int id) const {
     return (*selectOperatorStates)[id];
   }
+
+private:
+  SelectOperatorStates* selectOperatorStates;
 };
 
 } // namespace adaptive

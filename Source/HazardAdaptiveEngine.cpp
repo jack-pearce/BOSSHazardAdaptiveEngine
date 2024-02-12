@@ -64,6 +64,11 @@ using SpanInputs = std::variant<std::vector<std::int32_t>, std::vector<std::int6
 
 using namespace boss::algorithm;
 
+static SelectOperatorStats& getSelectOperatorStats() {
+  thread_local static SelectOperatorStats selectOperatorStats;
+  return selectOperatorStats;
+}
+
 /** Pred function takes a relation in the form of ExpressionArguments, and an optional pointer to
  * a span of candidate indexes. Based on these inputs and the internal predicate it returns an
  * optional span in the form of an ExpressionSpanArgument.
@@ -401,7 +406,7 @@ private:
   template <typename T1, typename T2, typename F>
   static ExpressionSpanArgument createLambdaResult(T1&& arg1, T2&& arg2, F& f, int predicateID) {
     SelectOperatorState* state =
-        predicateID >= 0 ? &SelectOperatorStats::getInstance().getStateOfID(predicateID) : nullptr;
+        predicateID >= 0 ? &getSelectOperatorStats().getStateOfID(predicateID) : nullptr;
     ExpressionSpanArgument span;
     std::visit(
         [&span, &f, state](auto&& typedSpan1, auto&& typedSpan2) {
@@ -460,7 +465,7 @@ private:
   static ExpressionSpanArgument
   createLambdaPipelineResult(T1&& arg1, T2&& arg2, F& f, Span<int32_t>& indexes, int predicateID) {
     SelectOperatorState* state =
-        predicateID >= 0 ? &SelectOperatorStats::getInstance().getStateOfID(predicateID) : nullptr;
+        predicateID >= 0 ? &getSelectOperatorStats().getStateOfID(predicateID) : nullptr;
     std::visit(
         [&indexes, &f, state](auto&& typedSpan1, auto&& typedSpan2) {
           using SpanType1 = std::decay_t<decltype(typedSpan1)>;
@@ -1200,8 +1205,8 @@ static boss::Expression evaluate(boss::Expression&& expr) {
         throw std::runtime_error("No pointers to operator states in stats expression");
       auto selectOperatorStates =
           reinterpret_cast<SelectOperatorStates*>(get<int64_t>(statsArgs.at(0)));
-      SelectOperatorStats::getInstance().setStatsPtr(selectOperatorStates);
-      return toBOSSExpression(evaluateInternal(std::move(query)));
+      getSelectOperatorStats().setStatsPtr(selectOperatorStates);
+      return toBOSSExpression(evaluateInternal(std::move(query))); // TODO - remove?
     }
     return toBOSSExpression(evaluateInternal(std::move(expr)));
   } catch(std::exception const& e) {

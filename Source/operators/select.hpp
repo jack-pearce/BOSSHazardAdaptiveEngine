@@ -16,7 +16,7 @@ std::string getSelectName(Select select);
 template <typename T, typename F>
 Span<int32_t> select(Select implementation, const Span<T>& column, T value, bool columnIsFirstArg,
                      F& predicate, Span<int32_t>&& candidateIndexes, size_t dop = 1,
-                     SelectOperatorState* state = nullptr, bool calibrationRun = false);
+                     SelectOperatorState* state = nullptr);
 
 } // namespace adaptive
 
