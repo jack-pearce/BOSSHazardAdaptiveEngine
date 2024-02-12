@@ -94,7 +94,7 @@ void MachineConstants::calculateMissingMachineConstants() {
 
     if(machineConstants.count("SelectLower_4B_elements_" + dopStr + "_dop") == 0 ||
        machineConstants.count("SelectUpper_4B_elements_" + dopStr + "_dop") == 0) {
-      std::cout << "Machine constant for Select (4B elements, dop=" + dopStr +
+      std::cout << "Machine constant for Select (4B elements, constantsDOP=" + dopStr +
                        ") does not exist. Calculating now (this may take a while)."
                 << std::endl;
       calculateSelectMachineConstants<int32_t>(dop);
@@ -102,7 +102,7 @@ void MachineConstants::calculateMissingMachineConstants() {
 
     if(machineConstants.count("SelectLower_8B_elements_" + dopStr + "_dop") == 0 ||
        machineConstants.count("SelectUpper_8B_elements_" + dopStr + "_dop") == 0) {
-      std::cout << "Machine constant for Select (8B elements, dop=" + dopStr +
+      std::cout << "Machine constant for Select (8B elements, constantsDOP=" + dopStr +
                        ") does not exist. Calculating now (this may take a while)."
                 << std::endl;
       calculateSelectMachineConstants<int64_t>(dop);

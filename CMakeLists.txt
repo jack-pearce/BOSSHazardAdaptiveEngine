@@ -202,7 +202,7 @@ set(ImplementationFiles
         Source/config.cpp
         Source/utilities/utilities.cpp
         Source/utilities/sharedDataTypes.cpp
-        Source/libraryLifecycle.cpp
+        Source/engineLifecycle.cpp
 )
 
 # Plugin

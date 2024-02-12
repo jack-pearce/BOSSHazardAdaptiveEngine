@@ -2,7 +2,7 @@
 #define BOSSHAZARDADAPTIVEENGINE_SELECTIMPLEMENTATION_HPP
 
 #include "constants/machineConstants.hpp"
-#include "operators/operatorStats.hpp"
+#include "engineInstanceState.hpp"
 #include "utilities/dataStructures.hpp"
 #include "utilities/memory.hpp"
 #include "utilities/papiWrapper.hpp"
@@ -19,6 +19,7 @@
 #include <memory>
 
 // #define PRINT_SELECTIVITY
+// #define CONSTANTS_DEBUG
 // #define STATE_DEBUG
 // #define CONSTRUCT_DEBUG
 // #define DEBUG
@@ -128,7 +129,8 @@ public:
   SelectAdaptive();
   void adjustRobustness(int adjustment);
   Span<int32_t> processInput(const Span<T>& column, T value, bool columnIsFirstArg, P& predicate,
-                             Span<int32_t>&& candidateIndexes_, SelectOperatorState* state);
+                             Span<int32_t>&& candidateIndexes_, SelectOperatorState* state,
+                             int32_t engineDOP);
 
 private:
   inline void processMicroBatch(const Span<T>& column, T value, bool columnIsFirstArg,
@@ -158,14 +160,21 @@ private:
 
 template <typename T, typename P> class MonitorSelect {
 public:
-  explicit MonitorSelect(SelectAdaptive<T, P>* selectOperator_, int32_t dop,
+  explicit MonitorSelect(SelectAdaptive<T, P>* selectOperator_,
                          const long_long* branchMispredictions_)
-      : selectOperator(selectOperator_), branchMispredictions(branchMispredictions_) {
+      : selectOperator(selectOperator_), branchMispredictions(branchMispredictions_),
+        constantsDOP(-1) {}
 
-    std::string lowerName =
-        "SelectLower_" + std::to_string(sizeof(T)) + "B_elements_" + std::to_string(dop) + "_dop";
-    std::string upperName =
-        "SelectUpper_" + std::to_string(sizeof(T)) + "B_elements_" + std::to_string(dop) + "_dop";
+  inline void updateConstants(int32_t engineDOP) {
+    if(constantsDOP == engineDOP) {
+      return;
+    }
+
+    constantsDOP = engineDOP;
+    std::string lowerName = "SelectLower_" + std::to_string(sizeof(T)) + "B_elements_" +
+                            std::to_string(constantsDOP) + "_dop";
+    std::string upperName = "SelectUpper_" + std::to_string(sizeof(T)) + "B_elements_" +
+                            std::to_string(constantsDOP) + "_dop";
     lowerCrossoverSelectivity =
         static_cast<float>(MachineConstants::getInstance().getMachineConstant(lowerName));
     upperCrossoverSelectivity =
@@ -174,9 +183,13 @@ public:
     // Gradient of number of branch misses between lower and upper cross-over selectivity
     m = ((1 - upperCrossoverSelectivity) - lowerCrossoverSelectivity) /
         (upperCrossoverSelectivity - lowerCrossoverSelectivity);
+#ifdef CONSTANTS_DEBUG
+    std::cout << "Updated select machine constants for " << std::to_string(sizeof(T))
+              << "B elements, dop=" << std::to_string(constantsDOP) << std::endl;
+#endif
   }
 
-  void checkHazards(int32_t n, int32_t selected) {
+  void checkHazards(int32_t n, int32_t selected) const {
     float selectivity = static_cast<float>(selected) / static_cast<float>(n);
 
     if(__builtin_expect(
@@ -193,7 +206,7 @@ public:
     }
   }
 
-  void checkHazards(int32_t n, int32_t selected, int32_t additionalBranchMispredictions) {
+  void checkHazards(int32_t n, int32_t selected, int32_t additionalBranchMispredictions) const {
     float selectivity = static_cast<float>(selected) / static_cast<float>(n);
 
     if(__builtin_expect(
@@ -211,23 +224,25 @@ public:
     }
   }
 
-  int32_t getMispredictions() { return static_cast<int32_t>(*branchMispredictions); }
+  [[nodiscard]] int32_t getMispredictions() const {
+    return static_cast<int32_t>(*branchMispredictions);
+  }
 
 private:
-  float lowerCrossoverSelectivity;
-  float upperCrossoverSelectivity;
-  float m;
   SelectAdaptive<T, P>* selectOperator;
   const long_long* branchMispredictions;
+  int32_t constantsDOP;
+  float lowerCrossoverSelectivity{};
+  float upperCrossoverSelectivity{};
+  float m{};
 };
 
-// TODO - correct dop should be passed into the monitor object here
 template <typename T, typename P>
 SelectAdaptive<T, P>::SelectAdaptive()
     : tuplesPerHazardCheck(50000), maxConsecutivePredications(10), tuplesInBranchBurst(1000),
       consecutivePredications(maxConsecutivePredications),
       activeOperator(SelectImplementation::Predication_), eventSet(getEventSet()),
-      monitor(MonitorSelect<T, P>(this, 1, eventSet.getCounterDiffsPtr())),
+      monitor(MonitorSelect<T, P>(this, eventSet.getCounterDiffsPtr())),
       branchOperator(SelectBranch<T, P>()), predicationOperator(SelectPredication<T, P>()) {
 #ifdef CONSTRUCT_DEBUG
   std::cout << "Constructing Select Adaptive operator object" << std::endl;
@@ -254,7 +269,9 @@ template <typename T, typename P>
 Span<int32_t> SelectAdaptive<T, P>::processInput(const Span<T>& column, T value,
                                                  bool columnIsFirstArg, P& predicate,
                                                  Span<int32_t>&& candidateIndexes_,
-                                                 SelectOperatorState* state) {
+                                                 SelectOperatorState* state, int32_t engineDOP) {
+  monitor.updateConstants(engineDOP); // Ensure monitor is using correct machine constants
+
   microBatchStartIndex = 0; // Reset tracking parameters
   totalSelected = 0;
 
@@ -476,7 +493,7 @@ public:
         (upperCrossoverSelectivity - lowerCrossoverSelectivity);
   }
 
-  void checkHazards(size_t n, size_t selected) {
+  void checkHazards(size_t n, size_t selected) const {
     float selectivity = static_cast<float>(selected) / static_cast<float>(n);
 
     if(__builtin_expect(
@@ -691,19 +708,21 @@ private:
 
 template <typename T, typename P>
 Span<int32_t> select(Select implementation, const Span<T>& column, T value, bool columnIsFirstArg,
-                     P& predicate, Span<int32_t>&& candidateIndexes, size_t dop,
+                     P& predicate, Span<int32_t>&& candidateIndexes, size_t engineDOP,
                      SelectOperatorState* state) {
-  assert(1 <= dop && dop <= logicalCoresCount());
+  assert(1 <= engineDOP && engineDOP <= logicalCoresCount());
+  // Adaptive Parallel means engine is not vectorized. Will execute constantsDOP threads in engine
   if(implementation == Select::AdaptiveParallel) {
     SelectAdaptiveParallel<T, P> selectOperator(column, value, columnIsFirstArg, predicate,
-                                                std::move(candidateIndexes), dop);
+                                                std::move(candidateIndexes), engineDOP);
     return std::move(selectOperator.processInput());
   }
 
-  assert(dop == 1);
+  // Branch, Predication, and Adaptive are all single threaded in engine instance, but the engine
+  // could be vectorized, in this case the constantsDOP represents the vectorized DOP.
   if(implementation == Select::Adaptive) {
     return std::move(getSelectAdaptiveOperator<T, P>().processInput(
-        column, value, columnIsFirstArg, predicate, std::move(candidateIndexes), state));
+        column, value, columnIsFirstArg, predicate, std::move(candidateIndexes), state, engineDOP));
   }
 
   auto candidateIndexesPtr = candidateIndexes.size() > 0 ? &candidateIndexes : nullptr;

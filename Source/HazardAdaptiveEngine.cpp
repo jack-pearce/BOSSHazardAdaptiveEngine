@@ -4,7 +4,7 @@
 #include <ExpressionUtilities.hpp>
 
 #include "config.hpp"
-#include "operators/operatorStats.hpp"
+#include "engineInstanceState.hpp"
 #include "operators/select.hpp"
 #include "utilities/memory.hpp"
 
@@ -27,8 +27,8 @@
 #include <variant>
 #include <vector>
 
-//#define DEBUG_MODE
-//#define DEFER_TO_OTHER_ENGINE
+// #define DEBUG_MODE
+// #define DEFER_TO_OTHER_ENGINE
 
 class Pred;
 
@@ -51,10 +51,10 @@ using boss::expressions::CloneReason;
 using BOSSExpressionSpanArguments = boss::DefaultExpressionSystem::ExpressionSpanArguments;
 using BOSSExpressionSpanArgument = boss::DefaultExpressionSystem::ExpressionSpanArgument;
 
+using adaptive::EngineInstanceState;
 using adaptive::SelectOperatorState;
 using adaptive::SelectOperatorStates;
-using adaptive::SelectOperatorStats;
-using adaptive::config::DOP;
+using adaptive::config::nonVectorizedDOP;
 using adaptive::config::selectImplementation;
 
 using boss::Span;
@@ -64,9 +64,9 @@ using SpanInputs = std::variant<std::vector<std::int32_t>, std::vector<std::int6
 
 using namespace boss::algorithm;
 
-static SelectOperatorStats& getSelectOperatorStats() {
-  thread_local static SelectOperatorStats selectOperatorStats;
-  return selectOperatorStats;
+static EngineInstanceState& getEngineInstanceState() {
+  thread_local static EngineInstanceState engineInstanceState;
+  return engineInstanceState;
 }
 
 /** Pred function takes a relation in the form of ExpressionArguments, and an optional pointer to
@@ -406,10 +406,13 @@ private:
   template <typename T1, typename T2, typename F>
   static ExpressionSpanArgument createLambdaResult(T1&& arg1, T2&& arg2, F& f, int predicateID) {
     SelectOperatorState* state =
-        predicateID >= 0 ? &getSelectOperatorStats().getStateOfID(predicateID) : nullptr;
+        predicateID >= 0 ? &getEngineInstanceState().getStateOfID(predicateID) : nullptr;
+    auto engineDOP = getEngineInstanceState().getVectorizedDOP() == -1
+                   ? nonVectorizedDOP
+                   : getEngineInstanceState().getVectorizedDOP();
     ExpressionSpanArgument span;
     std::visit(
-        [&span, &f, state](auto&& typedSpan1, auto&& typedSpan2) {
+        [&span, &f, state, engineDOP](auto&& typedSpan1, auto&& typedSpan2) {
           using SpanType1 = std::decay_t<decltype(typedSpan1)>;
           using SpanType2 = std::decay_t<decltype(typedSpan2)>;
           using Type1 = typename SpanType1::element_type;
@@ -425,11 +428,11 @@ private:
               assert(typedSpan1.size() == 1 || typedSpan2.size() == 1);
               if(typedSpan2.size() == 1) {
                 span = adaptive::select(selectImplementation, typedSpan1,
-                                        static_cast<Type1>(typedSpan2[0]), true, f, {}, DOP, state);
+                                        static_cast<Type1>(typedSpan2[0]), true, f, {}, engineDOP, state);
               } else {
                 span =
                     adaptive::select(selectImplementation, typedSpan2,
-                                     static_cast<Type2>(typedSpan1[0]), false, f, {}, DOP, state);
+                                     static_cast<Type2>(typedSpan1[0]), false, f, {}, engineDOP, state);
               }
             } else {
               std::vector<OutputType> output;
@@ -465,9 +468,12 @@ private:
   static ExpressionSpanArgument
   createLambdaPipelineResult(T1&& arg1, T2&& arg2, F& f, Span<int32_t>& indexes, int predicateID) {
     SelectOperatorState* state =
-        predicateID >= 0 ? &getSelectOperatorStats().getStateOfID(predicateID) : nullptr;
+        predicateID >= 0 ? &getEngineInstanceState().getStateOfID(predicateID) : nullptr;
+    auto engineDOP = getEngineInstanceState().getVectorizedDOP() == -1
+                   ? nonVectorizedDOP
+                   : getEngineInstanceState().getVectorizedDOP();
     std::visit(
-        [&indexes, &f, state](auto&& typedSpan1, auto&& typedSpan2) {
+        [&indexes, &f, state, engineDOP](auto&& typedSpan1, auto&& typedSpan2) {
           using SpanType1 = std::decay_t<decltype(typedSpan1)>;
           using SpanType2 = std::decay_t<decltype(typedSpan2)>;
           using Type1 = typename SpanType1::element_type;
@@ -484,11 +490,11 @@ private:
               if(typedSpan2.size() == 1) {
                 indexes = adaptive::select(selectImplementation, typedSpan1,
                                            static_cast<Type1>(typedSpan2[0]), true, f,
-                                           std::move(indexes), DOP, state);
+                                           std::move(indexes), engineDOP, state);
               } else {
                 indexes = adaptive::select(selectImplementation, typedSpan2,
                                            static_cast<Type2>(typedSpan1[0]), false, f,
-                                           std::move(indexes), DOP, state);
+                                           std::move(indexes), engineDOP, state);
               }
             } else {
               throw std::runtime_error(
@@ -958,14 +964,16 @@ public:
                              std::is_same_v<T, double_t> || std::is_same_v<T, std::string>) {
                   auto unfilteredColumn = std::move(typedSpan);
                   auto* filteredColumn = new T[indexes.size()];
-                  if(DOP == 1 || indexes.size() <= (2 * adaptive::config::minTuplesPerThread)) {
+                  if(nonVectorizedDOP == 1 ||
+                     indexes.size() <= (2 * adaptive::config::minTuplesPerThread)) {
                     for(size_t i = 0; i < indexes.size(); ++i) {
                       filteredColumn[i] = unfilteredColumn[indexes[i]];
                     }
                   } else {
                     const auto numThreads =
-                        std::min(DOP, static_cast<int32_t>(indexes.size() /
-                                                           adaptive::config::minTuplesPerThread));
+                        std::min(nonVectorizedDOP,
+                                 static_cast<int32_t>(indexes.size() /
+                                                      adaptive::config::minTuplesPerThread));
                     assert(numThreads >= 2);
                     const auto indexesPerThread = indexes.size() / numThreads;
                     int32_t startIndex = 0;
@@ -1192,21 +1200,28 @@ static boss::Expression evaluate(boss::Expression&& expr) {
               << utilities::injectDebugInfoToSpans(expr.clone(CloneReason::FOR_TESTING))
               << std::endl;
 #endif
-    if(std::holds_alternative<boss::ComplexExpression>(expr) &&
-       get<boss::ComplexExpression>(expr).getHead() == "Let"_) {
+    while(std::holds_alternative<boss::ComplexExpression>(expr) &&
+          get<boss::ComplexExpression>(expr).getHead() == "Let"_) {
       auto [head, unused_, dynamics, spans] =
           std::move(get<boss::ComplexExpression>(expr)).decompose();
-      auto query = std::move(dynamics.at(0));
-      auto statsExpr = get<boss::ComplexExpression>(std::move(dynamics.at(1)));
-      if(statsExpr.getHead() != "Stats"_)
-        throw std::runtime_error("Expected second argument of 'Let'_ to be 'Stats'_ for operators");
-      auto [statsHead, unused1, statsArgs, unused2] = std::move(statsExpr).decompose();
-      if(statsArgs.empty())
-        throw std::runtime_error("No pointers to operator states in stats expression");
-      auto selectOperatorStates =
-          reinterpret_cast<SelectOperatorStates*>(get<int64_t>(statsArgs.at(0)));
-      getSelectOperatorStats().setStatsPtr(selectOperatorStates);
-      return toBOSSExpression(evaluateInternal(std::move(query))); // TODO - remove?
+      expr = std::move(dynamics.at(0));
+      auto letExpr = get<boss::ComplexExpression>(std::move(dynamics.at(1)));
+      if(letExpr.getHead().getName() == "Stats") {
+        auto [statsHead, unused1, statsArgs, unused2] = std::move(letExpr).decompose();
+        if(statsArgs.empty())
+          throw std::runtime_error("No pointers to operator states in stats expression");
+        auto selectOperatorStates =
+            reinterpret_cast<SelectOperatorStates*>(get<int64_t>(statsArgs.at(0)));
+        getEngineInstanceState().setStatsPtr(selectOperatorStates);
+      } else if(letExpr.getHead().getName() == "Parallel") {
+        auto [parallelHead, unused1, parallelArgs, unused2] = std::move(letExpr).decompose();
+        if(parallelArgs.empty())
+          throw std::runtime_error("No constantsDOP value in parallel expression");
+        getEngineInstanceState().setVectorizedDOP(get<int32_t>(parallelArgs.at(0)));
+      } else {
+        throw std::runtime_error("Unexpected argument of 'Let' expression: " +
+                                 letExpr.getHead().getName());
+      }
     }
     return toBOSSExpression(evaluateInternal(std::move(expr)));
   } catch(std::exception const& e) {

@@ -7,12 +7,12 @@
 #include <pthread.h>
 #include <queue>
 
-#define MEMORY_INFO
+//#define MEMORY_INFO
 
 class ThreadPool {
 public:
   static ThreadPool& getInstance() {
-    static ThreadPool instance(adaptive::config::DOP);
+    static ThreadPool instance(adaptive::config::nonVectorizedDOP);
     return instance;
   }
 

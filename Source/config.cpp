@@ -2,7 +2,7 @@
 
 namespace adaptive::config {
 
-int32_t DOP = 1;
+int32_t nonVectorizedDOP = 1;
 adaptive::Select selectImplementation = adaptive::Select::Adaptive;
 uint32_t minTuplesPerThread = 100;
 

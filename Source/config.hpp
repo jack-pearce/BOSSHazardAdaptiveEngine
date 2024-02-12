@@ -2,7 +2,7 @@
 
 namespace adaptive::config {
 
-extern int32_t DOP;
+extern int32_t nonVectorizedDOP;
 extern adaptive::Select selectImplementation;
 
 extern int32_t LOGICAL_CORE_COUNT;
