@@ -18,6 +18,7 @@
 #include <iterator>
 #include <list>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <numeric>
 #include <optional>
@@ -30,9 +31,9 @@
 // #define DEBUG_MODE
 // #define DEFER_TO_OTHER_ENGINE
 
-class Pred;
+class PredWrapper;
 
-using HAExpressionSystem = boss::expressions::generic::ExtensibleExpressionSystem<Pred>;
+using HAExpressionSystem = boss::expressions::generic::ExtensibleExpressionSystem<PredWrapper>;
 using AtomicExpression = HAExpressionSystem::AtomicExpression;
 using ComplexExpression = HAExpressionSystem::ComplexExpression;
 template <typename... T>
@@ -102,6 +103,49 @@ public:
 
 private:
   boss::Expression cachedExpr;
+};
+
+// Use of wrapper class to ensure size of type added to variant is only 8 bytes
+class PredWrapper {
+public:
+  explicit PredWrapper(std::unique_ptr<Pred> pred_) : pred(std::move(pred_)) {}
+
+  PredWrapper(PredWrapper&& other) noexcept : pred(std::move(other.pred)) {}
+  PredWrapper& operator=(PredWrapper&& other) noexcept {
+    if(this != &other) {
+      pred = std::move(other.pred);
+    }
+    return *this;
+  }
+  PredWrapper(PredWrapper const&) = delete;
+  PredWrapper const& operator=(PredWrapper const&) = delete;
+  ~PredWrapper() = default;
+
+  Pred& getPred() {
+    if(pred == nullptr) {
+      std::cerr
+          << "PredWrapper object does not own a Pred object and cannot be de-referenced. Exiting..."
+          << std::endl;
+      exit(1);
+    }
+    return *pred;
+  }
+  [[nodiscard]] const Pred& getPred() const {
+    if(pred == nullptr) {
+      std::cerr
+          << "PredWrapper object does not own a Pred object and cannot be de-referenced. Exiting..."
+          << std::endl;
+      exit(1);
+    }
+    return *pred;
+  }
+  friend ::std::ostream& operator<<(std::ostream& out, PredWrapper const& predWrapper) {
+    out << predWrapper.getPred();
+    return out;
+  }
+
+private:
+  std::unique_ptr<Pred> pred;
 };
 
 #ifdef DEBUG_MODE
@@ -213,9 +257,9 @@ static boss::Expression toBOSSExpression(Expression&& expr, bool isPredicate = f
             }
             return output;
           },
-          [&](Pred&& e) -> boss::Expression {
+          [&](PredWrapper&& e) -> boss::Expression {
             // remaining unevaluated internal predicate, switch back to the initial expression
-            auto output = static_cast<boss::Expression>(std::move(e));
+            auto output = static_cast<boss::Expression>(std::move(e.getPred()));
             if(isPredicate && (!std::holds_alternative<boss::ComplexExpression>(output) ||
                                std::get<boss::ComplexExpression>(output).getHead() != "Where"_)) {
               // make sure to re-inject "Where" clause before the predicate
@@ -269,9 +313,10 @@ private:
           dynamics1.empty()
               ? std::visit(
                     [](auto& a) -> Expression {
-                      if constexpr(std::is_same_v<std::decay_t<decltype(a)>, Span<Pred const>>) {
+                      if constexpr(std::is_same_v<std::decay_t<decltype(a)>,
+                                                  Span<PredWrapper const>>) {
                         throw std::runtime_error(
-                            "Found a Span<Pred const> in an expression to evaluate. "
+                            "Found a Span<PredWrapper const> in an expression to evaluate. "
                             "It should not happen.");
                       } else if constexpr(std::is_same_v<std::decay_t<decltype(a)>, Span<bool>> ||
                                           std::is_same_v<std::decay_t<decltype(a)>,
@@ -408,8 +453,8 @@ private:
     SelectOperatorState* state =
         predicateID >= 0 ? &getEngineInstanceState().getStateOfID(predicateID) : nullptr;
     auto engineDOP = getEngineInstanceState().getVectorizedDOP() == -1
-                   ? nonVectorizedDOP
-                   : getEngineInstanceState().getVectorizedDOP();
+                         ? nonVectorizedDOP
+                         : getEngineInstanceState().getVectorizedDOP();
     ExpressionSpanArgument span;
     std::visit(
         [&span, &f, state, engineDOP](auto&& typedSpan1, auto&& typedSpan2) {
@@ -428,11 +473,12 @@ private:
               assert(typedSpan1.size() == 1 || typedSpan2.size() == 1);
               if(typedSpan2.size() == 1) {
                 span = adaptive::select(selectImplementation, typedSpan1,
-                                        static_cast<Type1>(typedSpan2[0]), true, f, {}, engineDOP, state);
+                                        static_cast<Type1>(typedSpan2[0]), true, f, {}, engineDOP,
+                                        state);
               } else {
-                span =
-                    adaptive::select(selectImplementation, typedSpan2,
-                                     static_cast<Type2>(typedSpan1[0]), false, f, {}, engineDOP, state);
+                span = adaptive::select(selectImplementation, typedSpan2,
+                                        static_cast<Type2>(typedSpan1[0]), false, f, {}, engineDOP,
+                                        state);
               }
             } else {
               std::vector<OutputType> output;
@@ -470,8 +516,8 @@ private:
     SelectOperatorState* state =
         predicateID >= 0 ? &getEngineInstanceState().getStateOfID(predicateID) : nullptr;
     auto engineDOP = getEngineInstanceState().getVectorizedDOP() == -1
-                   ? nonVectorizedDOP
-                   : getEngineInstanceState().getVectorizedDOP();
+                         ? nonVectorizedDOP
+                         : getEngineInstanceState().getVectorizedDOP();
     std::visit(
         [&indexes, &f, state, engineDOP](auto&& typedSpan1, auto&& typedSpan2) {
           using SpanType1 = std::decay_t<decltype(typedSpan1)>;
@@ -513,7 +559,7 @@ private:
   }
 
   template <typename T, typename F>
-  static Pred createLambdaExpression(ComplexExpressionWithStaticArguments<T>&& e, F&& f) {
+  static PredWrapper createLambdaExpression(ComplexExpressionWithStaticArguments<T>&& e, F&& f) {
     assert(e.getSpanArguments().empty());
     assert(e.getDynamicArguments().size() >= 1);
     auto numDynamicArgs = e.getDynamicArguments().size();
@@ -545,7 +591,7 @@ private:
             };
           },
           e.getDynamicArguments().at(0));
-      return {std::move(pred), toBOSSExpression(std::move(e))};
+      return PredWrapper(std::make_unique<Pred>(std::move(pred), toBOSSExpression(std::move(e))));
     } else {
       Pred::Function pred = std::accumulate(
           e.getDynamicArguments().begin(), e.getDynamicArguments().end(),
@@ -568,19 +614,20 @@ private:
                 },
                 e);
           });
-      return {std::move(pred), toBOSSExpression(std::move(e))};
+      return PredWrapper(std::make_unique<Pred>(std::move(pred), toBOSSExpression(std::move(e))));
     }
   }
 
   template <typename T1, typename T2>
-  static Pred createLambdaPipelineOfExpressions(ComplexExpressionWithStaticArguments<T1, T2>&& e) {
+  static PredWrapper
+  createLambdaPipelineOfExpressions(ComplexExpressionWithStaticArguments<T1, T2>&& e) {
     assert(e.getSpanArguments().empty());
     std::vector<Pred::Function> preds;
     preds.reserve(2 + e.getDynamicArguments().size());
     preds.push_back(createLambdaArgument(get<0>(e.getStaticArguments())));
     preds.push_back(createLambdaArgument(get<1>(e.getStaticArguments())));
     for(auto it = e.getDynamicArguments().begin(); it != e.getDynamicArguments().end(); ++it) {
-      preds.push_back(get<Pred>(std::move(*it)));
+      preds.push_back(std::move(get<PredWrapper>(*it).getPred()));
     }
     Pred::Function pred =
         [preds = std::move(preds)](
@@ -608,7 +655,7 @@ private:
           std::move(*candidateIndexes));
       return span;
     };
-    return {std::move(pred), toBOSSExpression(std::move(e))};
+    return PredWrapper(std::make_unique<Pred>(std::move(pred), toBOSSExpression(std::move(e))));
   }
 
   /** Turns single arguments into a single element span so that createLambdaResult acts on two
@@ -628,11 +675,10 @@ private:
     }
   }
 
-  static Pred::Function createLambdaArgument(Pred const& arg) {
-    return [f = static_cast<Pred::Function const&>(arg)](ExpressionArguments& columns,
-                                                         Span<int32_t>* indexes) {
-      return f(columns, indexes);
-    };
+  static Pred::Function createLambdaArgument(PredWrapper const& arg) {
+    return
+        [f = static_cast<Pred::Function const&>(arg.getPred())](
+            ExpressionArguments& columns, Span<int32_t>* indexes) { return f(columns, indexes); };
   }
 
   /**
@@ -696,16 +742,7 @@ private:
           auto [head, unused_, dynamics, spans] = std::move(column).decompose();
           auto list = get<ComplexExpression>(std::move(dynamics.at(0)));
           auto [listHead, listUnused_, listDynamics, listSpans] = std::move(list).decompose();
-          auto span = std::visit(
-              []<typename T>(Span<T>&& typedSpan) -> std::optional<ExpressionSpanArgument> {
-                if constexpr(std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t> ||
-                             std::is_same_v<T, double_t> || std::is_same_v<T, std::string>) {
-                  return Span<T>(std::move(typedSpan));
-                } else {
-                  throw std::runtime_error("unsupported column type in predicate");
-                }
-              },
-              std::move(listSpans.at(index++)));
+          auto span = std::move(listSpans.at(index++));
           dynamics.at(0) = ComplexExpression(std::move(listHead), {}, std::move(listDynamics),
                                              std::move(listSpans));
           columnExpr =
@@ -734,7 +771,7 @@ public:
     (*this)["Plus"_] = [](ComplexExpressionWithStaticArguments<Symbol>&& input) -> Expression {
       return createLambdaExpression(std::move(input), std::plus());
     };
-    (*this)["Plus"_] = [](ComplexExpressionWithStaticArguments<Pred>&& input) -> Expression {
+    (*this)["Plus"_] = [](ComplexExpressionWithStaticArguments<PredWrapper>&& input) -> Expression {
       return createLambdaExpression(std::move(input), std::plus());
     };
 
@@ -753,7 +790,8 @@ public:
     (*this)["Times"_] = [](ComplexExpressionWithStaticArguments<Symbol>&& input) -> Expression {
       return createLambdaExpression(std::move(input), std::multiplies());
     };
-    (*this)["Times"_] = [](ComplexExpressionWithStaticArguments<Pred>&& input) -> Expression {
+    (*this)["Times"_] =
+        [](ComplexExpressionWithStaticArguments<PredWrapper>&& input) -> Expression {
       return createLambdaExpression(std::move(input), std::multiplies());
     };
 
@@ -763,7 +801,7 @@ public:
       assert(input.getSpanArguments().empty());
       assert(input.getDynamicArguments().size() == 1);
       if(std::holds_alternative<Symbol>(input.getDynamicArguments().at(0)) ||
-         std::holds_alternative<Pred>(input.getDynamicArguments().at(0))) {
+         std::holds_alternative<PredWrapper>(input.getDynamicArguments().at(0))) {
         return createLambdaExpression(std::move(input), std::divides());
       }
       return get<0>(input.getStaticArguments()) /
@@ -772,7 +810,8 @@ public:
     (*this)["Divide"_] = [](ComplexExpressionWithStaticArguments<Symbol>&& input) -> Expression {
       return createLambdaExpression(std::move(input), std::divides());
     };
-    (*this)["Divide"_] = [](ComplexExpressionWithStaticArguments<Pred>&& input) -> Expression {
+    (*this)["Divide"_] =
+        [](ComplexExpressionWithStaticArguments<PredWrapper>&& input) -> Expression {
       return createLambdaExpression(std::move(input), std::divides());
     };
 
@@ -782,7 +821,7 @@ public:
       assert(input.getSpanArguments().empty());
       assert(input.getDynamicArguments().size() == 1);
       if(std::holds_alternative<Symbol>(input.getDynamicArguments().at(0)) ||
-         std::holds_alternative<Pred>(input.getDynamicArguments().at(0))) {
+         std::holds_alternative<PredWrapper>(input.getDynamicArguments().at(0))) {
         return createLambdaExpression(std::move(input), std::minus());
       }
       return get<0>(input.getStaticArguments()) -
@@ -791,14 +830,16 @@ public:
     (*this)["Minus"_] = [](ComplexExpressionWithStaticArguments<Symbol>&& input) -> Expression {
       return createLambdaExpression(std::move(input), std::minus());
     };
-    (*this)["Minus"_] = [](ComplexExpressionWithStaticArguments<Pred>&& input) -> Expression {
+    (*this)["Minus"_] =
+        [](ComplexExpressionWithStaticArguments<PredWrapper>&& input) -> Expression {
       return createLambdaExpression(std::move(input), std::minus());
     };
 
     (*this)["Equal"_] = [](ComplexExpressionWithStaticArguments<Symbol>&& input) -> Expression {
       return createLambdaExpression(std::move(input), std::equal_to());
     };
-    (*this)["Equal"_] = [](ComplexExpressionWithStaticArguments<Pred>&& input) -> Expression {
+    (*this)["Equal"_] =
+        [](ComplexExpressionWithStaticArguments<PredWrapper>&& input) -> Expression {
       return createLambdaExpression(std::move(input), std::equal_to());
     };
 
@@ -808,7 +849,7 @@ public:
       assert(input.getSpanArguments().empty());
       assert(input.getDynamicArguments().size() >= 1);
       if(std::holds_alternative<Symbol>(input.getDynamicArguments().at(0)) ||
-         std::holds_alternative<Pred>(input.getDynamicArguments().at(0))) {
+         std::holds_alternative<PredWrapper>(input.getDynamicArguments().at(0))) {
         return createLambdaExpression(std::move(input), std::greater());
       }
       return get<0>(input.getStaticArguments()) >
@@ -817,18 +858,21 @@ public:
     (*this)["Greater"_] = [](ComplexExpressionWithStaticArguments<Symbol>&& input) -> Expression {
       return createLambdaExpression(std::move(input), std::greater());
     };
-    (*this)["Greater"_] = [](ComplexExpressionWithStaticArguments<Pred>&& input) -> Expression {
+    (*this)["Greater"_] =
+        [](ComplexExpressionWithStaticArguments<PredWrapper>&& input) -> Expression {
       return createLambdaExpression(std::move(input), std::greater());
     };
 
-    (*this)["And"_] = [](ComplexExpressionWithStaticArguments<Pred, Pred>&& input) -> Expression {
+    (*this)["And"_] =
+        [](ComplexExpressionWithStaticArguments<PredWrapper, PredWrapper>&& input) -> Expression {
       return createLambdaPipelineOfExpressions(std::move(input));
     };
 
-    (*this)["Where"_] = [](ComplexExpressionWithStaticArguments<Pred>&& input) -> Expression {
+    (*this)["Where"_] =
+        [](ComplexExpressionWithStaticArguments<PredWrapper>&& input) -> Expression {
       assert(input.getSpanArguments().empty());
       assert(input.getDynamicArguments().empty());
-      return Pred(get<0>(std::move(input).getStaticArguments()));
+      return PredWrapper(get<0>(std::move(input).getStaticArguments()));
     };
 
     (*this)["As"_] = [](ComplexExpression&& input) -> Expression {
@@ -874,11 +918,12 @@ public:
       for(auto asIt = std::make_move_iterator(asArgs.begin());
           asIt != std::make_move_iterator(asArgs.end()); ++asIt) {
         ++asIt;
-        assert(std::holds_alternative<Symbol>(*asIt) || std::holds_alternative<Pred>(*asIt));
-        if(std::holds_alternative<Pred>(*asIt)) {
+        assert(std::holds_alternative<Symbol>(*asIt) || std::holds_alternative<PredWrapper>(*asIt));
+        if(std::holds_alternative<PredWrapper>(*asIt)) {
           auto name = get<Symbol>(std::move(*--asIt));
           auto as = std::move(*++asIt);
-          auto pred = get<Pred>(std::move(as));
+          auto predWrapper = get<PredWrapper>(std::move(as));
+          auto& pred = predWrapper.getPred();
           ExpressionSpanArguments spans{};
           while(auto projected = pred(columns, nullptr)) {
             spans.push_back(std::move(*projected));
@@ -922,7 +967,7 @@ public:
 #endif
         return toBOSSExpression(std::move(inputExpr));
       }
-      if(!holds_alternative<Pred>(*++(inputExpr.getArguments().begin()))) {
+      if(!holds_alternative<PredWrapper>(*++(inputExpr.getArguments().begin()))) {
 #ifdef DEBUG_MODE
         std::cout << "Predicate is invalid, Select left unevaluated..." << std::endl;
 #endif
@@ -931,7 +976,8 @@ public:
       ExpressionArguments args = std::move(inputExpr).getArguments();
       auto it = std::make_move_iterator(args.begin());
       auto relation = get<ComplexExpression>(std::move(*it));
-      auto predFunc = get<Pred>(std::move(*++it));
+      auto predWrapper = get<PredWrapper>(std::move(*++it));
+      auto& predFunc = predWrapper.getPred();
       auto columns = std::move(relation).getDynamicArguments();
 #ifdef DEFER_TO_OTHER_ENGINE
       ExpressionSpanArguments indexesArg;
@@ -1167,18 +1213,10 @@ public:
   }
 };
 
-/***************************** BOSS API CONVENIENCE FUNCTIONS *****************************/
-static Expression operator|(Expression&& expression, auto&& function) {
-  return std::visit(boss::utilities::overload(std::move(function),
-                                              [](auto&& atom) -> Expression { return atom; }),
-                    std::move(expression));
-}
-/*****************************************************************************************/
-
 static Expression evaluateInternal(Expression&& e) {
   static OperatorMap operators;
-  return std::move(e) | [](ComplexExpression&& e) -> Expression {
-    auto [head, unused_, dynamics, spans] = std::move(e).decompose();
+  if(std::holds_alternative<ComplexExpression>(e)) {
+    auto [head, unused_, dynamics, spans] = get<ComplexExpression>(std::move(e)).decompose();
     ExpressionArguments evaluatedDynamics;
     evaluatedDynamics.reserve(dynamics.size());
     std::transform(std::make_move_iterator(dynamics.begin()),
@@ -1190,7 +1228,8 @@ static Expression evaluateInternal(Expression&& e) {
     if(it != operators.end())
       return it->second(std::move(unevaluated));
     return std::move(unevaluated);
-  };
+  }
+  return std::move(e);
 }
 
 static boss::Expression evaluate(boss::Expression&& expr) {
