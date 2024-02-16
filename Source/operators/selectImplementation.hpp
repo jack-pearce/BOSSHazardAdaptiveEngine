@@ -463,7 +463,10 @@ private:
 
   int32_t* threadSelectionBuffer;
   int32_t* threadSelection;
-  PAPI_eventSet& eventSet;
+  PAPI_eventSet
+      eventSet; // Should be the eventSet from getEventSet() to prevent a new eventSet being created
+                // for each process call, however when doing this the PAPI API hangs when
+                // calculating missing machine constants. I am not sure why...
   MonitorSelectParallel<T, P> monitor;
 
   size_t consecutivePredications;
@@ -527,7 +530,7 @@ SelectAdaptiveParallelAux<T, P>::SelectAdaptiveParallelAux(SelectThreadArgs<T, P
       positionToWrite(args->positionToWrite), dop(args->dop), threadNum(args->threadNum),
       tuplesPerHazardCheck(50000), maxConsecutivePredications(10), tuplesInBranchBurst(1000),
       activeOperator(SelectImplementation::Predication_), branchOperator(SelectBranch<T, P>()),
-      predicationOperator(SelectPredication<T, P>()), eventSet(getEventSet()),
+      predicationOperator(SelectPredication<T, P>()), eventSet({"PERF_COUNT_HW_BRANCH_MISSES"}),
       monitor(MonitorSelectParallel<T, P>(this, dop, eventSet.getCounterDiffsPtr())),
       consecutivePredications(maxConsecutivePredications), threadSelected(0) {
 

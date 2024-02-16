@@ -74,7 +74,6 @@ void MachineConstants::loadMachineConstants() {
     writeEmptyFile();
     machineConstants = {};
   }
-  calculateMissingMachineConstants();
 }
 
 void MachineConstants::writeEmptyFile() {
@@ -88,13 +87,18 @@ void MachineConstants::writeEmptyFile() {
 }
 
 void MachineConstants::calculateMissingMachineConstants() {
+  // Temporarily change nonVectorizedDOP to the maximum value so that AdaptiveParallel can
+  // be used to calculate any missing machine constants
+  auto nonVectorizedDOPvalue = adaptive::config::nonVectorizedDOP;
+  adaptive::config::nonVectorizedDOP = static_cast<int32_t>(adaptive::logicalCoresCount());
+
   uint32_t dop = 1;
   while(dop <= logicalCoresCount()) {
     std::string dopStr = std::to_string(dop);
 
     if(machineConstants.count("SelectLower_4B_elements_" + dopStr + "_dop") == 0 ||
        machineConstants.count("SelectUpper_4B_elements_" + dopStr + "_dop") == 0) {
-      std::cout << "Machine constant for Select (4B elements, constantsDOP=" + dopStr +
+      std::cout << "Machine constant for Select (4B elements, DOP=" + dopStr +
                        ") does not exist. Calculating now (this may take a while)."
                 << std::endl;
       calculateSelectMachineConstants<int32_t>(dop);
@@ -102,7 +106,7 @@ void MachineConstants::calculateMissingMachineConstants() {
 
     if(machineConstants.count("SelectLower_8B_elements_" + dopStr + "_dop") == 0 ||
        machineConstants.count("SelectUpper_8B_elements_" + dopStr + "_dop") == 0) {
-      std::cout << "Machine constant for Select (8B elements, constantsDOP=" + dopStr +
+      std::cout << "Machine constant for Select (8B elements, DOP=" + dopStr +
                        ") does not exist. Calculating now (this may take a while)."
                 << std::endl;
       calculateSelectMachineConstants<int64_t>(dop);
@@ -113,6 +117,8 @@ void MachineConstants::calculateMissingMachineConstants() {
     }
     dop = (dop * 2) <= logicalCoresCount() ? dop * 2 : logicalCoresCount();
   }
+
+  adaptive::config::nonVectorizedDOP = nonVectorizedDOPvalue;
 }
 
 } // namespace adaptive
