@@ -2932,9 +2932,9 @@ TEST_CASE("Join", "[hazard-adaptive-engine]") {
     CHECK(result == "TBC"_());
 #else
     CHECK(result == "Join"_("RadixPartition"_("Table"_("L_value"_("List"_(1,2,3,4,5))),
-                                            "L_key"_(1,2,500,871,984),2,1,0,4,3),
+                                            "L_key"_(1,2),2,1),
                            "RadixPartition"_("Table"_("O_value"_("List"_(1,2,3,4))),
-                                            "O_key"_(1,2,7,8), 2,3,0,1),
+                                            "O_key"_(1,2), 2,3),
                            "Where"_("Equal"_("L_key"_,"O_key"_)))
     );
 #endif
