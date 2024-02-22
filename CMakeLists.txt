@@ -203,6 +203,7 @@ set(ImplementationFiles
         Source/utilities/utilities.cpp
         Source/utilities/sharedDataTypes.cpp
         Source/engineLifecycle.cpp
+        Source/operators/partition.cpp
 )
 
 # Plugin

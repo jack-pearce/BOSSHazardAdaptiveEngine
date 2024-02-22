@@ -2913,6 +2913,34 @@ TEST_CASE("Group multiple spans", "[hazard-adaptive-engine]") {
   }
 }
 
+TEST_CASE("Join", "[hazard-adaptive-engine]") {
+  auto engine = boss::engines::BootstrapEngine();
+  REQUIRE(!librariesToTest.empty());
+  auto eval = [&engine](boss::Expression&& expression) mutable {
+    return engine.evaluate("EvaluateInEngines"_("List"_(GENERATE(from_range(librariesToTest))),
+                                                std::move(expression)));
+  };
+
+  SECTION("Simple join 1") {
+    auto intTable1 = "Table"_("L_key"_(createIntSpanOf(500, 2, 1, 984, 871)),
+                              "L_value"_(createIntSpanOf(1, 2, 3, 4, 5))); // NOLINT
+    auto intTable2 = "Table"_("O_key"_(createIntSpanOf(7, 8, 1, 2)),
+                              "O_value"_(createIntSpanOf(1, 2, 3, 4))); // NOLINT
+    auto result = eval("Join"_(std::move(intTable1), std::move(intTable2),
+                               "Where"_("Equal"_("L_key"_, "O_key"_))));
+#ifdef DEFERRED_TO_OTHER_ENGINE
+    CHECK(result == "TBC"_());
+#else
+    CHECK(result == "Join"_("RadixPartition"_("Table"_("L_value"_("List"_(1,2,3,4,5))),
+                                            "L_key"_(1,2,500,871,984),2,1,0,4,3),
+                           "RadixPartition"_("Table"_("O_value"_("List"_(1,2,3,4))),
+                                            "O_key"_(1,2,7,8), 2,3,0,1),
+                           "Where"_("Equal"_("L_key"_,"O_key"_)))
+    );
+#endif
+  }
+}
+
 #if 0
  TEST_CASE("Select multiple predicates with OR", "[hazard-adaptive-engine]") {
    auto engine = boss::engines::BootstrapEngine();

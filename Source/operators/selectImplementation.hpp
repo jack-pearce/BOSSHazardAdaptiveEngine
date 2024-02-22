@@ -117,7 +117,7 @@ template <typename T, typename P> static SelectPredication<T, P>& getSelectPredi
 
 /****************************** SINGLE-THREADED ******************************/
 
-static inline PAPI_eventSet& getEventSet() {
+static inline PAPI_eventSet& getBranchMissesEventSet() {
   thread_local static PAPI_eventSet eventSet({"PERF_COUNT_HW_BRANCH_MISSES"});
   return eventSet;
 }
@@ -241,7 +241,7 @@ template <typename T, typename P>
 SelectAdaptive<T, P>::SelectAdaptive()
     : tuplesPerHazardCheck(50000), maxConsecutivePredications(10), tuplesInBranchBurst(1000),
       consecutivePredications(maxConsecutivePredications),
-      activeOperator(SelectImplementation::Predication_), eventSet(getEventSet()),
+      activeOperator(SelectImplementation::Predication_), eventSet(getBranchMissesEventSet()),
       monitor(MonitorSelect<T, P>(this, eventSet.getCounterDiffsPtr())),
       branchOperator(SelectBranch<T, P>()), predicationOperator(SelectPredication<T, P>()) {
 #ifdef CONSTRUCT_DEBUG
@@ -464,9 +464,9 @@ private:
   int32_t* threadSelectionBuffer;
   int32_t* threadSelection;
   PAPI_eventSet
-      eventSet; // Should be the eventSet from getEventSet() to prevent a new eventSet being created
-                // for each process call, however when doing this the PAPI API hangs when
-                // calculating missing machine constants. I am not sure why...
+      eventSet; // Should be the eventSet from getBranchMissesEventSet() to prevent a new eventSet
+                // being created for each process call, however when doing this the PAPI API hangs
+                // when calculating missing machine constants. I am not sure why...
   MonitorSelectParallel<T, P> monitor;
 
   size_t consecutivePredications;

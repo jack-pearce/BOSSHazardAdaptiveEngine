@@ -2,6 +2,7 @@
 #define BOSSHAZARDADAPTIVEENGINE_SYSTEMINFORMATION_HPP
 
 #include <immintrin.h>
+#include "config.hpp"
 
 namespace adaptive {
 

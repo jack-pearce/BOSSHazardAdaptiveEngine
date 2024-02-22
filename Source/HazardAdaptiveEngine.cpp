@@ -1,10 +1,10 @@
 #include <Algorithm.hpp>
-#include <BOSS.hpp>
-#include <Expression.hpp>
 #include <ExpressionUtilities.hpp>
 
+#include "HazardAdaptiveEngine.hpp"
 #include "config.hpp"
 #include "engineInstanceState.hpp"
+#include "operators/partition.hpp"
 #include "operators/select.hpp"
 #include "utilities/memory.hpp"
 
@@ -31,18 +31,6 @@
 // #define DEBUG_MODE
 // #define DEFER_TO_OTHER_ENGINE
 
-class PredWrapper;
-
-using HAExpressionSystem = boss::expressions::generic::ExtensibleExpressionSystem<PredWrapper>;
-using AtomicExpression = HAExpressionSystem::AtomicExpression;
-using ComplexExpression = HAExpressionSystem::ComplexExpression;
-template <typename... T>
-using ComplexExpressionWithStaticArguments =
-    HAExpressionSystem::ComplexExpressionWithStaticArguments<T...>;
-using Expression = HAExpressionSystem::Expression;
-using ExpressionArguments = HAExpressionSystem::ExpressionArguments;
-using ExpressionSpanArguments = HAExpressionSystem::ExpressionSpanArguments;
-using ExpressionSpanArgument = HAExpressionSystem::ExpressionSpanArgument;
 using ExpressionBuilder = boss::utilities::ExtensibleExpressionBuilder<HAExpressionSystem>;
 static ExpressionBuilder operator""_(const char* name, size_t /*unused*/) {
   return ExpressionBuilder(name);
@@ -56,6 +44,7 @@ using adaptive::EngineInstanceState;
 using adaptive::SelectOperatorState;
 using adaptive::SelectOperatorStates;
 using adaptive::config::nonVectorizedDOP;
+using adaptive::config::partitionImplementation;
 using adaptive::config::selectImplementation;
 
 using boss::Span;
@@ -676,9 +665,10 @@ private:
   }
 
   static Pred::Function createLambdaArgument(PredWrapper const& arg) {
-    return
-        [f = static_cast<Pred::Function const&>(arg.getPred())](
-            ExpressionArguments& columns, Span<int32_t>* indexes) { return f(columns, indexes); };
+    return [f = static_cast<Pred::Function const&>(arg.getPred())](ExpressionArguments& columns,
+                                                                   Span<int32_t>* indexes) {
+      return f(columns, indexes);
+    };
   }
 
   /**
@@ -752,6 +742,17 @@ private:
       }
       throw std::runtime_error("in predicate: unknown symbol " + arg.getName() + "_");
     };
+  }
+
+  static ComplexExpression constructTableAndRemoveColumn(ExpressionArguments&& columns,
+                                                         const Symbol& columnToRemove) {
+    ExpressionArguments args;
+    for(auto&& column : columns) {
+      if(get<ComplexExpression>(column).getHead().getName() != columnToRemove.getName()) {
+        args.emplace_back(std::move(column));
+      }
+    }
+    return {"Table"_, {}, std::move(args), {}};
   }
 
 public:
@@ -1055,6 +1056,89 @@ public:
       }
       return ComplexExpression("Table"_, std::move(columns));
 #endif
+    };
+
+    /** Currently only partitions each table on a single 'key' column
+     */
+    (*this)["Join"_] = [](ComplexExpression&& inputExpr) -> Expression {
+      if(!holds_alternative<ComplexExpression>(*(inputExpr.getArguments().begin())) ||
+         get<ComplexExpression>(*(inputExpr.getArguments().begin())).getHead().getName() !=
+             "Table") {
+#ifdef DEBUG_MODE
+        std::cout << "Left join Table is invalid, Join left unevaluated..." << std::endl;
+#endif
+        return toBOSSExpression(std::move(inputExpr));
+      }
+      if(!holds_alternative<ComplexExpression>(*++(inputExpr.getArguments().begin())) ||
+         get<ComplexExpression>(*++(inputExpr.getArguments().begin())).getHead().getName() !=
+             "Table") {
+#ifdef DEBUG_MODE
+        std::cout << "Right join Table is invalid, Join left unevaluated..." << std::endl;
+#endif
+        return toBOSSExpression(std::move(inputExpr));
+      }
+      if(!holds_alternative<PredWrapper>(*std::next(inputExpr.getArguments().begin(), 2))) {
+#ifdef DEBUG_MODE
+        std::cout << "Predicate is invalid, Join left unevaluated..." << std::endl;
+#endif
+        return toBOSSExpression(std::move(inputExpr));
+      }
+      ExpressionArguments args = std::move(inputExpr).getArguments();
+      auto it = std::make_move_iterator(args.begin());
+      auto leftRelation = get<ComplexExpression>(std::move(*it));
+      auto leftRelationColumns = std::move(leftRelation).getDynamicArguments();
+      auto rightRelation = get<ComplexExpression>(std::move(*++it));
+      auto rightRelationColumns = std::move(rightRelation).getDynamicArguments();
+      auto predWrapper = get<PredWrapper>(std::move(*++it));
+      auto predTmp = static_cast<boss::Expression>(std::move(predWrapper.getPred()));
+      Expression pred = std::move(predTmp);
+      auto& predExpr = get<ComplexExpression>(pred);
+      auto& leftKeySymbol = get<Symbol>(predExpr.getDynamicArguments().at(0));
+      auto& rightKeySymbol = get<Symbol>(predExpr.getDynamicArguments().at(1));
+
+      // TODO - currently assumes that the keys are all in a single span, rather than multiple
+      // TODO - can keep calling the lambda to return all the spans in the key column
+      auto leftKey = *createLambdaArgument(leftKeySymbol)(leftRelationColumns, nullptr);
+      auto rightKey = *createLambdaArgument(rightKeySymbol)(rightRelationColumns, nullptr);
+
+      auto partitionedTables = std::visit(
+          []<typename T1, typename T2>(Span<T1>& leftKeys, Span<T2>& rightKeys) {
+            if constexpr((std::is_same_v<T1, int32_t> || std::is_same_v<T1, int64_t>)&&(
+                             std::is_same_v<T2, int32_t> || std::is_same_v<T2, int64_t>)) {
+              return adaptive::partitionJoinExpr<T1, T2>(partitionImplementation, leftKeys,
+                                                         rightKeys);
+            } else {
+              throw std::runtime_error("Join key has at least one unsupported column type: " +
+                                       std::string(typeid(T1).name()) + ", " +
+                                       std::string(typeid(T2).name()));
+              return adaptive::PartitionedJoinArguments{}; // NOLINT
+            }
+          },
+          leftKey, rightKey);
+
+      auto updatedLeftRelation =
+          constructTableAndRemoveColumn(std::move(leftRelationColumns), leftKeySymbol);
+      auto updatedRightRelation =
+          constructTableAndRemoveColumn(std::move(rightRelationColumns), rightKeySymbol);
+
+      ExpressionArguments leftArgs, rightArgs, joinArgs;
+      leftArgs.emplace_back(std::move(updatedLeftRelation));
+      leftArgs.emplace_back(
+          ComplexExpression(leftKeySymbol, {}, {}, std::move(partitionedTables.tableOneKeySpans)));
+      rightArgs.emplace_back(std::move(updatedRightRelation));
+      rightArgs.emplace_back(
+          ComplexExpression(rightKeySymbol, {}, {}, std::move(partitionedTables.tableTwoKeySpans)));
+
+      auto leftExpr = ComplexExpression("RadixPartition"_, {}, std::move(leftArgs),
+                                        std::move(partitionedTables.tableOneIndexSpans));
+      auto rightExpr = ComplexExpression("RadixPartition"_, {}, std::move(rightArgs),
+                                         std::move(partitionedTables.tableTwoIndexSpans));
+
+      joinArgs.emplace_back(std::move(leftExpr));
+      joinArgs.emplace_back(std::move(rightExpr));
+      joinArgs.emplace_back(std::move(predExpr));
+
+      return ComplexExpression("Join"_, {}, std::move(joinArgs), {});
     };
 
 #ifndef DEFER_TO_OTHER_ENGINE
