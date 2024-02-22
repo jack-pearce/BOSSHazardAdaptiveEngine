@@ -17,6 +17,7 @@ template <typename T> bool arrayIsSimd256Aligned(const T* array) {
 }
 
 inline uint64_t l3cacheSize() { return sysconf(_SC_LEVEL3_CACHE_SIZE); }
+inline uint64_t l2cacheSize() { return sysconf(_SC_LEVEL2_CACHE_SIZE); }
 inline uint32_t bytesPerCacheLine() { return sysconf(_SC_LEVEL1_DCACHE_LINESIZE); }
 inline uint32_t logicalCoresCount() { return adaptive::config::LOGICAL_CORE_COUNT; }
 inline std::string getProjectRootDirectory() { return adaptive::config::projectFilePath; }

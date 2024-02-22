@@ -61,7 +61,7 @@ public:
 #ifdef CHANGE_PARTITION_TO_SORT
     maxElementsPerPartition = 1;
 #else
-    maxElementsPerPartition = static_cast<double>(l3cacheSize()) / (sizeof(T) * 2 * 2.5);
+    maxElementsPerPartition = static_cast<double>(l2cacheSize()) / (sizeof(T) * 2 * 2.5);
 #endif
 
     buckets1 = std::vector<int>(1 + (1 << radixBitsOperator), 0);
@@ -76,7 +76,7 @@ public:
       indexesPtr1[i] = i;
     }
 
-    buckets2 = std::vector<int>(2 + (2 << radixBitsOperator), 0);
+    buckets2 = std::vector<int>(1 + (1 << radixBitsOperator), 0);
     returnBuffer2 = std::make_shared<T2[]>(n2);
     tmpBuffer2 = nullptr; // Lazily allocate buffer when needed
 
@@ -273,7 +273,7 @@ public:
 #ifdef CHANGE_PARTITION_TO_SORT
     maxElementsPerPartition = 1;
 #else
-    maxElementsPerPartition = static_cast<double>(l3cacheSize()) / (sizeof(T) * 2 * 2.5);
+    maxElementsPerPartition = static_cast<double>(l2cacheSize()) / (sizeof(T) * 2 * 2.5);
 #endif
 
     buckets1 = std::vector<int>(1 + (1 << radixBitsOperator), 0);
@@ -288,7 +288,7 @@ public:
       indexesPtr1[i] = i;
     }
 
-    buckets2 = std::vector<int>(2 + (2 << radixBitsOperator), 0);
+    buckets2 = std::vector<int>(1 + (1 << radixBitsOperator), 0);
     returnBuffer2 = std::make_shared<T2[]>(n2);
     tmpBuffer2 = nullptr; // Lazily allocate buffer when needed
 
@@ -348,7 +348,7 @@ private:
 
     int i1 = 0, i2 = 0;
     if(radixBits > minimumRadixBits) {
-      while(i2 < n2 && i1 < n1) { // NOLINT
+      while(i2 < n2 || i1 < n1) { // NOLINT
         if(i1 < n1) {             // NOLINT
           microBatchSize = std::min(tuplesPerHazardCheck, n1 - i1);
           microBatchStart = i1;
@@ -381,8 +381,9 @@ private:
       }
     }
 
-    std::fill(buckets1.begin(), buckets1.end(), 0);
-    std::fill(buckets2.begin(), buckets2.end(), 0);
+    std::fill(buckets1.begin(), buckets1.begin() + numBuckets + 1, 0);
+    std::fill(buckets2.begin(), buckets2.begin() + numBuckets + 1, 0);
+
     msbToPartition -= radixBits;
 
     if(msbToPartition == 0) { // No ability to partition further, so return early
@@ -452,7 +453,7 @@ private:
   inline void processMicroBatch(int microBatchStart, int microBatchSize, int& i, int n,
                                 const U1* keys, U1* buffer, const int32_t* indexes,
                                 int32_t* indexesBuffer, std::vector<int>& buckets,
-                                std::vector<int>& partitions, int shifts, unsigned int mask,
+                                std::vector<int>& partitions, int& shifts, unsigned int& mask,
                                 int& radixBits, int& numBuckets, int& i_2, int n_2,
                                 const U2* keys_2, U2* buffer_2, const int32_t* indexes_2,
                                 int32_t* indexesBuffer_2, std::vector<int>& buckets_2,
@@ -474,7 +475,7 @@ private:
       mask = numBuckets - 1;
 
 #ifdef ADAPTIVITY_OUTPUT
-      std::cout << "RadixBits reduced to " << radixBitsOperator << " after tuple " << i
+      std::cout << "RadixBits reduced to " << radixBits << " after tuple " << i
                 << " due to reading of ";
       std::cout << (static_cast<float>(microBatchSize) /
                     static_cast<float>(*(eventSet.getCounterDiffsPtr())));
@@ -512,10 +513,9 @@ private:
       }
     }
 
-    for(int j = 0; j < numBuckets; ++j) { // Merge histogram values and reduce size
+    for(int j = 0; j < numBuckets; ++j) { // Merge histogram values
       buckets[j] = buckets[j << 1] + (buckets[(j << 1) + 1] - partitions[j << 1]);
     }
-    buckets.resize(1 + numBuckets);
 
     for(int j = 1; j <= numBuckets; ++j) { // Merge partitions and reduce size
       partitions[j - 1] = partitions[(j << 1) - 1];

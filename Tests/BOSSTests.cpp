@@ -2913,7 +2913,7 @@ TEST_CASE("Group multiple spans", "[hazard-adaptive-engine]") {
   }
 }
 
-TEST_CASE("Join", "[hazard-adaptive-engine]") {
+TEST_CASE("Join - single-span", "[hazard-adaptive-engine]") {
   auto engine = boss::engines::BootstrapEngine();
   REQUIRE(!librariesToTest.empty());
   auto eval = [&engine](boss::Expression&& expression) mutable {
@@ -2928,16 +2928,54 @@ TEST_CASE("Join", "[hazard-adaptive-engine]") {
                               "O_value"_(createIntSpanOf(1, 2, 3, 4))); // NOLINT
     auto result = eval("Join"_(std::move(intTable1), std::move(intTable2),
                                "Where"_("Equal"_("L_key"_, "O_key"_))));
-#ifdef DEFERRED_TO_OTHER_ENGINE
-    CHECK(result == "TBC"_());
-#else
+
     CHECK(result == "Join"_("RadixPartition"_("Table"_("L_value"_("List"_(1,2,3,4,5))),
                                             "L_key"_(1,2),2,1),
                            "RadixPartition"_("Table"_("O_value"_("List"_(1,2,3,4))),
                                             "O_key"_(1,2), 2,3),
                            "Where"_("Equal"_("L_key"_,"O_key"_)))
     );
-#endif
+  }
+
+  SECTION("Simple join 2") {
+    auto intTable1 = "Table"_("L_key"_(createIntSpanOf(4000001, 4000002, 20009, 5, 4)),
+                              "L_value"_(createIntSpanOf(1, 2, 3, 4, 5))); // NOLINT
+    auto intTable2 = "Table"_("O_key"_(createIntSpanOf(5, 4, 20009, 4000002)),
+                              "O_value"_(createIntSpanOf(1, 2, 3, 4))); // NOLINT
+    auto result = eval("Join"_(std::move(intTable1), std::move(intTable2),
+                               "Where"_("Equal"_("L_key"_, "O_key"_))));
+
+    CHECK(result == "Join"_("RadixPartition"_("Table"_("L_value"_("List"_(1,2,3,4,5))),
+                                              "L_key"_(4,5,20009,4000002),4,3,2,1),
+                            "RadixPartition"_("Table"_("O_value"_("List"_(1,2,3,4))),
+                                              "O_key"_(4,5,20009,4000002),1,0,2,3),
+                            "Where"_("Equal"_("L_key"_,"O_key"_)))
+    );
+  }
+}
+
+TEST_CASE("Join - multi-span", "[hazard-adaptive-engine]") {
+  auto engine = boss::engines::BootstrapEngine();
+  REQUIRE(!librariesToTest.empty());
+  auto eval = [&engine](boss::Expression&& expression) mutable {
+    return engine.evaluate("EvaluateInEngines"_("List"_(GENERATE(from_range(librariesToTest))),
+                                                std::move(expression)));
+  };
+
+  SECTION("Simple join 1") {
+    auto intTable1 = "Table"_("L_key"_(createTwoSpansIntStartingFrom(1)),
+                              "L_value"_(createTwoSpansIntStartingFrom(10))); // NOLINT
+    auto intTable2 = "Table"_("O_key"_(createTwoSpansIntStartingFrom(2)),
+                              "O_value"_(createTwoSpansIntStartingFrom(11))); // NOLINT
+    auto result = eval("Join"_(std::move(intTable1), std::move(intTable2),
+                               "Where"_("Equal"_("L_key"_, "O_key"_))));
+
+    CHECK(result == "Join"_("RadixPartition"_("Table"_("L_value"_("List"_(10,11,12,13))),
+                                              "L_key"_(2,3,4),1,2,3),
+                            "RadixPartition"_("Table"_("O_value"_("List"_(11,12,13,14))),
+                                              "O_key"_(2,3,4),0,1,2),
+                            "Where"_("Equal"_("L_key"_,"O_key"_)))
+    );
   }
 }
 
