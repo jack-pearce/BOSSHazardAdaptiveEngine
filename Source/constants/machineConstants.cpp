@@ -8,6 +8,20 @@
 
 namespace adaptive {
 
+void calculatePartitionMachineConstants() {
+  std::cout << "Calculating machine constants for Partition_minRadixBits... ";
+  double minimumRadixBits = log2(static_cast<double>(l2TlbEntriesFor4KbytePages()) / 4);
+  int roundedMinimumRadixBits = static_cast<int>(std::floor(minimumRadixBits));
+  MachineConstants::getInstance().updateMachineConstant("Partition_minRadixBits",
+                                                        roundedMinimumRadixBits);
+  std::cout << " Complete" << std::endl;
+
+  std::cout << "Calculating machine constants for Partition_startRadixBits... ";
+  int startRadixBits = roundedMinimumRadixBits + 8;
+  MachineConstants::getInstance().updateMachineConstant("Partition_startRadixBits", startRadixBits);
+  std::cout << " Complete" << std::endl;
+}
+
 MachineConstants& MachineConstants::getInstance() {
   static MachineConstants instance;
   return instance;
@@ -116,6 +130,11 @@ void MachineConstants::calculateMissingMachineConstants() {
       break;
     }
     dop = (dop * 2) <= logicalCoresCount() ? dop * 2 : logicalCoresCount();
+
+    if(machineConstants.count("Partition_minRadixBits") == 0 ||
+       machineConstants.count("Partition_startRadixBits") == 0) {
+      calculatePartitionMachineConstants();
+    }
   }
 
   adaptive::config::nonVectorizedDOP = nonVectorizedDOPvalue;
