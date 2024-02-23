@@ -1096,17 +1096,27 @@ public:
       auto& leftKeySymbol = get<Symbol>(predExpr.getDynamicArguments().at(0));
       auto& rightKeySymbol = get<Symbol>(predExpr.getDynamicArguments().at(1));
 
-      // TODO - currently assumes that the keys are all in a single span, rather than multiple
-      // TODO - can keep calling the lambda to return all the spans in the key column
-      auto leftKey = *createLambdaArgument(leftKeySymbol)(leftRelationColumns, nullptr);
-      auto rightKey = *createLambdaArgument(rightKeySymbol)(rightRelationColumns, nullptr);
+      auto getColumnSpans = [](ExpressionArguments& columns,
+                               const Symbol& columnSymbol) -> const ExpressionSpanArguments& {
+        for(auto& columnExpr : columns) {
+          auto& column = get<ComplexExpression>(columnExpr);
+          if(column.getHead().getName() == columnSymbol.getName()) {
+            return get<ComplexExpression>(column.getArguments().at(0)).getSpanArguments();
+          }
+        }
+        throw std::runtime_error("column name not in relation");
+      };
+
+      auto& leftKeySpans = getColumnSpans(leftRelationColumns, leftKeySymbol);
+      auto& rightKeySpans = getColumnSpans(rightRelationColumns, rightKeySymbol);
 
       auto partitionedTables = std::visit(
-          []<typename T1, typename T2>(Span<T1>& leftKeys, Span<T2>& rightKeys) {
+          [&leftKeySpans, &rightKeySpans]<typename T1, typename T2>(const Span<T1>& /*unused*/,
+                                                                    const Span<T2>& /*unused*/) {
             if constexpr((std::is_same_v<T1, int32_t> || std::is_same_v<T1, int64_t>)&&(
                              std::is_same_v<T2, int32_t> || std::is_same_v<T2, int64_t>)) {
-              return adaptive::partitionJoinExpr<T1, T2>(partitionImplementation, leftKeys,
-                                                         rightKeys);
+              return adaptive::partitionJoinExpr<T1, T2>(partitionImplementation, leftKeySpans,
+                                                         rightKeySpans);
             } else {
               throw std::runtime_error("Join key has at least one unsupported column type: " +
                                        std::string(typeid(T1).name()) + ", " +
@@ -1114,7 +1124,7 @@ public:
               return adaptive::PartitionedJoinArguments{}; // NOLINT
             }
           },
-          leftKey, rightKey);
+          leftKeySpans.at(0), rightKeySpans.at(0));
 
       auto updatedLeftRelation =
           constructTableAndRemoveColumn(std::move(leftRelationColumns), leftKeySymbol);

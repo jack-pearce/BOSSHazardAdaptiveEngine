@@ -2768,6 +2768,18 @@ auto createTwoSpansIntStartingFrom = [](intType n) {
   return boss::expressions::ComplexExpression("List"_, {}, {}, std::move(args));
 };
 
+auto createTwoSpansInt = [](intType n1, intType n2) {
+  using SpanArguments = boss::expressions::ExpressionSpanArguments;
+  std::vector<intType> v1 = {n1, n1 + 1, n1 + 2};
+  std::vector<intType> v2 = {n2, n2 + 1, n2 + 2};
+  auto s1 = boss::Span<intType>(std::move(v1));
+  auto s2 = boss::Span<intType>(std::move(v2));
+  SpanArguments args;
+  args.emplace_back(std::move(s1));
+  args.emplace_back(std::move(s2));
+  return boss::expressions::ComplexExpression("List"_, {}, {}, std::move(args));
+};
+
 TEST_CASE("Project - multiple spans", "[hazard-adaptive-engine]") {
   auto engine = boss::engines::BootstrapEngine();
   REQUIRE(!librariesToTest.empty());
@@ -2963,17 +2975,17 @@ TEST_CASE("Join - multi-span", "[hazard-adaptive-engine]") {
   };
 
   SECTION("Simple join 1") {
-    auto intTable1 = "Table"_("L_key"_(createTwoSpansIntStartingFrom(1)),
-                              "L_value"_(createTwoSpansIntStartingFrom(10))); // NOLINT
-    auto intTable2 = "Table"_("O_key"_(createTwoSpansIntStartingFrom(2)),
-                              "O_value"_(createTwoSpansIntStartingFrom(11))); // NOLINT
+    auto intTable1 = "Table"_("L_key"_(createTwoSpansInt(1,100)),
+                              "L_value"_(createTwoSpansInt(1,4))); // NOLINT
+    auto intTable2 = "Table"_("O_key"_(createTwoSpansInt(10000,1)),
+                              "O_value"_(createTwoSpansInt(1,4))); // NOLINT
     auto result = eval("Join"_(std::move(intTable1), std::move(intTable2),
                                "Where"_("Equal"_("L_key"_, "O_key"_))));
 
-    CHECK(result == "Join"_("RadixPartition"_("Table"_("L_value"_("List"_(10,11,12,13))),
-                                              "L_key"_(2,3,4),1,2,3),
-                            "RadixPartition"_("Table"_("O_value"_("List"_(11,12,13,14))),
-                                              "O_key"_(2,3,4),0,1,2),
+    CHECK(result == "Join"_("RadixPartition"_("Table"_("L_value"_("List"_(1,2,3,4,5,6))),
+                                              "L_key"_(1,2,3),0,1,2),
+                            "RadixPartition"_("Table"_("O_value"_("List"_(1,2,3,4,5,6))),
+                                              "O_key"_(1,2,3),3,4,5),
                             "Where"_("Equal"_("L_key"_,"O_key"_)))
     );
   }

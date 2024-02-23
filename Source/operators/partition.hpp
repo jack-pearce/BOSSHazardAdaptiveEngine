@@ -28,7 +28,8 @@ struct PartitionedJoinArguments {
 
 template <typename T1, typename T2>
 PartitionedJoinArguments partitionJoinExpr(PartitionOperators partitionImplementation,
-                                           Span<T1>& tableOneKeys, Span<T2>& tableTwoKeys);
+                                           const ExpressionSpanArguments& tableOneKeys,
+                                           const ExpressionSpanArguments& tableTwoKeys);
 
 } // namespace adaptive
 
