@@ -1131,13 +1131,13 @@ public:
       auto updatedRightRelation =
           constructTableAndRemoveColumn(std::move(rightRelationColumns), rightKeySymbol);
 
-      ExpressionArguments leftArgs, rightArgs, joinArgs;
+      ExpressionArguments leftKeyList, rightKeyList, leftArgs, rightArgs, joinArgs;
       leftArgs.emplace_back(std::move(updatedLeftRelation));
-      leftArgs.emplace_back(
-          ComplexExpression(leftKeySymbol, {}, {}, std::move(partitionedTables.tableOneKeySpans)));
+      leftKeyList.emplace_back(ComplexExpression("List"_, {}, {}, std::move(partitionedTables.tableOneKeySpans)));
+      leftArgs.emplace_back(ComplexExpression(leftKeySymbol, {}, std::move(leftKeyList), {}));
       rightArgs.emplace_back(std::move(updatedRightRelation));
-      rightArgs.emplace_back(
-          ComplexExpression(rightKeySymbol, {}, {}, std::move(partitionedTables.tableTwoKeySpans)));
+      rightKeyList.emplace_back(ComplexExpression("List"_, {}, {}, std::move(partitionedTables.tableTwoKeySpans)));
+      rightArgs.emplace_back(ComplexExpression(rightKeySymbol, {}, std::move(rightKeyList), {}));
 
       auto leftExpr = ComplexExpression("RadixPartition"_, {}, std::move(leftArgs),
                                         std::move(partitionedTables.tableOneIndexSpans));
@@ -1152,6 +1152,7 @@ public:
     };
 
 #ifndef DEFER_TO_OTHER_ENGINE
+    // TODO: Group currently does not handle multiple spans
     // TODO: Group currently only supports grouping on a single column (type long or double)
     (*this)["Group"_] = [](ComplexExpression&& inputExpr) -> Expression {
       ExpressionArguments args = std::move(inputExpr).getArguments();

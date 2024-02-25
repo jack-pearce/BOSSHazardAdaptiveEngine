@@ -2942,9 +2942,9 @@ TEST_CASE("Join - single-span", "[hazard-adaptive-engine]") {
                                "Where"_("Equal"_("L_key"_, "O_key"_))));
 
     CHECK(result == "Join"_("RadixPartition"_("Table"_("L_value"_("List"_(1,2,3,4,5))),
-                                            "L_key"_(1,2),2,1),
+                                            "L_key"_("List"_(1,2)),2,1),
                            "RadixPartition"_("Table"_("O_value"_("List"_(1,2,3,4))),
-                                            "O_key"_(1,2), 2,3),
+                                            "O_key"_("List"_(1,2)), 2,3),
                            "Where"_("Equal"_("L_key"_,"O_key"_)))
     );
   }
@@ -2958,9 +2958,9 @@ TEST_CASE("Join - single-span", "[hazard-adaptive-engine]") {
                                "Where"_("Equal"_("L_key"_, "O_key"_))));
 
     CHECK(result == "Join"_("RadixPartition"_("Table"_("L_value"_("List"_(1,2,3,4,5))),
-                                              "L_key"_(4,5,20009,4000002),4,3,2,1),
+                                              "L_key"_("List"_(4,5,20009,4000002)),4,3,2,1),
                             "RadixPartition"_("Table"_("O_value"_("List"_(1,2,3,4))),
-                                              "O_key"_(4,5,20009,4000002),1,0,2,3),
+                                              "O_key"_("List"_(4,5,20009,4000002)),1,0,2,3),
                             "Where"_("Equal"_("L_key"_,"O_key"_)))
     );
   }
@@ -2983,9 +2983,9 @@ TEST_CASE("Join - multi-span", "[hazard-adaptive-engine]") {
                                "Where"_("Equal"_("L_key"_, "O_key"_))));
 
     CHECK(result == "Join"_("RadixPartition"_("Table"_("L_value"_("List"_(1,2,3,4,5,6))),
-                                              "L_key"_(1,2,3),0,1,2),
+                                              "L_key"_("List"_(1,2,3)),0,1,2),
                             "RadixPartition"_("Table"_("O_value"_("List"_(1,2,3,4,5,6))),
-                                              "O_key"_(1,2,3),3,4,5),
+                                              "O_key"_("List"_(1,2,3)),3,4,5),
                             "Where"_("Equal"_("L_key"_,"O_key"_)))
     );
   }
