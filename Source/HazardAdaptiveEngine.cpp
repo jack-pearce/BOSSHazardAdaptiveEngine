@@ -1126,23 +1126,52 @@ public:
           },
           leftKeySpans.at(0), rightKeySpans.at(0));
 
-      auto updatedLeftRelation =
-          constructTableAndRemoveColumn(std::move(leftRelationColumns), leftKeySymbol);
-      auto updatedRightRelation =
-          constructTableAndRemoveColumn(std::move(rightRelationColumns), rightKeySymbol);
+      auto& tableOnePartitionsOfKeySpans = partitionedTables.tableOnePartitionsOfKeySpans;
+      auto& tableOnePartitionsOfIndexSpans = partitionedTables.tableOnePartitionsOfIndexSpans;
+      auto& tableTwoPartitionsOfKeySpans = partitionedTables.tableTwoPartitionsOfKeySpans;
+      auto& tableTwoPartitionsOfIndexSpans = partitionedTables.tableTwoPartitionsOfIndexSpans;
+      assert(tableOnePartitionsOfKeySpans.size() == tableOnePartitionsOfIndexSpans.size() &&
+             tableOnePartitionsOfIndexSpans.size() == tableTwoPartitionsOfKeySpans.size() &&
+             tableTwoPartitionsOfKeySpans.size() == tableTwoPartitionsOfIndexSpans.size());
 
-      ExpressionArguments leftKeyList, rightKeyList, leftArgs, rightArgs, joinArgs;
-      leftArgs.emplace_back(std::move(updatedLeftRelation));
-      leftKeyList.emplace_back(ComplexExpression("List"_, {}, {}, std::move(partitionedTables.tableOneKeySpans)));
-      leftArgs.emplace_back(ComplexExpression(leftKeySymbol, {}, std::move(leftKeyList), {}));
-      rightArgs.emplace_back(std::move(updatedRightRelation));
-      rightKeyList.emplace_back(ComplexExpression("List"_, {}, {}, std::move(partitionedTables.tableTwoKeySpans)));
-      rightArgs.emplace_back(ComplexExpression(rightKeySymbol, {}, std::move(rightKeyList), {}));
+      ExpressionArguments leftArgs, rightArgs, joinArgs;
+      leftArgs.emplace_back(
+          constructTableAndRemoveColumn(std::move(leftRelationColumns), leftKeySymbol));
+      rightArgs.emplace_back(
+          constructTableAndRemoveColumn(std::move(rightRelationColumns), rightKeySymbol));
 
-      auto leftExpr = ComplexExpression("RadixPartition"_, {}, std::move(leftArgs),
-                                        std::move(partitionedTables.tableOneIndexSpans));
-      auto rightExpr = ComplexExpression("RadixPartition"_, {}, std::move(rightArgs),
-                                         std::move(partitionedTables.tableTwoIndexSpans));
+      for(size_t i = 0; i < tableOnePartitionsOfKeySpans.size(); ++i) {
+        ExpressionArguments leftKeyList, leftPartitionArg, rightKeyList, rightPartitionArg;
+#ifdef DEBUG_MODE
+        std::cout << "Number of tableOneKeySpans in partition " << i << " = "
+                  << tableOnePartitionsOfKeySpans.at(i).size() << std::endl;
+        std::cout << "Number of tableOneIndexesSpans in partition " << i << " = "
+                  << tableOnePartitionsOfIndexSpans.at(i).size() << std::endl;
+        std::cout << "Number of tableTwoKeySpans in partition " << i << " = "
+                  << tableTwoPartitionsOfKeySpans.at(i).size() << std::endl;
+        std::cout << "Number of tableTwoIndexesSpans in partition " << i << " = "
+                  << tableTwoPartitionsOfIndexSpans.at(i).size() << std::endl;
+#endif
+        leftKeyList.emplace_back(
+            ComplexExpression("List"_, {}, {}, std::move(tableOnePartitionsOfKeySpans.at(i))));
+        leftPartitionArg.emplace_back(
+            ComplexExpression(leftKeySymbol, {}, std::move(leftKeyList), {}));
+        leftPartitionArg.emplace_back(
+            ComplexExpression("Indexes"_, {}, {}, std::move(tableOnePartitionsOfIndexSpans.at(i))));
+        leftArgs.emplace_back(ComplexExpression("Partition"_, {}, std::move(leftPartitionArg), {}));
+
+        rightKeyList.emplace_back(
+            ComplexExpression("List"_, {}, {}, std::move(tableTwoPartitionsOfKeySpans.at(i))));
+        rightPartitionArg.emplace_back(
+            ComplexExpression(rightKeySymbol, {}, std::move(rightKeyList), {}));
+        rightPartitionArg.emplace_back(
+            ComplexExpression("Indexes"_, {}, {}, std::move(tableTwoPartitionsOfIndexSpans.at(i))));
+        rightArgs.emplace_back(
+            ComplexExpression("Partition"_, {}, std::move(rightPartitionArg), {}));
+      }
+
+      auto leftExpr = ComplexExpression("RadixPartition"_, {}, std::move(leftArgs), {});
+      auto rightExpr = ComplexExpression("RadixPartition"_, {}, std::move(rightArgs), {});
 
       joinArgs.emplace_back(std::move(leftExpr));
       joinArgs.emplace_back(std::move(rightExpr));

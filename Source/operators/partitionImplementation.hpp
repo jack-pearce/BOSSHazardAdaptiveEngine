@@ -14,8 +14,9 @@
 #include "utilities/papiWrapper.hpp"
 #include "utilities/systemInformation.hpp"
 
+//#define DEBUG
 #define ADAPTIVITY_OUTPUT
-#define CHANGE_PARTITION_TO_SORT_FOR_TESTING
+//#define CHANGE_PARTITION_TO_SORT_FOR_TESTING
 
 namespace adaptive {
 
@@ -859,6 +860,79 @@ private:
   int tuplesPerHazardCheck;
 };
 
+/********************************** UTILITY FUNCTIONS *********************************/
+
+#ifdef DEBUG
+template<typename T> void printArray(T* data, int size) {
+  for (int i = 0; i < size; ++i) {
+    std::cout << data[i] << " ";
+  } std::cout << std::endl;
+}
+#endif
+
+template <typename T>
+std::pair<std::vector<ExpressionSpanArguments>, std::vector<ExpressionSpanArguments>>
+createPartitionsOfSpansAlignedToTableBatches(PartitionedArray<T>& partitionedArray,
+                                             const ExpressionSpanArguments& tableKeys) {
+  auto keys = partitionedArray.partitionedKeys.get();
+  auto indexes = partitionedArray.indexes.get();
+  auto partitions = *(partitionedArray.partitionPositions.get());
+
+#ifdef DEBUG
+  int size = partitions.back().first + partitions.back().second;
+  std::cout << "Keys: ";
+  printArray<T>(keys, size);
+  std::cout << "Indexes: ";
+  printArray<int32_t>(indexes, size);
+  std::cout << "Partitions: ";
+  for(auto& pair : partitions) {
+    std::cout << "[" << pair.first << "," << pair.second << "] ";
+  }
+  std::cout << std::endl;
+#endif
+
+  std::vector<ExpressionSpanArguments> partitionsOfKeySpans, partitionsOfIndexSpans;
+  partitionsOfKeySpans.reserve(partitions.size());
+  partitionsOfIndexSpans.reserve(partitions.size());
+
+  int cumulativeBatchSize = 0;
+  std::vector<int> cumulativeBatchSizes(1, 0);
+  cumulativeBatchSizes.reserve(tableKeys.size() + 1);
+  for(const auto& batch : tableKeys) {
+    cumulativeBatchSize += get<Span<T>>(batch).size();
+    cumulativeBatchSizes.push_back(cumulativeBatchSize);
+  }
+
+  int index = 0;
+  for(size_t partitionNum = 0; partitionNum < partitions.size(); ++partitionNum) {
+    auto partitionEndIndex = partitions[partitionNum].first + partitions[partitionNum].second;
+    ExpressionSpanArguments outputKeySpans, outputIndexSpans;
+    outputKeySpans.reserve(tableKeys.size());
+    outputIndexSpans.reserve(tableKeys.size());
+    int prevSpanEndIndex = partitions[partitionNum].first;
+    for(size_t batchNum = 1; batchNum < cumulativeBatchSizes.size(); ++batchNum) {
+      while(indexes[index] < cumulativeBatchSizes[batchNum] && index < partitionEndIndex) {
+        indexes[index++] -= cumulativeBatchSizes[batchNum - 1];
+      }
+      if(index == prevSpanEndIndex) {
+        outputKeySpans.emplace_back(Span<T>());
+        outputIndexSpans.emplace_back(Span<int32_t>());
+      } else {
+        outputKeySpans.emplace_back(Span<T>(keys + prevSpanEndIndex, index - prevSpanEndIndex,
+                                            [ptr = partitionedArray.partitionedKeys]() {}));
+        outputIndexSpans.emplace_back(Span<int32_t>(indexes + prevSpanEndIndex,
+                                                    index - prevSpanEndIndex,
+                                                    [ptr = partitionedArray.indexes]() {}));
+        prevSpanEndIndex = index;
+      }
+    }
+    partitionsOfKeySpans.push_back(std::move(outputKeySpans));
+    partitionsOfIndexSpans.push_back(std::move(outputIndexSpans));
+  }
+
+  return std::make_pair(std::move(partitionsOfKeySpans), std::move(partitionsOfIndexSpans));
+}
+
 /*********************************** ENTRY FUNCTION ***********************************/
 
 template <typename T1, typename T2>
@@ -881,37 +955,14 @@ PartitionedJoinArguments partitionJoinExpr(PartitionOperators partitionImplement
     }
   }();
 
-  auto& partitionedTableOne = partitionedTables.partitionedArrayOne;
-  auto& partitionedTableTwo = partitionedTables.partitionedArrayTwo;
-
-  auto keysOne = partitionedTableOne.partitionedKeys.get();
-  auto indexesOne = partitionedTableOne.indexes.get();
-  auto partitionsOne = *(partitionedTableOne.partitionPositions.get());
-
-  auto keysTwo = partitionedTableTwo.partitionedKeys.get();
-  auto indexesTwo = partitionedTableTwo.indexes.get();
-  auto partitionsTwo = *(partitionedTableTwo.partitionPositions.get());
-
-  ExpressionSpanArguments tableOneKeySpans, tableOneIndexSpans, tableTwoKeySpans,
-      tableTwoIndexSpans;
-
-  for(int i = 0; i < static_cast<int>(partitionsOne.size()); ++i) {
-    tableOneKeySpans.emplace_back(Span<T1>(keysOne + partitionsOne[i].first,
-                                           partitionsOne[i].second,
-                                           [ptr = partitionedTableOne.partitionedKeys]() {}));
-    tableOneIndexSpans.emplace_back(Span<int32_t>(indexesOne + partitionsOne[i].first,
-                                                  partitionsOne[i].second,
-                                                  [ptr = partitionedTableOne.indexes]() {}));
-    tableTwoKeySpans.emplace_back(Span<T2>(keysTwo + partitionsTwo[i].first,
-                                           partitionsTwo[i].second,
-                                           [ptr = partitionedTableTwo.partitionedKeys]() {}));
-    tableTwoIndexSpans.emplace_back(Span<int32_t>(indexesTwo + partitionsTwo[i].first,
-                                                  partitionsTwo[i].second,
-                                                  [ptr = partitionedTableTwo.indexes]() {}));
-  }
-
-  return {std::move(tableOneKeySpans), std::move(tableOneIndexSpans), std::move(tableTwoKeySpans),
-          std::move(tableTwoIndexSpans)};
+  auto [tableOnePartitionsOfKeySpans, tableOnePartitionsOfIndexSpans] =
+      createPartitionsOfSpansAlignedToTableBatches<T1>(partitionedTables.partitionedArrayOne,
+                                                       tableOneKeys);
+  auto [tableTwoPartitionsOfKeySpans, tableTwoPartitionsOfIndexSpans] =
+      createPartitionsOfSpansAlignedToTableBatches<T2>(partitionedTables.partitionedArrayTwo,
+                                                       tableTwoKeys);
+  return {std::move(tableOnePartitionsOfKeySpans), std::move(tableOnePartitionsOfIndexSpans),
+          std::move(tableTwoPartitionsOfKeySpans), std::move(tableTwoPartitionsOfIndexSpans)};
 }
 
 } // namespace adaptive

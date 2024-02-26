@@ -20,10 +20,10 @@ std::vector<int> partition(PartitionOperators partitionImplementation, int n, T*
                            int radixBits = -1);
 
 struct PartitionedJoinArguments {
-  ExpressionSpanArguments tableOneKeySpans;
-  ExpressionSpanArguments tableOneIndexSpans;
-  ExpressionSpanArguments tableTwoKeySpans;
-  ExpressionSpanArguments tableTwoIndexSpans;
+  std::vector<ExpressionSpanArguments> tableOnePartitionsOfKeySpans;
+  std::vector<ExpressionSpanArguments> tableOnePartitionsOfIndexSpans;
+  std::vector<ExpressionSpanArguments> tableTwoPartitionsOfKeySpans;
+  std::vector<ExpressionSpanArguments> tableTwoPartitionsOfIndexSpans;
 };
 
 template <typename T1, typename T2>
