@@ -429,6 +429,7 @@ private:
     int radixBits = std::min(msbToPartition, radixBitsOperator);
     int shifts = msbToPartition - radixBits;
     int numBuckets = 1 << radixBits;
+    int startingNumBuckets = numBuckets;
     unsigned int mask = numBuckets - 1;
 
     // Complete histogram for array 1
@@ -478,8 +479,8 @@ private:
       }
     }
 
-    std::fill(buckets1.begin(), buckets1.begin() + numBuckets + 1, 0);
-    std::fill(buckets2.begin(), buckets2.begin() + numBuckets + 1, 0);
+    std::fill(buckets1.begin(), buckets1.begin() + startingNumBuckets + 1, 0);
+    std::fill(buckets2.begin(), buckets2.begin() + startingNumBuckets + 1, 0);
 
     msbToPartition -= radixBits;
 
@@ -531,6 +532,7 @@ private:
     radixBits = std::min(msbToPartition, radixBits);
     int shifts = msbToPartition - radixBits;
     int numBuckets = 1 << radixBits;
+    int startingNumBuckets = numBuckets;
     unsigned int mask = numBuckets - 1;
 
     // Complete histogram for array 1
@@ -587,8 +589,8 @@ private:
       }
     }
 
-    std::fill(buckets1.begin(), buckets1.begin() + numBuckets + 1, 0);
-    std::fill(buckets2.begin(), buckets2.begin() + numBuckets + 1, 0);
+    std::fill(buckets1.begin(), buckets1.begin() + startingNumBuckets + 1, 0);
+    std::fill(buckets2.begin(), buckets2.begin() + startingNumBuckets + 1, 0);
 
     msbToPartition -= radixBits;
 
@@ -620,12 +622,6 @@ private:
     for(int j = 0; j < static_cast<int>(partitions1.size()); ++j) {
       if(partitions1[j] != prevPartitionEnd1 && partitions2[j] != prevPartitionEnd2) {
         if((partitions1[j] - prevPartitionEnd1) > maxElementsPerPartition) {
-          if(firstPass && tmpBuffer1 == nullptr) {
-            tmpBuffer1 = std::make_unique<T1[]>(n1); // Lazily allocate tmpBuffer
-            tmpBuffer2 = std::make_unique<T2[]>(n2);
-            keys1 = tmpBuffer1.get(); // Use tmp buffer to leave original array unmodified
-            keys2 = tmpBuffer2.get();
-          }
           performPartitionAux(partitions1[j] - prevPartitionEnd1, buffer1 + prevPartitionEnd1,
                               keys1 + prevPartitionEnd1, indexesBuffer1 + prevPartitionEnd1,
                               indexes1 + prevPartitionEnd1, offset1 + prevPartitionEnd1,
