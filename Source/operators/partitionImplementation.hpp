@@ -14,9 +14,9 @@
 #include "utilities/papiWrapper.hpp"
 #include "utilities/systemInformation.hpp"
 
-//#define DEBUG
+// #define DEBUG
 #define ADAPTIVITY_OUTPUT
-//#define CHANGE_PARTITION_TO_SORT_FOR_TESTING
+// #define CHANGE_PARTITION_TO_SORT_FOR_TESTING
 
 namespace adaptive {
 
@@ -527,8 +527,8 @@ private:
   inline void performPartitionAux(int n1, T1* keys1, T1* buffer1, int32_t* indexes1,
                                   int32_t* indexesBuffer1, int offset1, int n2, T2* keys2,
                                   T2* buffer2, int32_t* indexes2, int32_t* indexesBuffer2,
-                                  int offset2, int msbToPartition, int radixBits, bool copyRequired,
-                                  bool firstPass = false) {
+                                  int offset2, int msbToPartition, int radixBits,
+                                  bool copyRequired) {
     radixBits = std::min(msbToPartition, radixBits);
     int shifts = msbToPartition - radixBits;
     int numBuckets = 1 << radixBits;
@@ -859,10 +859,11 @@ private:
 /********************************** UTILITY FUNCTIONS *********************************/
 
 #ifdef DEBUG
-template<typename T> void printArray(T* data, int size) {
-  for (int i = 0; i < size; ++i) {
+template <typename T> void printArray(T* data, int size) {
+  for(int i = 0; i < size; ++i) {
     std::cout << data[i] << " ";
-  } std::cout << std::endl;
+  }
+  std::cout << std::endl;
 }
 #endif
 
