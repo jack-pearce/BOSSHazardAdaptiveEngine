@@ -879,16 +879,20 @@ createPartitionsOfSpansAlignedToTableBatches(PartitionedArray<T>& partitionedArr
   auto partitions = *(partitionedArray.partitionPositions.get());
 
 #ifdef DEBUG
-  int size = partitions.back().first + partitions.back().second;
-  std::cout << "Keys: ";
-  printArray<T>(keys, size);
-  std::cout << "Indexes: ";
-  printArray<int32_t>(indexes, size);
-  std::cout << "Partitions: ";
-  for(auto& pair : partitions) {
-    std::cout << "[" << pair.first << "," << pair.second << "] ";
+  if(partitions.size() > 0) {
+    int size = partitions.back().first + partitions.back().second;
+    std::cout << "Keys: ";
+    printArray<T>(keys, size);
+    std::cout << "Indexes: ";
+    printArray<int32_t>(indexes, size);
+    std::cout << "Partitions: ";
+    for(auto& pair : partitions) {
+      std::cout << "[" << pair.first << "," << pair.second << "] ";
+    }
+    std::cout << std::endl;
+  } else {
+    std::cout << "No output partitions" << std::endl;
   }
-  std::cout << std::endl;
 #endif
 
   std::vector<ExpressionSpanArguments> partitionsOfKeySpans, partitionsOfIndexSpans;
@@ -903,9 +907,9 @@ createPartitionsOfSpansAlignedToTableBatches(PartitionedArray<T>& partitionedArr
     cumulativeBatchSizes.push_back(cumulativeBatchSize);
   }
 
-  int index = 0;
   for(size_t partitionNum = 0; partitionNum < partitions.size(); ++partitionNum) {
-    auto partitionEndIndex = partitions[partitionNum].first + partitions[partitionNum].second;
+    int index = partitions[partitionNum].first;
+    auto partitionEndIndex = index + partitions[partitionNum].second;
     ExpressionSpanArguments outputKeySpans, outputIndexSpans;
     outputKeySpans.reserve(tableKeys.size());
     outputIndexSpans.reserve(tableKeys.size());
