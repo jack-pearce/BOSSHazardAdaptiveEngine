@@ -13,8 +13,8 @@ enum Select { Branch, Predication, Adaptive, AdaptiveParallel };
 
 std::string getSelectName(Select select);
 
-template <typename T, typename F>
-Span<int32_t> select(Select implementation, const Span<T>& column, T value, bool columnIsFirstArg,
+template <typename T, typename U, typename F>
+Span<int32_t> select(Select implementation, const Span<T>& column, U value, bool columnIsFirstArg,
                      F& predicate, Span<int32_t>&& candidateIndexes, size_t engineDOP = 1,
                      SelectOperatorState* state = nullptr);
 

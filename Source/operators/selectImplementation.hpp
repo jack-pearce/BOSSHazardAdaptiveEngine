@@ -709,8 +709,8 @@ private:
 
 /****************************** ENTRY FUNCTION ******************************/
 
-template <typename T, typename P>
-Span<int32_t> select(Select implementation, const Span<T>& column, T value, bool columnIsFirstArg,
+template <typename T, typename U, typename P>
+Span<int32_t> select(Select implementation, const Span<T>& column, U value, bool columnIsFirstArg,
                      P& predicate, Span<int32_t>&& candidateIndexes, size_t engineDOP,
                      SelectOperatorState* state) {
   assert(1 <= engineDOP && engineDOP <= logicalCoresCount());
