@@ -68,11 +68,11 @@ public:
 #endif
 
     buckets1 = std::vector<int>(1 + (1 << radixBitsOperator), 0);
-    returnBuffer1 = std::shared_ptr<std::remove_cv_t<T1>[]>(new std::remove_cv_t<T1>[nInput1]);
+    returnBuffer1 = std::make_shared<std::remove_cv_t<T1>[]>(nInput1);
     tmpBuffer1 = nullptr; // Lazily allocate buffer when needed
 
-    returnIndexes1 = std::shared_ptr<int32_t[]>(new int32_t[nInput1]);
-    tmpIndexes1 = std::unique_ptr<int32_t[]>(new int32_t[nInput1]);
+    returnIndexes1 = std::make_shared<int32_t[]>(nInput1);
+    tmpIndexes1 = std::make_unique<int32_t[]>(nInput1);
 
     auto indexesPtr1 = tmpIndexes1.get();
     for(auto i = 0; i < nInput1; ++i) {
@@ -80,11 +80,11 @@ public:
     }
 
     buckets2 = std::vector<int>(1 + (1 << radixBitsOperator), 0);
-    returnBuffer2 = std::shared_ptr<std::remove_cv_t<T2>[]>(new std::remove_cv_t<T2>[nInput2]);
+    returnBuffer2 = std::make_shared<std::remove_cv_t<T2>[]>(nInput2);
     tmpBuffer2 = nullptr; // Lazily allocate buffer when needed
 
-    returnIndexes2 = std::shared_ptr<int32_t[]>(new int32_t[nInput2]);
-    tmpIndexes2 = std::unique_ptr<int32_t[]>(new int32_t[nInput2]);
+    returnIndexes2 = std::make_shared<int32_t[]>(nInput2);
+    tmpIndexes2 = std::make_unique<int32_t[]>(nInput2);
 
     auto indexesPtr2 = tmpIndexes2.get();
     for(auto i = 0; i < nInput2; ++i) {
@@ -189,9 +189,9 @@ private:
       if(partitions1[j] != prevPartitionEnd1 && partitions2[j] != prevPartitionEnd2) {
         if((partitions1[j] - prevPartitionEnd1) > maxElementsPerPartition) {
           if(tmpBuffer1 == nullptr) {
-            tmpBuffer1 = std::unique_ptr<std::remove_cv_t<T1>[]>(
-                new std::remove_cv_t<T1>[nInput1]); // Lazily allocate tmpBuffer
-            tmpBuffer2 = std::unique_ptr<std::remove_cv_t<T2>[]>(new std::remove_cv_t<T2>[nInput2]);
+            tmpBuffer1 =
+                std::make_unique<std::remove_cv_t<T1>[]>(nInput1); // Lazily allocate tmpBuffer
+            tmpBuffer2 = std::make_unique<std::remove_cv_t<T2>[]>(nInput2);
           }
           performPartitionAux(partitions1[j] - prevPartitionEnd1, buffer1 + prevPartitionEnd1,
                               tmpBuffer1.get() + prevPartitionEnd1,
@@ -383,11 +383,11 @@ public:
 #endif
 
     buckets1 = std::vector<int>(1 + (1 << radixBitsOperator), 0);
-    returnBuffer1 = std::shared_ptr<std::remove_cv_t<T1>[]>(new std::remove_cv_t<T1>[nInput1]);
+    returnBuffer1 = std::make_shared<std::remove_cv_t<T1>[]>(nInput1);
     tmpBuffer1 = nullptr; // Lazily allocate buffer when needed
 
-    returnIndexes1 = std::shared_ptr<int32_t[]>(new int32_t[nInput1]);
-    tmpIndexes1 = std::unique_ptr<int32_t[]>(new int32_t[nInput1]);
+    returnIndexes1 = std::make_shared<int32_t[]>(nInput1);
+    tmpIndexes1 = std::make_unique<int32_t[]>(nInput1);
 
     auto indexesPtr1 = tmpIndexes1.get();
     for(auto i = 0; i < nInput1; ++i) {
@@ -395,11 +395,11 @@ public:
     }
 
     buckets2 = std::vector<int>(1 + (1 << radixBitsOperator), 0);
-    returnBuffer2 = std::shared_ptr<std::remove_cv_t<T2>[]>(new std::remove_cv_t<T2>[nInput2]);
+    returnBuffer2 = std::make_shared<std::remove_cv_t<T2>[]>(nInput2);
     tmpBuffer2 = nullptr; // Lazily allocate buffer when needed
 
-    returnIndexes2 = std::shared_ptr<int32_t[]>(new int32_t[nInput2]);
-    tmpIndexes2 = std::unique_ptr<int32_t[]>(new int32_t[nInput2]);
+    returnIndexes2 = std::make_shared<int32_t[]>(nInput2);
+    tmpIndexes2 = std::make_unique<int32_t[]>(nInput2);
 
     auto indexesPtr2 = tmpIndexes2.get();
     for(auto i = 0; i < nInput2; ++i) {
@@ -473,7 +473,7 @@ private:
             partitions2, offset2, keysComplete2);
       }
       if(!keysComplete2) { // NOLINT
-        processSpansMicroBatch<T1, T2>(
+        processSpansMicroBatch<T2, T1>(
             outerIterator2, innerIterator2, keySpans2, buffer2, indexes2, indexesBuffer2, buckets2,
             partitions2, offset2, keysComplete2, shifts, mask, radixBits, numBuckets,
             outerIterator1, innerIterator1, keySpans1, buffer1, indexes1, indexesBuffer1, buckets1,
@@ -506,9 +506,9 @@ private:
       if(partitions1[j] != prevPartitionEnd1 && partitions2[j] != prevPartitionEnd2) {
         if((partitions1[j] - prevPartitionEnd1) > maxElementsPerPartition) {
           if(tmpBuffer1 == nullptr) {
-            tmpBuffer1 = std::unique_ptr<std::remove_cv_t<T1>[]>(
-                new std::remove_cv_t<T1>[nInput1]); // Lazily allocate tmpBuffer
-            tmpBuffer2 = std::unique_ptr<std::remove_cv_t<T2>[]>(new std::remove_cv_t<T2>[nInput2]);
+            tmpBuffer1 =
+                std::make_unique<std::remove_cv_t<T1>[]>(nInput1); // Lazily allocate tmpBuffer
+            tmpBuffer2 = std::make_unique<std::remove_cv_t<T2>[]>(nInput2);
           }
           performPartitionAux(partitions1[j] - prevPartitionEnd1, buffer1 + prevPartitionEnd1,
                               tmpBuffer1.get() + prevPartitionEnd1,
@@ -574,7 +574,7 @@ private:
           microBatchSize = std::min(tuplesPerHazardCheck, n2 - i2);
           microBatchStart = i2;
 
-          processMicroBatch<T1, T2>(microBatchStart, microBatchSize, i2, n2, keys2, buffer2,
+          processMicroBatch<T2, T1>(microBatchStart, microBatchSize, i2, n2, keys2, buffer2,
                                     indexes2, indexesBuffer2, buckets2, partitions2, shifts, mask,
                                     radixBits, numBuckets, i1, n1, keys1, buffer1, indexes1,
                                     indexesBuffer1, buckets1, partitions1);
