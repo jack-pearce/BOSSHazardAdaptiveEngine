@@ -64,7 +64,7 @@ public:
 #ifdef CHANGE_PARTITION_TO_SORT_FOR_TESTING
     maxElementsPerPartition = 1;
 #else
-    maxElementsPerPartition = static_cast<double>(l2cacheSize()) / (sizeof(T1) * 2 * 2.5);
+    maxElementsPerPartition = static_cast<double>(l2cacheSize()) / sizeof(T1);
 #endif
 
     buckets1 = std::vector<int>(1 + (1 << radixBitsOperator), 0);
@@ -377,7 +377,7 @@ public:
 #ifdef CHANGE_PARTITION_TO_SORT_FOR_TESTING
     maxElementsPerPartition = 1;
 #else
-    maxElementsPerPartition = static_cast<double>(l2cacheSize()) / (sizeof(T1) * 2 * 2.5);
+    maxElementsPerPartition = static_cast<double>(l2cacheSize()) / sizeof(T1);
 #endif
 
     buckets1 = std::vector<int>(1 + (1 << radixBitsOperator), 0);
@@ -795,8 +795,9 @@ private:
         auto destIndex = buckets[j << 1];
         auto srcIndex = partitions[j << 1];
         auto numElements = buckets[(j << 1) + 1] - srcIndex;
-        std::memcpy(&buffer[destIndex], &buffer[srcIndex], numElements * sizeof(U));
-        std::memcpy(&indexesBuffer[destIndex], &indexesBuffer[srcIndex], numElements * sizeof(U));
+        std::memmove(&buffer[destIndex], &buffer[srcIndex], numElements * sizeof(U)); // May overlap
+        std::memmove(&indexesBuffer[destIndex], &indexesBuffer[srcIndex],
+                     numElements * sizeof(int32_t));
       }
     }
 
