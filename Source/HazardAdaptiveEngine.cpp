@@ -761,6 +761,17 @@ private:
     return {"Table"_, {}, std::move(args), {}};
   }
 
+  static ComplexExpression constructTableWithEmptyColumns(ExpressionArguments&& columns) {
+    ExpressionArguments args;
+    for(auto&& column : columns) {
+      ExpressionArguments dyns;
+      dyns.emplace_back("List"_());
+      args.emplace_back(ComplexExpression(std::move(get<ComplexExpression>(column)).getHead(), {},
+                                          std::move(dyns), {}));
+    }
+    return {"Table"_, {}, std::move(args), {}};
+  }
+
 public:
   OperatorMap() {
     (*this)["Plus"_] =
@@ -1105,6 +1116,13 @@ public:
       auto& leftKeySymbol = get<Symbol>(predExpr.getDynamicArguments().at(0));
       auto& rightKeySymbol = get<Symbol>(predExpr.getDynamicArguments().at(1));
 
+      if(leftRelationColumns.empty()) {
+        return constructTableWithEmptyColumns(std::move(rightRelationColumns));
+      }
+      if(rightRelationColumns.empty()) {
+        return constructTableWithEmptyColumns(std::move(leftRelationColumns));
+      }
+
       auto getColumnSpans = [](ExpressionArguments& columns,
                                const Symbol& columnSymbol) -> const ExpressionSpanArguments& {
         for(auto& columnExpr : columns) {
@@ -1118,6 +1136,13 @@ public:
 
       auto& leftKeySpans = getColumnSpans(leftRelationColumns, leftKeySymbol);
       auto& rightKeySpans = getColumnSpans(rightRelationColumns, rightKeySymbol);
+
+      if(leftKeySpans.empty() || rightKeySpans.empty()) {
+        leftRelationColumns.insert(leftRelationColumns.end(),
+                                   std::make_move_iterator(rightRelationColumns.begin()),
+                                   std::make_move_iterator(rightRelationColumns.end()));
+        return constructTableWithEmptyColumns(std::move(leftRelationColumns));
+      }
 
       auto partitionedTables = std::visit(
           boss::utilities::overload(
