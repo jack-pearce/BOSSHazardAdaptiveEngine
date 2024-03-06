@@ -2,6 +2,7 @@
 #define BOSSHAZARDADAPTIVEENGINE_PARTITION_HPP
 
 #include "HazardAdaptiveEngine.hpp"
+#include "config.hpp"
 
 #include <Expression.hpp>
 #include <string>
@@ -10,8 +11,6 @@
 using boss::Span;
 
 namespace adaptive {
-
-enum PartitionOperators { RadixBitsFixed, RadixBitsAdaptive };
 
 std::string getPartitionName(PartitionOperators partitionImplementation);
 
@@ -29,7 +28,8 @@ struct PartitionedJoinArguments {
 template <typename T1, typename T2>
 PartitionedJoinArguments partitionJoinExpr(PartitionOperators partitionImplementation,
                                            const ExpressionSpanArguments& tableOneKeys,
-                                           const ExpressionSpanArguments& tableTwoKeys);
+                                           const ExpressionSpanArguments& tableTwoKeys,
+                                           int dop = 1);
 
 } // namespace adaptive
 

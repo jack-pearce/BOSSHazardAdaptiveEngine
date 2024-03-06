@@ -3,13 +3,12 @@
 
 #include <Expression.hpp>
 
+#include "config.hpp"
 #include "utilities/sharedDataTypes.hpp"
 
 using boss::Span;
 
 namespace adaptive {
-
-enum Select { Branch, Predication, Adaptive, AdaptiveParallel };
 
 std::string getSelectName(Select select);
 

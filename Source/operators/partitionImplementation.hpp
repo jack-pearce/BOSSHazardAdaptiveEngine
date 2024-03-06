@@ -1,31 +1,46 @@
 #ifndef BOSSHAZARDADAPTIVEENGINE_PARTITIONIMPLEMENTATION_HPP
 #define BOSSHAZARDADAPTIVEENGINE_PARTITIONIMPLEMENTATION_HPP
 
+#include <atomic>
 #include <cassert>
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <vector>
 
 #include "constants/machineConstants.hpp"
 #include "utilities/dataStructures.hpp"
+#include "utilities/memory.hpp"
 #include "utilities/papiWrapper.hpp"
 #include "utilities/systemInformation.hpp"
 
 // #define DEBUG
 #define ADAPTIVITY_OUTPUT
 // #define CHANGE_PARTITION_TO_SORT_FOR_TESTING
+#define USE_ADAPTIVE_OVER_ADAPTIVE_PARALLEL_FOR_DOP_1
+
+constexpr int TUPLES_PER_HAZARD_CHECK = 10 * 1000;
 
 namespace adaptive {
 
 /****************************** FORWARD DECLARATIONS ******************************/
 
+#ifdef DEBUG
+template <typename T> void printArray(T* data, int size) {
+  for(int i = 0; i < size; ++i) {
+    std::cout << data[i] << " ";
+  }
+  std::cout << std::endl;
+}
+#endif
+
 class MonitorPartition {
 public:
   explicit MonitorPartition(const long_long* sTlbStoreMisses_)
-      : sTlbStoreMisses(sTlbStoreMisses_), tuplesPerTlbStoreMiss(50.0) {}
+      : sTlbStoreMisses(sTlbStoreMisses_), tuplesPerTlbStoreMiss(10.0) {}
   inline bool robustnessIncreaseRequired(int tuplesProcessed) {
     return (static_cast<float>(tuplesProcessed) / static_cast<float>(*sTlbStoreMisses)) <
            tuplesPerTlbStoreMiss;
@@ -68,11 +83,11 @@ public:
 #endif
 
     buckets1 = std::vector<int>(1 + (1 << radixBitsOperator), 0);
-    returnBuffer1 = std::make_shared<std::remove_cv_t<T1>[]>(nInput1);
+    returnBuffer1 = std::make_shared_for_overwrite<std::remove_cv_t<T1>[]>(nInput1);
     tmpBuffer1 = nullptr; // Lazily allocate buffer when needed
 
-    returnIndexes1 = std::make_shared<int32_t[]>(nInput1);
-    tmpIndexes1 = std::make_unique<int32_t[]>(nInput1);
+    returnIndexes1 = std::make_shared_for_overwrite<int32_t[]>(nInput1);
+    tmpIndexes1 = std::make_unique_for_overwrite<int32_t[]>(nInput1);
 
     auto indexesPtr1 = tmpIndexes1.get();
     for(auto i = 0; i < nInput1; ++i) {
@@ -80,11 +95,11 @@ public:
     }
 
     buckets2 = std::vector<int>(1 + (1 << radixBitsOperator), 0);
-    returnBuffer2 = std::make_shared<std::remove_cv_t<T2>[]>(nInput2);
+    returnBuffer2 = std::make_shared_for_overwrite<std::remove_cv_t<T2>[]>(nInput2);
     tmpBuffer2 = nullptr; // Lazily allocate buffer when needed
 
-    returnIndexes2 = std::make_shared<int32_t[]>(nInput2);
-    tmpIndexes2 = std::make_unique<int32_t[]>(nInput2);
+    returnIndexes2 = std::make_shared_for_overwrite<int32_t[]>(nInput2);
+    tmpIndexes2 = std::make_unique_for_overwrite<int32_t[]>(nInput2);
 
     auto indexesPtr2 = tmpIndexes2.get();
     for(auto i = 0; i < nInput2; ++i) {
@@ -92,13 +107,13 @@ public:
     }
   }
 
-  TwoPartitionedArrays<T1, T2> processInput() {
+  TwoPartitionedArrays<std::remove_cv_t<T1>, std::remove_cv_t<T2>> processInput() {
     performPartition();
-    return TwoPartitionedArrays<T1, T2>{
-        PartitionedArray<T1>{
+    return TwoPartitionedArrays<std::remove_cv_t<T1>, std::remove_cv_t<T2>>{
+        PartitionedArray<std::remove_cv_t<T1>>{
             returnBuffer1, returnIndexes1,
             std::make_unique<vectorOfPairs<int, int>>(std::move(outputPartitions1))},
-        PartitionedArray<T2>{
+        PartitionedArray<std::remove_cv_t<T2>>{
             returnBuffer2, returnIndexes2,
             std::make_unique<vectorOfPairs<int, int>>(std::move(outputPartitions2))}};
   }
@@ -169,10 +184,12 @@ private:
 
     msbToPartition -= radixBits;
 
+    int prevPartitionEnd1 = 0;
+    int prevPartitionEnd2 = 0;
     if(msbToPartition == 0) { // No ability to partition further, so return early
-      int prevPartitionEnd1 = 0;
-      int prevPartitionEnd2 = 0;
-      for(int j = 0; j < static_cast<int>(partitions1.size()); ++j) {
+      outputPartitions1.reserve(partitions1.size());
+      outputPartitions2.reserve(partitions1.size());
+      for(size_t j = 0; j < partitions1.size(); ++j) {
         if(partitions1[j] != prevPartitionEnd1 && partitions2[j] != prevPartitionEnd2) {
           outputPartitions1.emplace_back(prevPartitionEnd1, partitions1[j] - prevPartitionEnd1);
           outputPartitions2.emplace_back(prevPartitionEnd2, partitions2[j] - prevPartitionEnd2);
@@ -183,15 +200,13 @@ private:
       return;
     }
 
-    int prevPartitionEnd1 = 0;
-    int prevPartitionEnd2 = 0;
-    for(int j = 0; j < static_cast<int>(partitions1.size()); ++j) {
+    for(size_t j = 0; j < partitions1.size(); ++j) {
       if(partitions1[j] != prevPartitionEnd1 && partitions2[j] != prevPartitionEnd2) {
         if((partitions1[j] - prevPartitionEnd1) > maxElementsPerPartition) {
           if(tmpBuffer1 == nullptr) {
-            tmpBuffer1 =
-                std::make_unique<std::remove_cv_t<T1>[]>(nInput1); // Lazily allocate tmpBuffer
-            tmpBuffer2 = std::make_unique<std::remove_cv_t<T2>[]>(nInput2);
+            // Lazily allocate tmpBuffer
+            tmpBuffer1 = std::make_unique_for_overwrite<std::remove_cv_t<T1>[]>(nInput1);
+            tmpBuffer2 = std::make_unique_for_overwrite<std::remove_cv_t<T2>[]>(nInput2);
           }
           performPartitionAux(partitions1[j] - prevPartitionEnd1, buffer1 + prevPartitionEnd1,
                               tmpBuffer1.get() + prevPartitionEnd1,
@@ -254,17 +269,18 @@ private:
 
     msbToPartition -= radixBits;
 
+    int prevPartitionEnd1 = 0;
+    int prevPartitionEnd2 = 0;
     if(msbToPartition == 0) { // No ability to partition further, so return early
+      outputPartitions1.reserve(partitions1.size());
+      outputPartitions2.reserve(partitions1.size());
       if(copyRequired) {
         std::memcpy(keys1, buffer1, n1 * sizeof(T1));
         std::memcpy(indexes1, indexesBuffer1, n1 * sizeof(int32_t));
         std::memcpy(keys2, buffer2, n2 * sizeof(T2));
         std::memcpy(indexes2, indexesBuffer2, n2 * sizeof(int32_t));
       }
-
-      int prevPartitionEnd1 = 0;
-      int prevPartitionEnd2 = 0;
-      for(int j = 0; j < static_cast<int>(partitions1.size()); ++j) {
+      for(size_t j = 0; j < partitions1.size(); ++j) {
         if(partitions1[j] != prevPartitionEnd1 && partitions2[j] != prevPartitionEnd2) {
           outputPartitions1.emplace_back(offset1 + prevPartitionEnd1,
                                          partitions1[j] - prevPartitionEnd1);
@@ -277,9 +293,7 @@ private:
       return;
     }
 
-    int prevPartitionEnd1 = 0;
-    int prevPartitionEnd2 = 0;
-    for(int j = 0; j < static_cast<int>(partitions1.size()); ++j) {
+    for(size_t j = 0; j < partitions1.size(); ++j) {
       if(partitions1[j] != prevPartitionEnd1 && partitions2[j] != prevPartitionEnd2) {
         if((partitions1[j] - prevPartitionEnd1) > maxElementsPerPartition) {
           performPartitionAux(partitions1[j] - prevPartitionEnd1, buffer1 + prevPartitionEnd1,
@@ -365,7 +379,8 @@ public:
                     const ExpressionSpanArguments& keySpans2_)
       : nInput1(0), keySpans1(keySpans1_), nInput2(0), keySpans2(keySpans2_),
         eventSet(getDataTlbStoreMissesEventSet()),
-        monitor(MonitorPartition(eventSet.getCounterDiffsPtr())), tuplesPerHazardCheck(10 * 1000) {
+        monitor(MonitorPartition(eventSet.getCounterDiffsPtr())),
+        tuplesPerHazardCheck(TUPLES_PER_HAZARD_CHECK) {
     std::string startName = "Partition_startRadixBits";
     radixBitsOperator =
         static_cast<int>(MachineConstants::getInstance().getMachineConstant(startName));
@@ -383,11 +398,11 @@ public:
 #endif
 
     buckets1 = std::vector<int>(1 + (1 << radixBitsOperator), 0);
-    returnBuffer1 = std::make_shared<std::remove_cv_t<T1>[]>(nInput1);
+    returnBuffer1 = std::make_shared_for_overwrite<std::remove_cv_t<T1>[]>(nInput1);
     tmpBuffer1 = nullptr; // Lazily allocate buffer when needed
 
-    returnIndexes1 = std::make_shared<int32_t[]>(nInput1);
-    tmpIndexes1 = std::make_unique<int32_t[]>(nInput1);
+    returnIndexes1 = std::make_shared_for_overwrite<int32_t[]>(nInput1);
+    tmpIndexes1 = std::make_unique_for_overwrite<int32_t[]>(nInput1);
 
     auto indexesPtr1 = tmpIndexes1.get();
     for(auto i = 0; i < nInput1; ++i) {
@@ -395,11 +410,11 @@ public:
     }
 
     buckets2 = std::vector<int>(1 + (1 << radixBitsOperator), 0);
-    returnBuffer2 = std::make_shared<std::remove_cv_t<T2>[]>(nInput2);
+    returnBuffer2 = std::make_shared_for_overwrite<std::remove_cv_t<T2>[]>(nInput2);
     tmpBuffer2 = nullptr; // Lazily allocate buffer when needed
 
-    returnIndexes2 = std::make_shared<int32_t[]>(nInput2);
-    tmpIndexes2 = std::make_unique<int32_t[]>(nInput2);
+    returnIndexes2 = std::make_shared_for_overwrite<int32_t[]>(nInput2);
+    tmpIndexes2 = std::make_unique_for_overwrite<int32_t[]>(nInput2);
 
     auto indexesPtr2 = tmpIndexes2.get();
     for(auto i = 0; i < nInput2; ++i) {
@@ -407,13 +422,13 @@ public:
     }
   }
 
-  TwoPartitionedArrays<T1, T2> processInput() {
+  TwoPartitionedArrays<std::remove_cv_t<T1>, std::remove_cv_t<T2>> processInput() {
     performPartition();
-    return TwoPartitionedArrays<T1, T2>{
-        PartitionedArray<T1>{
+    return TwoPartitionedArrays<std::remove_cv_t<T1>, std::remove_cv_t<T2>>{
+        PartitionedArray<std::remove_cv_t<T1>>{
             returnBuffer1, returnIndexes1,
             std::make_unique<vectorOfPairs<int, int>>(std::move(outputPartitions1))},
-        PartitionedArray<T2>{
+        PartitionedArray<std::remove_cv_t<T2>>{
             returnBuffer2, returnIndexes2,
             std::make_unique<vectorOfPairs<int, int>>(std::move(outputPartitions2))}};
   }
@@ -486,10 +501,12 @@ private:
 
     msbToPartition -= radixBits;
 
+    int prevPartitionEnd1 = 0;
+    int prevPartitionEnd2 = 0;
     if(msbToPartition == 0) { // No ability to partition further, so return early
-      int prevPartitionEnd1 = 0;
-      int prevPartitionEnd2 = 0;
-      for(int j = 0; j < static_cast<int>(partitions1.size()); ++j) {
+      outputPartitions1.reserve(partitions1.size());
+      outputPartitions2.reserve(partitions1.size());
+      for(size_t j = 0; j < partitions1.size(); ++j) {
         if(partitions1[j] != prevPartitionEnd1 && partitions2[j] != prevPartitionEnd2) {
           outputPartitions1.emplace_back(prevPartitionEnd1, partitions1[j] - prevPartitionEnd1);
           outputPartitions2.emplace_back(prevPartitionEnd2, partitions2[j] - prevPartitionEnd2);
@@ -500,15 +517,13 @@ private:
       return;
     }
 
-    int prevPartitionEnd1 = 0;
-    int prevPartitionEnd2 = 0;
-    for(int j = 0; j < static_cast<int>(partitions1.size()); ++j) {
+    for(size_t j = 0; j < partitions1.size(); ++j) {
       if(partitions1[j] != prevPartitionEnd1 && partitions2[j] != prevPartitionEnd2) {
         if((partitions1[j] - prevPartitionEnd1) > maxElementsPerPartition) {
           if(tmpBuffer1 == nullptr) {
-            tmpBuffer1 =
-                std::make_unique<std::remove_cv_t<T1>[]>(nInput1); // Lazily allocate tmpBuffer
-            tmpBuffer2 = std::make_unique<std::remove_cv_t<T2>[]>(nInput2);
+            // Lazily allocate tmpBuffer
+            tmpBuffer1 = std::make_unique_for_overwrite<std::remove_cv_t<T1>[]>(nInput1);
+            tmpBuffer2 = std::make_unique_for_overwrite<std::remove_cv_t<T2>[]>(nInput2);
           }
           performPartitionAux(partitions1[j] - prevPartitionEnd1, buffer1 + prevPartitionEnd1,
                               tmpBuffer1.get() + prevPartitionEnd1,
@@ -598,17 +613,18 @@ private:
 
     msbToPartition -= radixBits;
 
+    int prevPartitionEnd1 = 0;
+    int prevPartitionEnd2 = 0;
     if(msbToPartition == 0) { // No ability to partition further, so return early
+      outputPartitions1.reserve(partitions1.size());
+      outputPartitions2.reserve(partitions1.size());
       if(copyRequired) {
         std::memcpy(keys1, buffer1, n1 * sizeof(T1));
         std::memcpy(indexes1, indexesBuffer1, n1 * sizeof(int32_t));
         std::memcpy(keys2, buffer2, n2 * sizeof(T2));
         std::memcpy(indexes2, indexesBuffer2, n2 * sizeof(int32_t));
       }
-
-      int prevPartitionEnd1 = 0;
-      int prevPartitionEnd2 = 0;
-      for(int j = 0; j < static_cast<int>(partitions1.size()); ++j) {
+      for(size_t j = 0; j < partitions1.size(); ++j) {
         if(partitions1[j] != prevPartitionEnd1 && partitions2[j] != prevPartitionEnd2) {
           outputPartitions1.emplace_back(offset1 + prevPartitionEnd1,
                                          partitions1[j] - prevPartitionEnd1);
@@ -621,9 +637,7 @@ private:
       return;
     }
 
-    int prevPartitionEnd1 = 0;
-    int prevPartitionEnd2 = 0;
-    for(int j = 0; j < static_cast<int>(partitions1.size()); ++j) {
+    for(size_t j = 0; j < partitions1.size(); ++j) {
       if(partitions1[j] != prevPartitionEnd1 && partitions2[j] != prevPartitionEnd2) {
         if((partitions1[j] - prevPartitionEnd1) > maxElementsPerPartition) {
           performPartitionAux(partitions1[j] - prevPartitionEnd1, buffer1 + prevPartitionEnd1,
@@ -690,7 +704,7 @@ private:
     eventSet.readCountersAndUpdateDiff();
     offset += processed;
 
-    if(processed == tuplesPerHazardCheck &&
+    if(processed == tuplesPerHazardCheck && radixBits > minimumRadixBits &&
        monitor.robustnessIncreaseRequired(tuplesPerHazardCheck)) {
       --radixBits;
       ++shifts;
@@ -706,8 +720,10 @@ private:
 
       mergePartitions(buffer, indexesBuffer, partitions, buckets, numBuckets, true);
       mergePartitions(buffer_2, indexesBuffer_2, partitions_2, buckets_2, numBuckets, offset_2 > 0);
+    }
 
-      if(radixBits == minimumRadixBits) { // Complete partitioning to avoid unnecessary checks
+    if(radixBits <= minimumRadixBits) { // Complete partitioning to avoid unnecessary checks
+      if(outerIterator != keySpans.end()) {
         while(true) {
           while(innerIterator != (std::get<Span<U1>>(*outerIterator)).end()) {
             auto index = buckets[((*innerIterator) >> shifts) & mask]++;
@@ -720,7 +736,9 @@ private:
             innerIterator = (std::get<Span<U1>>(*outerIterator)).begin();
           }
         }
+      }
 
+      if(outerIterator_2 != keySpans_2.end()) {
         while(true) {
           while(innerIterator_2 != (std::get<Span<U2>>(*outerIterator_2)).end()) {
             auto index = buckets_2[((*innerIterator_2) >> shifts) & mask]++;
@@ -733,10 +751,10 @@ private:
             innerIterator_2 = (std::get<Span<U2>>(*outerIterator_2)).begin();
           }
         }
-
-        keysComplete = true;
-        keysComplete_2 = true;
       }
+
+      keysComplete = true;
+      keysComplete_2 = true;
     }
   }
 
@@ -862,21 +880,1135 @@ private:
   int tuplesPerHazardCheck;
 };
 
-/********************************** UTILITY FUNCTIONS *********************************/
+/************************** SINGLE-THREADED FOR MULTI-THREADED **************************/
+
+struct TwoPartitionedArraysPartitionsOnly {
+  std::unique_ptr<vectorOfPairs<int, int>> tableOnePartitionPositions;
+  std::unique_ptr<vectorOfPairs<int, int>> tableTwoPartitionPositions;
+};
+
+template <typename T> struct PartitionedArrayAlt {
+  std::shared_ptr<T[]> partitionedKeys;
+  std::shared_ptr<int32_t[]> indexes;
+  std::unique_ptr<std::vector<int>> partitionPositions;
+};
+
+template <typename T1, typename T2> struct TwoPartitionedArraysAlt {
+  PartitionedArrayAlt<T1> partitionedArrayOne;
+  PartitionedArrayAlt<T2> partitionedArrayTwo;
+};
+
+template <typename T1, typename T2> class PartitionAdaptiveRawArrays {
+public:
+  PartitionAdaptiveRawArrays()
+      : eventSet(getDataTlbStoreMissesEventSet()),
+        monitor(MonitorPartition(eventSet.getCounterDiffsPtr())),
+        tuplesPerHazardCheck(TUPLES_PER_HAZARD_CHECK) {
+
+    bufferNumBytes = 2 * l2cacheSize();
+    keysTmpBuffer1 = static_cast<T1*>(malloc(bufferNumBytes));
+    indexesTmpBuffer1 = static_cast<int32_t*>(malloc(bufferNumBytes));
+    keysTmpBuffer2 = static_cast<T2*>(malloc(bufferNumBytes));
+    indexesTmpBuffer2 = static_cast<int32_t*>(malloc(bufferNumBytes));
+
+    if(!keysTmpBuffer1 || !indexesTmpBuffer1 || !keysTmpBuffer2 || !indexesTmpBuffer2) {
+      throw std::bad_alloc();
+    }
+  }
+
+  ~PartitionAdaptiveRawArrays() {
+    free(keysTmpBuffer1);
+    free(indexesTmpBuffer1);
+    free(keysTmpBuffer2);
+    free(indexesTmpBuffer2);
+  }
+
+  TwoPartitionedArraysPartitionsOnly
+  processInput(int n1, T1* keys1, int32_t* indexes1, int overallOffset1_, int n2, T2* keys2,
+               int32_t* indexes2, int overallOffset2_, int minimumRadixBits_, int radixBits,
+               int msbToPartitionInput_, int maxElementsPerPartition_,
+               std::atomic<int>* totalOutputPartitions_) {
+    nInput1 = n1;
+    keysInput1 = keys1;
+    indexesInput1 = indexes1;
+    overallOffset1 = overallOffset1_;
+
+    nInput2 = n2;
+    keysInput2 = keys2;
+    indexesInput2 = indexes2;
+    overallOffset2 = overallOffset2_;
+
+    minimumRadixBits = minimumRadixBits_;
+    radixBitsOperator = radixBits;
+    msbToPartitionInput = msbToPartitionInput_;
+    maxElementsPerPartition = maxElementsPerPartition_;
+    totalOutputPartitions = totalOutputPartitions_;
+
+    size_t bufferBytesRequired = std::max(nInput1 * sizeof(T1), nInput2 * sizeof(T2));
+    bufferBytesRequired = std::max(bufferBytesRequired, nInput1 * sizeof(int32_t));
+    bufferBytesRequired = std::max(bufferBytesRequired, nInput2 * sizeof(int32_t));
+
+    if(bufferNumBytes < bufferBytesRequired) {
+      keysTmpBuffer1 = static_cast<T1*>(realloc(keysTmpBuffer1, bufferBytesRequired));
+      indexesTmpBuffer1 = static_cast<int32_t*>(realloc(indexesTmpBuffer1, bufferBytesRequired));
+      keysTmpBuffer2 = static_cast<T2*>(realloc(keysTmpBuffer2, bufferBytesRequired));
+      indexesTmpBuffer2 = static_cast<int32_t*>(realloc(indexesTmpBuffer2, bufferBytesRequired));
+      bufferNumBytes = bufferBytesRequired;
+      if(!keysTmpBuffer1 || !indexesTmpBuffer1 || !keysTmpBuffer2 || !indexesTmpBuffer2) {
+        throw std::bad_alloc();
+      }
+    }
+
+    buckets1.resize(1 + (1 << radixBitsOperator));
+    std::fill(buckets1.begin(), buckets1.end(), 0);
+    buckets2.resize(1 + (1 << radixBitsOperator));
+    std::fill(buckets1.begin(), buckets1.end(), 0);
+
+    performPartition(nInput1, keysInput1, keysTmpBuffer1, indexesInput1, indexesTmpBuffer1,
+                     overallOffset1, nInput2, keysInput2, keysTmpBuffer2, indexesInput2,
+                     indexesTmpBuffer2, overallOffset2, msbToPartitionInput, radixBitsOperator,
+                     true);
+    totalOutputPartitions->fetch_add(outputPartitions1.size());
+    return TwoPartitionedArraysPartitionsOnly{
+        std::make_unique<vectorOfPairs<int, int>>(std::move(outputPartitions1)),
+        std::make_unique<vectorOfPairs<int, int>>(std::move(outputPartitions2))};
+  }
+
+private:
+  inline void performPartition(int n1, T1* keys1, T1* buffer1, int32_t* indexes1,
+                               int32_t* indexesBuffer1, int offset1, int n2, T2* keys2, T2* buffer2,
+                               int32_t* indexes2, int32_t* indexesBuffer2, int offset2,
+                               int msbToPartition, int radixBits, bool copyRequired) {
+    radixBits = std::min(msbToPartition, radixBits);
+    int shifts = msbToPartition - radixBits;
+    int numBuckets = 1 << radixBits;
+    int startingNumBuckets = numBuckets;
+    unsigned int mask = numBuckets - 1;
+
+    // Complete histogram for array 1
+    int i, microBatchStart, microBatchSize;
+    for(i = 0; i < n1; i++) {
+      buckets1[1 + ((keys1[i] >> shifts) & mask)]++;
+    }
+    for(i = 2; i <= numBuckets; i++) {
+      buckets1[i] += buckets1[i - 1];
+    }
+    std::vector<int> partitions1(buckets1.data() + 1, buckets1.data() + numBuckets + 1);
+
+    // Complete histogram for array 2
+    for(i = 0; i < n2; i++) {
+      buckets2[1 + ((keys2[i] >> shifts) & mask)]++;
+    }
+    for(i = 2; i <= numBuckets; i++) {
+      buckets2[i] += buckets2[i - 1];
+    }
+    std::vector<int> partitions2(buckets2.data() + 1, buckets2.data() + numBuckets + 1);
+
+    int i1 = 0, i2 = 0;
+    if(radixBits > minimumRadixBits) {
+      while(i2 < n2 || i1 < n1) { // NOLINT
+        if(i1 < n1) {             // NOLINT
+          microBatchSize = std::min(tuplesPerHazardCheck, n1 - i1);
+          microBatchStart = i1;
+
+          processMicroBatch<T1, T2>(microBatchStart, microBatchSize, i1, n1, keys1, buffer1,
+                                    indexes1, indexesBuffer1, buckets1, partitions1, shifts, mask,
+                                    radixBits, numBuckets, i2, n2, keys2, buffer2, indexes2,
+                                    indexesBuffer2, buckets2, partitions2);
+        }
+        if(i2 < n2) { // NOLINT
+          microBatchSize = std::min(tuplesPerHazardCheck, n2 - i2);
+          microBatchStart = i2;
+
+          processMicroBatch<T2, T1>(microBatchStart, microBatchSize, i2, n2, keys2, buffer2,
+                                    indexes2, indexesBuffer2, buckets2, partitions2, shifts, mask,
+                                    radixBits, numBuckets, i1, n1, keys1, buffer1, indexes1,
+                                    indexesBuffer1, buckets1, partitions1);
+        }
+      }
+    } else {
+      for(; i1 < n1; i1++) {
+        auto index = buckets1[(keys1[i1] >> shifts) & mask]++;
+        buffer1[index] = keys1[i1];
+        indexesBuffer1[index] = indexes1[i1];
+      }
+      for(; i2 < n2; i2++) {
+        auto index = buckets2[(keys2[i2] >> shifts) & mask]++;
+        buffer2[index] = keys2[i2];
+        indexesBuffer2[index] = indexes2[i2];
+      }
+    }
+
+    std::fill(buckets1.begin(), buckets1.begin() + startingNumBuckets + 1, 0);
+    std::fill(buckets2.begin(), buckets2.begin() + startingNumBuckets + 1, 0);
+
+    msbToPartition -= radixBits;
+
+    int prevPartitionEnd1 = 0;
+    int prevPartitionEnd2 = 0;
+    if(msbToPartition == 0) { // No ability to partition further, so return early
+      outputPartitions1.reserve(partitions1.size());
+      outputPartitions2.reserve(partitions1.size());
+      if(copyRequired) {
+        std::memcpy(keys1, buffer1, n1 * sizeof(T1));
+        std::memcpy(indexes1, indexesBuffer1, n1 * sizeof(int32_t));
+        std::memcpy(keys2, buffer2, n2 * sizeof(T2));
+        std::memcpy(indexes2, indexesBuffer2, n2 * sizeof(int32_t));
+      }
+      for(size_t j = 0; j < partitions1.size(); ++j) {
+        if(partitions1[j] != prevPartitionEnd1 && partitions2[j] != prevPartitionEnd2) {
+          outputPartitions1.emplace_back(offset1 + prevPartitionEnd1,
+                                         partitions1[j] - prevPartitionEnd1);
+          outputPartitions2.emplace_back(offset2 + prevPartitionEnd2,
+                                         partitions2[j] - prevPartitionEnd2);
+        }
+        prevPartitionEnd1 = partitions1[j];
+        prevPartitionEnd2 = partitions2[j];
+      }
+      return;
+    }
+
+    for(size_t j = 0; j < partitions1.size(); ++j) {
+      if(partitions1[j] != prevPartitionEnd1 && partitions2[j] != prevPartitionEnd2) {
+        if((partitions1[j] - prevPartitionEnd1) > maxElementsPerPartition) {
+          performPartition(partitions1[j] - prevPartitionEnd1, buffer1 + prevPartitionEnd1,
+                           keys1 + prevPartitionEnd1, indexesBuffer1 + prevPartitionEnd1,
+                           indexes1 + prevPartitionEnd1, offset1 + prevPartitionEnd1,
+                           partitions2[j] - prevPartitionEnd2, buffer2 + prevPartitionEnd2,
+                           keys2 + prevPartitionEnd2, indexesBuffer2 + prevPartitionEnd2,
+                           indexes2 + prevPartitionEnd2, offset2 + prevPartitionEnd2,
+                           msbToPartition, radixBits, !copyRequired);
+        } else {
+          if(copyRequired) {
+            std::memcpy(keys1 + prevPartitionEnd1, buffer1 + prevPartitionEnd1,
+                        (partitions1[j] - prevPartitionEnd1) * sizeof(T1));
+            std::memcpy(indexes1 + prevPartitionEnd1, indexesBuffer1 + prevPartitionEnd1,
+                        (partitions1[j] - prevPartitionEnd1) * sizeof(int32_t));
+            std::memcpy(keys2 + prevPartitionEnd2, buffer2 + prevPartitionEnd2,
+                        (partitions2[j] - prevPartitionEnd2) * sizeof(T2));
+            std::memcpy(indexes2 + prevPartitionEnd2, indexesBuffer2 + prevPartitionEnd2,
+                        (partitions2[j] - prevPartitionEnd2) * sizeof(int32_t));
+          }
+          outputPartitions1.emplace_back(offset1 + prevPartitionEnd1,
+                                         partitions1[j] - prevPartitionEnd1);
+          outputPartitions2.emplace_back(offset2 + prevPartitionEnd2,
+                                         partitions2[j] - prevPartitionEnd2);
+        }
+      }
+      prevPartitionEnd1 = partitions1[j];
+      prevPartitionEnd2 = partitions2[j];
+    }
+  }
+
+  template <typename U1, typename U2>
+  inline void processMicroBatch(int microBatchStart, int microBatchSize, int& i, int n,
+                                const U1* keys, U1* buffer, const int32_t* indexes,
+                                int32_t* indexesBuffer, std::vector<int>& buckets,
+                                std::vector<int>& partitions, int& shifts, unsigned int& mask,
+                                int& radixBits, int& numBuckets, int& i_2, int n_2,
+                                const U2* keys_2, U2* buffer_2, const int32_t* indexes_2,
+                                int32_t* indexesBuffer_2, std::vector<int>& buckets_2,
+                                std::vector<int>& partitions_2) {
+    eventSet.readCounters();
+
+    for(; i < microBatchStart + microBatchSize; i++) { // Run chunk
+      auto index = buckets[(keys[i] >> shifts) & mask]++;
+      buffer[index] = keys[i];
+      indexesBuffer[index] = indexes[i];
+    }
+
+    eventSet.readCountersAndUpdateDiff();
+
+    if(microBatchSize == tuplesPerHazardCheck &&
+       monitor.robustnessIncreaseRequired(microBatchSize)) {
+      --radixBits;
+      ++shifts;
+      numBuckets >>= 1;
+      mask = numBuckets - 1;
+
+#ifdef ADAPTIVITY_OUTPUT
+      std::cout << "RadixBits reduced to " << radixBits << " after tuple " << i
+                << " due to reading of ";
+      std::cout << (static_cast<float>(microBatchSize) /
+                    static_cast<float>(*(eventSet.getCounterDiffsPtr())));
+      std::cout << " tuples per TLB store miss" << std::endl;
+#endif
+
+      mergePartitions(buffer, indexesBuffer, partitions, buckets, numBuckets, true);
+      mergePartitions(buffer_2, indexesBuffer_2, partitions_2, buckets_2, numBuckets, i_2 > 0);
+
+      if(radixBits == minimumRadixBits) { // Complete partitioning to avoid unnecessary checks
+        for(; i < n; i++) {
+          auto index = buckets[(keys[i] >> shifts) & mask]++;
+          buffer[index] = keys[i];
+          indexesBuffer[index] = indexes[i];
+        }
+        for(; i_2 < n_2; i_2++) {
+          auto index = buckets_2[(keys_2[i_2] >> shifts) & mask]++;
+          buffer_2[index] = keys_2[i_2];
+          indexesBuffer_2[index] = indexes_2[i_2];
+        }
+      }
+    }
+  }
+
+  template <typename U>
+  inline void mergePartitions(U* buffer, int32_t* indexesBuffer, std::vector<int>& partitions,
+                              std::vector<int>& buckets, int numBuckets, bool valuesInBuffer) {
+    if(valuesInBuffer) {                    // Skip if no elements have been scattered yet
+      for(int j = 0; j < numBuckets; ++j) { // Move values in buffer
+        auto destIndex = buckets[j << 1];
+        auto srcIndex = partitions[j << 1];
+        auto numElements = buckets[(j << 1) + 1] - srcIndex;
+        std::memmove(&buffer[destIndex], &buffer[srcIndex], numElements * sizeof(U)); // May overlap
+        std::memmove(&indexesBuffer[destIndex], &indexesBuffer[srcIndex],
+                     numElements * sizeof(int32_t));
+      }
+    }
+
+    for(int j = 0; j < numBuckets; ++j) { // Merge histogram values
+      buckets[j] = buckets[j << 1] + (buckets[(j << 1) + 1] - partitions[j << 1]);
+    }
+
+    for(int j = 1; j <= numBuckets; ++j) { // Merge partitions and reduce size
+      partitions[j - 1] = partitions[(j << 1) - 1];
+    }
+    partitions.resize(numBuckets);
+  }
+
+  PAPI_eventSet& eventSet;
+  MonitorPartition monitor;
+  int tuplesPerHazardCheck;
+  size_t bufferNumBytes;
+  T1* keysTmpBuffer1;
+  int32_t* indexesTmpBuffer1;
+  T2* keysTmpBuffer2;
+  int32_t* indexesTmpBuffer2;
+
+  int nInput1{};
+  T1* keysInput1{};
+  int32_t* indexesInput1{};
+  std::vector<int> buckets1{};
+  vectorOfPairs<int, int> outputPartitions1{};
+  int overallOffset1{};
+
+  int nInput2{};
+  T2* keysInput2{};
+  int32_t* indexesInput2{};
+  std::vector<int> buckets2{};
+  vectorOfPairs<int, int> outputPartitions2{};
+  int overallOffset2{};
+
+  int minimumRadixBits{};
+  int radixBitsOperator{};
+  int msbToPartitionInput{};
+  int maxElementsPerPartition{};
+  std::atomic<int>* totalOutputPartitions{};
+};
+
+template <typename T1, typename T2>
+static PartitionAdaptiveRawArrays<T1, T2>& getPartitionAdaptiveRawArrays() {
+  thread_local static PartitionAdaptiveRawArrays<T1, T2> partitionAdaptiveRawArrays;
+  return partitionAdaptiveRawArrays;
+}
+
+/************************************ MULTI-THREADED ***********************************/
+
+template <typename T1, typename T2> class PartitionAdaptiveParallelFirstPass {
+public:
+  PartitionAdaptiveParallelFirstPass(const ExpressionSpanArguments& keySpans1_, int overallOffset1,
+                                     const ExpressionSpanArguments& keySpans2_, int overallOffset2,
+                                     int batchNumStart1_, int batchNumEnd1_, int n1,
+                                     int batchNumStart2_, int batchNumEnd2_, int n2,
+                                     int minimumRadixBits_, int radixBitsOperator,
+                                     std::atomic<int>& globalRadixBits_, int msbToPartitionInput_,
+                                     int maxElementsPerPartition_,
+                                     std::atomic<int>& threadsStillRunning_)
+      : nInput1(n1), keySpans1(keySpans1_), batchNumStart1(batchNumStart1_),
+        batchNumEnd1(batchNumEnd1_), nInput2(n2), keySpans2(keySpans2_),
+        batchNumStart2(batchNumStart2_), batchNumEnd2(batchNumEnd2_),
+        minimumRadixBits(minimumRadixBits_), radixBits(radixBitsOperator),
+        globalRadixBits(globalRadixBits_), msbToPartitionInput(msbToPartitionInput_),
+        maxElementsPerPartition(maxElementsPerPartition_),
+        threadsStillRunning(threadsStillRunning_), eventSet(getDataTlbStoreMissesEventSet()),
+        monitor(MonitorPartition(eventSet.getCounterDiffsPtr())),
+        tuplesPerHazardCheck(TUPLES_PER_HAZARD_CHECK) {
+
+    buckets1 = std::vector<int>(1 + (1 << radixBits), 0);
+    returnBuffer1 = std::make_shared_for_overwrite<std::remove_cv_t<T1>[]>(nInput1);
+    returnIndexes1 = std::make_shared_for_overwrite<int32_t[]>(nInput1);
+    inputIndexes1 = std::make_unique_for_overwrite<int32_t[]>(nInput1);
 
 #ifdef DEBUG
-template <typename T> void printArray(T* data, int size) {
-  for(int i = 0; i < size; ++i) {
-    std::cout << data[i] << " ";
-  }
-  std::cout << std::endl;
-}
+    std::cout << "For this thread: overallOffset1: " << overallOffset1
+              << ", overallOffset2: " << overallOffset2 << ", n1: " << nInput1
+              << ", n2: " << nInput2 << std::endl;
 #endif
+
+    auto indexesPtr1 = inputIndexes1.get();
+    for(auto i = 0; i < nInput1; ++i) {
+      indexesPtr1[i] = overallOffset1 + i;
+    }
+
+    buckets2 = std::vector<int>(1 + (1 << radixBits), 0);
+    returnBuffer2 = std::make_shared_for_overwrite<std::remove_cv_t<T2>[]>(nInput2);
+    returnIndexes2 = std::make_shared_for_overwrite<int32_t[]>(nInput2);
+    inputIndexes2 = std::make_unique_for_overwrite<int32_t[]>(nInput2);
+
+    auto indexesPtr2 = inputIndexes2.get();
+    for(auto i = 0; i < nInput2; ++i) {
+      indexesPtr2[i] = overallOffset2 + i;
+    }
+
+#ifdef DEBUG
+    std::cout << "Initial indexes1: ";
+    printArray<int32_t>(indexesPtr1, nInput1);
+    std::cout << "Initial indexes2: ";
+    printArray<int32_t>(indexesPtr2, nInput2);
+#endif
+  }
+
+  TwoPartitionedArraysAlt<std::remove_cv_t<T1>, std::remove_cv_t<T2>> processInput() {
+    performPartition();
+
+#ifdef DEBUG
+    std::cout << "Final radix bits value for this thread: " << radixBits << std::endl;
+
+    std::cout << "This thread has completed first pass partitioning: " << std::endl;
+    std::cout << "Table 1 results: " << std::endl;
+    std::cout << "partitions1.size(): " << partitions1.size() << std::endl;
+    std::cout << "partition1Positions: " << std::endl;
+    printArray<int32_t>(partitions1.data(), partitions1.size());
+    std::cout << "Keys: " << std::endl;
+    printArray<std::remove_cv_t<T1>>(returnBuffer1.get(), nInput1);
+    std::cout << "Indexes: " << std::endl;
+    printArray<int32_t>(returnIndexes1.get(), nInput1);
+
+    std::cout << "Table 2 results: " << std::endl;
+    std::cout << "partitions2.size(): " << partitions2.size() << std::endl;
+    std::cout << "partition2Positions: " << std::endl;
+    printArray<int32_t>(partitions2.data(), partitions2.size());
+    std::cout << "Keys: " << std::endl;
+    printArray<std::remove_cv_t<T2>>(returnBuffer2.get(), nInput2);
+    std::cout << "Indexes: " << std::endl;
+    printArray<int32_t>(returnIndexes2.get(), nInput2);
+#endif
+
+    return TwoPartitionedArraysAlt<std::remove_cv_t<T1>, std::remove_cv_t<T2>>{
+        PartitionedArrayAlt<std::remove_cv_t<T1>>{
+            returnBuffer1, returnIndexes1,
+            std::make_unique<std::vector<int>>(std::move(partitions1))},
+        PartitionedArrayAlt<std::remove_cv_t<T2>>{
+            returnBuffer2, returnIndexes2,
+            std::make_unique<std::vector<int>>(std::move(partitions2))}};
+  }
+
+private:
+  inline void performPartition() {
+    auto buffer1 = returnBuffer1.get();
+    auto indexes1 = inputIndexes1.get();
+    auto indexesBuffer1 = returnIndexes1.get();
+    auto buffer2 = returnBuffer2.get();
+    auto indexes2 = inputIndexes2.get();
+    auto indexesBuffer2 = returnIndexes2.get();
+
+    int shifts = msbToPartitionInput - radixBits;
+    int numBuckets = 1 << radixBits;
+    unsigned int mask = numBuckets - 1;
+
+    // Initialise span iterators
+    auto keySpansStart1 = keySpans1.begin();
+    std::advance(keySpansStart1, batchNumStart1);
+    auto keySpansEnd1 = keySpans1.begin();
+    std::advance(keySpansEnd1, batchNumEnd1);
+    auto keySpansStart2 = keySpans2.begin();
+    std::advance(keySpansStart2, batchNumStart2);
+    auto keySpansEnd2 = keySpans2.begin();
+    std::advance(keySpansEnd2, batchNumEnd2);
+
+#ifdef DEBUG
+    std::cout << "batchNumStart1: " << batchNumStart1 << ", batchNumEnd1: " << batchNumEnd1
+              << ", batchNumStart2: " << batchNumStart2 << ", batchNumEnd2: " << batchNumEnd2
+              << std::endl;
+#endif
+
+    // Complete histogram for array 1
+    int i;
+    for(auto spansIt = keySpansStart1; spansIt != keySpansEnd1; ++spansIt) {
+      for(auto& key : std::get<Span<T1>>(*spansIt)) {
+        buckets1[1 + ((key >> shifts) & mask)]++;
+      }
+    }
+    for(i = 2; i <= numBuckets; i++) {
+      buckets1[i] += buckets1[i - 1];
+    }
+    partitions1 = buckets1;
+
+    // Complete histogram for array 2
+    for(auto spansIt = keySpansStart2; spansIt != keySpansEnd2; ++spansIt) {
+      for(auto& key : std::get<Span<T2>>(*spansIt)) {
+        buckets2[1 + ((key >> shifts) & mask)]++;
+      }
+    }
+    for(i = 2; i <= numBuckets; i++) {
+      buckets2[i] += buckets2[i - 1];
+    }
+    partitions2 = buckets2;
+
+    bool keysComplete1 = false, keysComplete2 = false;
+    auto outerIterator1 = keySpansStart1;
+    auto innerIterator1 = (std::get<Span<T1>>(*outerIterator1)).begin();
+    auto outerIterator2 = keySpansStart2;
+    auto innerIterator2 = (std::get<Span<T2>>(*outerIterator2)).begin();
+    int offset1 = 0, offset2 = 0;
+
+    while(!keysComplete1 || !keysComplete2) { // NOLINT
+      if(!keysComplete1) {                    // NOLINT
+        processSpansMicroBatch<T1, T2>(
+            outerIterator1, keySpansEnd1, innerIterator1, buffer1, indexes1, indexesBuffer1,
+            buckets1, partitions1, offset1, keysComplete1, shifts, mask, numBuckets, outerIterator2,
+            keySpansEnd2, innerIterator2, buffer2, indexes2, indexesBuffer2, buckets2, partitions2,
+            offset2, keysComplete2);
+      }
+      if(!keysComplete2) { // NOLINT
+        processSpansMicroBatch<T2, T1>(
+            outerIterator2, keySpansEnd2, innerIterator2, buffer2, indexes2, indexesBuffer2,
+            buckets2, partitions2, offset2, keysComplete2, shifts, mask, numBuckets, outerIterator1,
+            keySpansEnd1, innerIterator1, buffer1, indexes1, indexesBuffer1, buckets1, partitions1,
+            offset1, keysComplete1);
+      }
+    }
+
+    threadsStillRunning.fetch_sub(1);
+    if(radixBits > minimumRadixBits) { // Final synchronisation required with all complete threads
+      while(threadsStillRunning > 0) {
+        /* busy wait */
+      }
+      int finalGlobalRadixBits = globalRadixBits.load();
+      while(radixBits != finalGlobalRadixBits) {
+        --radixBits;
+        numBuckets >>= 1;
+        mergePartitions(buffer1, indexesBuffer1, partitions1, buckets1, numBuckets, true);
+        mergePartitions(buffer2, indexesBuffer2, partitions2, buckets2, numBuckets, true);
+      }
+    }
+  }
+
+  template <typename U1, typename U2, typename OuterIt, typename InnerIt, typename OuterIt_2,
+            typename InnerIt_2>
+  inline void processSpansMicroBatch(
+      OuterIt& outerIterator, OuterIt& outerIteratorEnd, InnerIt& innerIterator,
+      std::remove_cv_t<U1>* buffer, const int32_t* indexes, int32_t* indexesBuffer,
+      std::vector<int>& buckets, std::vector<int>& partitions, int& offset, bool& keysComplete,
+      int& shifts, unsigned int& mask, int& numBuckets, OuterIt_2& outerIterator_2,
+      OuterIt_2& outerIteratorEnd_2, InnerIt_2& innerIterator_2, std::remove_cv_t<U2>* buffer_2,
+      const int32_t* indexes_2, int32_t* indexesBuffer_2, std::vector<int>& buckets_2,
+      std::vector<int>& partitions_2, int& offset_2, bool& keysComplete_2) {
+    int processed = 0;
+    int microBatchChunkSize;
+    eventSet.readCounters();
+    while(processed < tuplesPerHazardCheck) {
+      microBatchChunkSize =
+          std::min(tuplesPerHazardCheck - processed,
+                   static_cast<int>((std::get<Span<U1>>(*outerIterator)).end() - innerIterator));
+      for(auto i = 0; i < microBatchChunkSize; ++i) { // Run chunk
+        auto index = buckets[((*innerIterator) >> shifts) & mask]++;
+        buffer[index] = *(innerIterator++);
+        indexesBuffer[index] = indexes[offset + processed++];
+      }
+      if(innerIterator == (std::get<Span<U1>>(*outerIterator)).end()) {
+        if(++outerIterator == outerIteratorEnd) {
+          keysComplete = true;
+          break;
+        } else {
+          innerIterator = (std::get<Span<U1>>(*outerIterator)).begin();
+        }
+      }
+    }
+    eventSet.readCountersAndUpdateDiff();
+    offset += processed;
+
+    int tmpGlobalRadixBits;
+    if(processed == tuplesPerHazardCheck && radixBits > minimumRadixBits &&
+       monitor.robustnessIncreaseRequired(tuplesPerHazardCheck)) { // Local adjustment required
+      if(globalRadixBits.load() > radixBits - 1) {                 // Global adjustment required
+        globalRadixBits.store(radixBits - 1); // Sync global radix bits to new local value
+        tmpGlobalRadixBits = radixBits - 1;
+#ifdef ADAPTIVITY_OUTPUT
+        std::cout << "Global radixBits reduced to " << tmpGlobalRadixBits << " due to reading of ";
+        std::cout << (static_cast<float>(tuplesPerHazardCheck) /
+                      static_cast<float>(*(eventSet.getCounterDiffsPtr())));
+        std::cout << " tuples per TLB store miss" << std::endl;
+#endif
+      } else {
+        tmpGlobalRadixBits = globalRadixBits.load();
+      }
+    } else {
+      tmpGlobalRadixBits = globalRadixBits.load(std::memory_order_relaxed);
+    }
+
+    while(radixBits > tmpGlobalRadixBits) { // Sync with global
+      --radixBits;
+      ++shifts;
+      numBuckets >>= 1;
+      mask = numBuckets - 1;
+
+      mergePartitions(buffer, indexesBuffer, partitions, buckets, numBuckets, true);
+      mergePartitions(buffer_2, indexesBuffer_2, partitions_2, buckets_2, numBuckets, offset_2 > 0);
+
+      if(radixBits <= minimumRadixBits) { // Complete partitioning to avoid unnecessary checks
+        if(outerIterator != outerIteratorEnd) {
+          while(true) {
+            while(innerIterator != (std::get<Span<U1>>(*outerIterator)).end()) {
+              auto index = buckets[((*innerIterator) >> shifts) & mask]++;
+              buffer[index] = *(innerIterator++);
+              indexesBuffer[index] = indexes[offset++];
+            }
+            if(++outerIterator == outerIteratorEnd) {
+              break;
+            } else {
+              innerIterator = (std::get<Span<U1>>(*outerIterator)).begin();
+            }
+          }
+        }
+
+        if(outerIterator_2 != outerIteratorEnd_2) {
+          while(true) {
+            while(innerIterator_2 != (std::get<Span<U2>>(*outerIterator_2)).end()) {
+              auto index = buckets_2[((*innerIterator_2) >> shifts) & mask]++;
+              buffer_2[index] = *innerIterator_2++;
+              indexesBuffer_2[index] = indexes_2[offset_2++];
+            }
+            if(++outerIterator_2 == outerIteratorEnd_2) {
+              break;
+            } else {
+              innerIterator_2 = (std::get<Span<U2>>(*outerIterator_2)).begin();
+            }
+          }
+        }
+
+        keysComplete = true;
+        keysComplete_2 = true;
+        break;
+      }
+    }
+  }
+
+  template <typename U>
+  inline void mergePartitions(U* buffer, int32_t* indexesBuffer, std::vector<int>& partitions,
+                              std::vector<int>& buckets, int numBuckets, bool valuesInBuffer) {
+    if(valuesInBuffer) {                    // Skip if no elements have been scattered yet
+      for(int j = 0; j < numBuckets; ++j) { // Move values in buffer
+        auto destIndex = buckets[j << 1];
+        auto srcIndex = partitions[(j << 1) + 1];
+        auto numElements = buckets[(j << 1) + 1] - srcIndex;
+        std::memmove(&buffer[destIndex], &buffer[srcIndex], numElements * sizeof(U)); // May overlap
+        std::memmove(&indexesBuffer[destIndex], &indexesBuffer[srcIndex],
+                     numElements * sizeof(int32_t));
+      }
+    }
+
+    for(int j = 0; j < numBuckets; ++j) { // Merge histogram values
+      buckets[j] = buckets[j << 1] + (buckets[(j << 1) + 1] - partitions[(j << 1) + 1]);
+    }
+
+    for(int j = 1; j <= numBuckets; ++j) { // Merge partitions and reduce size
+      partitions[j] = partitions[j << 1];
+    }
+    partitions.resize(numBuckets + 1);
+  }
+
+  int nInput1;
+  const ExpressionSpanArguments& keySpans1;
+  int batchNumStart1;
+  int batchNumEnd1;
+  std::shared_ptr<std::remove_cv_t<T1>[]> returnBuffer1;
+  std::unique_ptr<std::remove_cv_t<T1>[]> tmpBuffer1;
+  std::shared_ptr<int32_t[]> returnIndexes1;
+  std::unique_ptr<int32_t[]> inputIndexes1;
+  std::vector<int> buckets1;
+  std::vector<int> partitions1;
+
+  int nInput2;
+  const ExpressionSpanArguments& keySpans2;
+  int batchNumStart2;
+  int batchNumEnd2;
+  std::shared_ptr<std::remove_cv_t<T2>[]> returnBuffer2;
+  std::unique_ptr<std::remove_cv_t<T2>[]> tmpBuffer2;
+  std::shared_ptr<int32_t[]> returnIndexes2;
+  std::unique_ptr<int32_t[]> inputIndexes2;
+  std::vector<int> buckets2;
+  std::vector<int> partitions2;
+
+  int minimumRadixBits;
+  int radixBits;
+  std::atomic<int>& globalRadixBits;
+  int msbToPartitionInput;
+  int maxElementsPerPartition;
+  std::atomic<int>& threadsStillRunning;
+
+  PAPI_eventSet& eventSet;
+  MonitorPartition monitor;
+  int tuplesPerHazardCheck;
+};
+
+template <typename T1, typename T2> class PartitionAdaptiveParallel {
+public:
+  PartitionAdaptiveParallel(const ExpressionSpanArguments& keySpans1_,
+                            const ExpressionSpanArguments& keySpans2_, int dop_)
+      : nInput1(0), keySpans1(keySpans1_), nInput2(0), keySpans2(keySpans2_), dop(dop_),
+        threadPool(ThreadPool::getInstance()), totalOutputPartitions(0) {
+    std::string startName = "Partition_startRadixBits";
+    radixBits = static_cast<int>(MachineConstants::getInstance().getMachineConstant(startName));
+
+    std::string minName = "Partition_minRadixBits";
+    minimumRadixBits =
+        static_cast<int>(MachineConstants::getInstance().getMachineConstant(minName));
+
+    if(dop == 1) {
+      msbToPartitionInput =
+          std::max(getMsb<T1>(keySpans1, nInput1), getMsb<T2>(keySpans2, nInput2));
+    } else {
+      int msb1, msb2;
+      threadPool.enqueue([this, &msb1] { msb1 = getMsb<T1>(keySpans1, nInput1); });
+      threadPool.enqueue([this, &msb2] { msb2 = getMsb<T2>(keySpans2, nInput2); });
+      threadPool.waitUntilComplete(2);
+      msbToPartitionInput = std::max(msb1, msb2);
+    }
+
+    radixBits = std::min(msbToPartitionInput, radixBits.load());
+
+#ifdef CHANGE_PARTITION_TO_SORT_FOR_TESTING
+    maxElementsPerPartition = 1;
+#else
+    maxElementsPerPartition = static_cast<double>(l2cacheSize()) / sizeof(T1);
+#endif
+
+    returnBuffer1 = std::make_shared_for_overwrite<std::remove_cv_t<T1>[]>(nInput1);
+    returnIndexes1 = std::make_shared_for_overwrite<int32_t[]>(nInput1);
+
+    returnBuffer2 = std::make_shared_for_overwrite<std::remove_cv_t<T2>[]>(nInput2);
+    returnIndexes2 = std::make_shared_for_overwrite<int32_t[]>(nInput2);
+  }
+
+  TwoPartitionedArrays<std::remove_cv_t<T1>, std::remove_cv_t<T2>> processInput() {
+    performPartition();
+    return TwoPartitionedArrays<std::remove_cv_t<T1>, std::remove_cv_t<T2>>{
+        PartitionedArray<std::remove_cv_t<T1>>{
+            returnBuffer1, returnIndexes1,
+            std::make_unique<vectorOfPairs<int, int>>(std::move(outputPartitions1))},
+        PartitionedArray<std::remove_cv_t<T2>>{
+            returnBuffer2, returnIndexes2,
+            std::make_unique<vectorOfPairs<int, int>>(std::move(outputPartitions2))}};
+  }
+
+private:
+  inline void performPartition() {
+    auto cumulativeBatchSizes1 = createCumulativeBatchSizes<T1>(keySpans1);
+    auto cumulativeBatchSizes2 = createCumulativeBatchSizes<T2>(keySpans2);
+
+#ifdef DEBUG
+    std::cout << "cumulativeBatchSizes1: " << std::endl;
+    printArray<int>(cumulativeBatchSizes1.data(), cumulativeBatchSizes1.size());
+    std::cout << "cumulativeBatchSizes2: " << std::endl;
+    printArray<int>(cumulativeBatchSizes2.data(), cumulativeBatchSizes2.size());
+#endif
+
+    int numBatches1 = keySpans1.size();
+    int numBatches2 = keySpans2.size();
+    int firstPassDop = std::min(std::min(numBatches1, numBatches2), dop);
+    threadsStillRunning = firstPassDop;
+
+#ifdef DEBUG
+    std::cout << "firstPassDop: " << firstPassDop << std::endl;
+    std::cout << "numBatches1: " << numBatches1 << std::endl;
+    std::cout << "numBatches2: " << numBatches2 << std::endl;
+#endif
+
+    int baselineBatchesPerThread1 = numBatches1 / firstPassDop;
+    int baselineBatchesPerThread2 = numBatches2 / firstPassDop;
+    int remainingBatches1 = numBatches1 % firstPassDop;
+    int remainingBatches2 = numBatches2 % firstPassDop;
+    int startBatchNum1 = 0, startBatchNum2 = 0;
+    int endBatchNum1, endBatchNum2;
+    int batchesPerThread1, batchesPerThread2;
+    int overallOffset1, overallOffset2;
+    int elementsInThread1, elementsInThread2;
+
+    std::vector<PartitionedArrayAlt<std::remove_cv_t<T1>>> firstPassPartitions1(firstPassDop);
+    std::vector<PartitionedArrayAlt<std::remove_cv_t<T2>>> firstPassPartitions2(firstPassDop);
+
+    for(auto i = 0; i < firstPassDop; ++i) {
+      if(i < firstPassDop - 1) {
+        batchesPerThread1 = baselineBatchesPerThread1 + (i < remainingBatches1);
+        batchesPerThread2 = baselineBatchesPerThread2 + (i < remainingBatches2);
+      } else {
+        batchesPerThread1 = numBatches1 - startBatchNum1;
+        batchesPerThread2 = numBatches2 - startBatchNum2;
+      }
+
+      overallOffset1 = cumulativeBatchSizes1[startBatchNum1];
+      overallOffset2 = cumulativeBatchSizes2[startBatchNum2];
+
+      endBatchNum1 = startBatchNum1 + batchesPerThread1;
+      endBatchNum2 = startBatchNum2 + batchesPerThread2;
+
+      elementsInThread1 = cumulativeBatchSizes1[endBatchNum1] - overallOffset1;
+      elementsInThread2 = cumulativeBatchSizes2[endBatchNum2] - overallOffset2;
+
+      threadPool.enqueue([this, overallOffset1, overallOffset2, startBatchNum1, endBatchNum1,
+                          elementsInThread1, startBatchNum2, endBatchNum2, elementsInThread2,
+                          radixBitsOperator = radixBits.load(), &result1 = firstPassPartitions1[i],
+                          &result2 = firstPassPartitions2[i]] {
+        auto op = PartitionAdaptiveParallelFirstPass<std::remove_cv_t<T1>, std::remove_cv_t<T2>>(
+            keySpans1, overallOffset1, keySpans2, overallOffset2, startBatchNum1, endBatchNum1,
+            elementsInThread1, startBatchNum2, endBatchNum2, elementsInThread2, minimumRadixBits,
+            radixBitsOperator, radixBits, msbToPartitionInput, maxElementsPerPartition,
+            threadsStillRunning);
+        auto results = op.processInput();
+        result1 = std::move(results.partitionedArrayOne);
+        result2 = std::move(results.partitionedArrayTwo);
+      });
+
+      startBatchNum1 += batchesPerThread1;
+      startBatchNum2 += batchesPerThread2;
+    }
+
+    threadPool.waitUntilComplete(firstPassDop);
+
+#ifdef DEBUG
+    std::cout << "Before updating: "
+              << "RadixBits: " << radixBits << ", msbToPartitionInput: " << msbToPartitionInput
+              << std::endl;
+#endif
+
+    msbToPartitionInput -= radixBits;
+    radixBits = std::min(msbToPartitionInput, radixBits.load());
+
+#ifdef DEBUG
+    std::cout << "After updating: "
+              << "RadixBits: " << radixBits << ", msbToPartitionInput: " << msbToPartitionInput
+              << std::endl;
+#endif
+
+    std::vector<int> partitions1, partitions2;
+    if(dop == 1) {
+      partitions1 = mergeAndCreatePartitionsVec<std::remove_cv_t<T1>>(
+          firstPassPartitions1, returnBuffer1.get(), returnIndexes1.get());
+      partitions2 = mergeAndCreatePartitionsVec<std::remove_cv_t<T2>>(
+          firstPassPartitions2, returnBuffer2.get(), returnIndexes2.get());
+    } else if(dop < 4) {
+      threadPool.enqueue([this, &partitions1, &firstPassPartitions1] {
+        partitions1 = mergeAndCreatePartitionsVec<std::remove_cv_t<T1>>(
+            firstPassPartitions1, returnBuffer1.get(), returnIndexes1.get());
+      });
+      threadPool.enqueue([this, &partitions2, &firstPassPartitions2] {
+        partitions2 = mergeAndCreatePartitionsVec<std::remove_cv_t<T2>>(
+            firstPassPartitions2, returnBuffer2.get(), returnIndexes2.get());
+      });
+      threadPool.waitUntilComplete(2);
+    } else {
+      threadPool.enqueue([this, &partitions1, &firstPassPartitions1] {
+        partitions1 = mergeKeysAndCreatePartitionsVec<std::remove_cv_t<T1>>(firstPassPartitions1,
+                                                                            returnBuffer1.get());
+      });
+      threadPool.enqueue([this, &partitions2, &firstPassPartitions2] {
+        partitions2 = mergeKeysAndCreatePartitionsVec<std::remove_cv_t<T2>>(firstPassPartitions2,
+                                                                            returnBuffer2.get());
+      });
+      threadPool.enqueue([this, &firstPassPartitions1] {
+        mergeIndexes<std::remove_cv_t<T1>>(firstPassPartitions1, returnIndexes1.get());
+      });
+      threadPool.enqueue([this, &firstPassPartitions2] {
+        mergeIndexes<std::remove_cv_t<T2>>(firstPassPartitions2, returnIndexes2.get());
+      });
+      threadPool.waitUntilComplete(4);
+    }
+
+#ifdef DEBUG
+    std::cout << "Merged results from table1 first pass: " << std::endl;
+    std::cout << "Partitions: " << std::endl;
+    printArray<int>(partitions1.data(), static_cast<int>(partitions1.size()));
+    std::cout << "Keys: " << std::endl;
+    printArray<std::remove_cv_t<T1>>(returnBuffer1.get(), nInput1);
+    std::cout << "Indexes: " << std::endl;
+    printArray<int32_t>(returnIndexes1.get(), nInput1);
+
+    std::cout << "Merged results from table2 first pass: " << std::endl;
+    std::cout << "Partitions: " << std::endl;
+    printArray<int>(partitions2.data(), static_cast<int>(partitions2.size()));
+    std::cout << "Keys: " << std::endl;
+    printArray<std::remove_cv_t<T2>>(returnBuffer2.get(), nInput2);
+    std::cout << "Indexes: " << std::endl;
+    printArray<int32_t>(returnIndexes2.get(), nInput2);
+#endif
+
+    int prevPartitionEnd1 = 0;
+    int prevPartitionEnd2 = 0;
+    if(msbToPartitionInput == 0) { // No ability to partition further, so return early
+      outputPartitions1.reserve(partitions1.size());
+      outputPartitions2.reserve(partitions1.size());
+      for(size_t j = 0; j < partitions1.size(); ++j) {
+        if(partitions1[j] != prevPartitionEnd1 && partitions2[j] != prevPartitionEnd2) {
+          outputPartitions1.emplace_back(prevPartitionEnd1, partitions1[j] - prevPartitionEnd1);
+          outputPartitions2.emplace_back(prevPartitionEnd2, partitions2[j] - prevPartitionEnd2);
+        }
+        prevPartitionEnd1 = partitions1[j];
+        prevPartitionEnd2 = partitions2[j];
+      }
+      return;
+    }
+
+    std::vector<std::unique_ptr<TwoPartitionedArraysPartitionsOnly>> furtherPartitioningResults(
+        partitions1.size());
+    int partitionsComplete = 0;
+    int furtherPartitioningTasks = 0;
+
+    for(size_t j = 0; j < partitions1.size(); ++j) {
+      if(partitions1[j] != prevPartitionEnd1 && partitions2[j] != prevPartitionEnd2) {
+        if((partitions1[j] - prevPartitionEnd1) > maxElementsPerPartition) {
+          threadPool.enqueue([this, n1 = partitions1[j] - prevPartitionEnd1,
+                              keys1 = returnBuffer1.get() + prevPartitionEnd1,
+                              indexes1 = returnIndexes1.get() + prevPartitionEnd1,
+                              prevPartitionEnd1, n2 = partitions2[j] - prevPartitionEnd2,
+                              keys2 = returnBuffer2.get() + prevPartitionEnd2,
+                              indexes2 = returnIndexes2.get() + prevPartitionEnd2,
+                              prevPartitionEnd2, &result = furtherPartitioningResults[j]] {
+            result = std::move(std::make_unique<TwoPartitionedArraysPartitionsOnly>(
+                getPartitionAdaptiveRawArrays<std::remove_cv_t<T1>, std::remove_cv_t<T2>>()
+                    .processInput(n1, keys1, indexes1, prevPartitionEnd1, n2, keys2, indexes2,
+                                  prevPartitionEnd2, minimumRadixBits, radixBits,
+                                  msbToPartitionInput, maxElementsPerPartition,
+                                  &totalOutputPartitions)));
+          });
+          ++furtherPartitioningTasks;
+        } else {
+          ++partitionsComplete;
+        }
+      }
+      prevPartitionEnd1 = partitions1[j];
+      prevPartitionEnd2 = partitions2[j];
+    }
+
+    totalOutputPartitions.fetch_add(partitionsComplete);
+
+    threadPool.waitUntilComplete(furtherPartitioningTasks);
+
+    outputPartitions1.reserve(totalOutputPartitions);
+    outputPartitions2.reserve(totalOutputPartitions);
+
+    prevPartitionEnd1 = 0;
+    prevPartitionEnd2 = 0;
+    for(size_t j = 0; j < partitions1.size(); ++j) {
+      if(partitions1[j] != prevPartitionEnd1 && partitions2[j] != prevPartitionEnd2) {
+        if((partitions1[j] - prevPartitionEnd1) > maxElementsPerPartition) {
+          auto tableOnePartitionPositions =
+              furtherPartitioningResults[j]->tableOnePartitionPositions.get();
+          auto tableTwoPartitionPositions =
+              furtherPartitioningResults[j]->tableTwoPartitionPositions.get();
+          std::move(tableOnePartitionPositions->begin(), tableOnePartitionPositions->end(),
+                    std::back_inserter(outputPartitions1));
+          std::move(tableTwoPartitionPositions->begin(), tableTwoPartitionPositions->end(),
+                    std::back_inserter(outputPartitions2));
+        } else {
+          outputPartitions1.emplace_back(prevPartitionEnd1, partitions1[j] - prevPartitionEnd1);
+          outputPartitions2.emplace_back(prevPartitionEnd2, partitions2[j] - prevPartitionEnd2);
+        }
+      }
+      prevPartitionEnd1 = partitions1[j];
+      prevPartitionEnd2 = partitions2[j];
+    }
+  }
+
+  template <typename T>
+  std::vector<int>
+  mergeAndCreatePartitionsVec(const std::vector<PartitionedArrayAlt<T>>& partitionedArrays,
+                              T* keyBuffer, int32_t* indexesBuffer) {
+    std::vector<int> mergedPartitions;
+    int numPartitions = partitionedArrays[0].partitionPositions->size() - 1;
+    mergedPartitions.reserve(numPartitions);
+
+    int totalElements = 0;
+    for(int partitionNum = 0; partitionNum < numPartitions; ++partitionNum) {
+      for(size_t threadNum = 0; threadNum < partitionedArrays.size(); ++threadNum) {
+#ifdef DEBUG
+        assert(static_cast<int>(partitionedArrays[threadNum].partitionPositions->size()) - 1 ==
+               numPartitions);
+#endif
+        int threadPartitionElements =
+            partitionedArrays[threadNum].partitionPositions->at(partitionNum + 1) -
+            partitionedArrays[threadNum].partitionPositions->at(partitionNum);
+        if(threadPartitionElements == 0) {
+          continue;
+        }
+        int threadPartitionElementsStart =
+            partitionedArrays[threadNum].partitionPositions->at(partitionNum);
+#ifdef DEBUG
+        std::cout << "Partition number " << partitionNum << " , thread number " << threadNum
+                  << std::endl;
+        std::cout << "Keys: " << std::endl;
+        printArray<T>(&(partitionedArrays[threadNum].partitionedKeys[threadPartitionElementsStart]),
+                      threadPartitionElements);
+        std::cout << "Indexes: " << std::endl;
+        printArray<int32_t>(&(partitionedArrays[threadNum].indexes[threadPartitionElementsStart]),
+                            threadPartitionElements);
+#endif
+        memcpy(keyBuffer + totalElements,
+               &(partitionedArrays[threadNum].partitionedKeys[threadPartitionElementsStart]),
+               threadPartitionElements * sizeof(T));
+        memcpy(indexesBuffer + totalElements,
+               &(partitionedArrays[threadNum].indexes[threadPartitionElementsStart]),
+               threadPartitionElements * sizeof(int32_t));
+
+        totalElements += threadPartitionElements;
+      }
+      mergedPartitions.push_back(totalElements);
+    }
+
+    return mergedPartitions;
+  }
+
+  template <typename T>
+  std::vector<int>
+  mergeKeysAndCreatePartitionsVec(const std::vector<PartitionedArrayAlt<T>>& partitionedArrays,
+                                  T* keyBuffer) {
+    std::vector<int> mergedPartitions;
+    int numPartitions = partitionedArrays[0].partitionPositions->size() - 1;
+    mergedPartitions.reserve(numPartitions);
+
+    int totalElements = 0;
+    for(int partitionNum = 0; partitionNum < numPartitions; ++partitionNum) {
+      for(size_t threadNum = 0; threadNum < partitionedArrays.size(); ++threadNum) {
+#ifdef DEBUG
+        assert(static_cast<int>(partitionedArrays[threadNum].partitionPositions->size()) - 1 ==
+               numPartitions);
+#endif
+        int threadPartitionElements =
+            partitionedArrays[threadNum].partitionPositions->at(partitionNum + 1) -
+            partitionedArrays[threadNum].partitionPositions->at(partitionNum);
+        if(threadPartitionElements == 0) {
+          continue;
+        }
+        int threadPartitionElementsStart =
+            partitionedArrays[threadNum].partitionPositions->at(partitionNum);
+#ifdef DEBUG
+        std::cout << "Partition number " << partitionNum << " , thread number " << threadNum
+                  << std::endl;
+        std::cout << "Keys: " << std::endl;
+        printArray<T>(&(partitionedArrays[threadNum].partitionedKeys[threadPartitionElementsStart]),
+                      threadPartitionElements);
+        std::cout << "Indexes: " << std::endl;
+        printArray<int32_t>(&(partitionedArrays[threadNum].indexes[threadPartitionElementsStart]),
+                            threadPartitionElements);
+#endif
+        memcpy(keyBuffer + totalElements,
+               &(partitionedArrays[threadNum].partitionedKeys[threadPartitionElementsStart]),
+               threadPartitionElements * sizeof(T));
+
+        totalElements += threadPartitionElements;
+      }
+      mergedPartitions.push_back(totalElements);
+    }
+
+    return mergedPartitions;
+  }
+
+  template <typename T>
+  void mergeIndexes(const std::vector<PartitionedArrayAlt<T>>& partitionedArrays,
+                    int32_t* indexesBuffer) {
+    int numPartitions = partitionedArrays[0].partitionPositions->size() - 1;
+
+    int totalElements = 0;
+    for(int partitionNum = 0; partitionNum < numPartitions; ++partitionNum) {
+      for(size_t threadNum = 0; threadNum < partitionedArrays.size(); ++threadNum) {
+#ifdef DEBUG
+        assert(static_cast<int>(partitionedArrays[threadNum].partitionPositions->size()) - 1 ==
+               numPartitions);
+#endif
+        int threadPartitionElements =
+            partitionedArrays[threadNum].partitionPositions->at(partitionNum + 1) -
+            partitionedArrays[threadNum].partitionPositions->at(partitionNum);
+        if(threadPartitionElements == 0) {
+          continue;
+        }
+        int threadPartitionElementsStart =
+            partitionedArrays[threadNum].partitionPositions->at(partitionNum);
+#ifdef DEBUG
+        std::cout << "Partition number " << partitionNum << " , thread number " << threadNum
+                  << std::endl;
+        std::cout << "Keys: " << std::endl;
+        printArray<T>(&(partitionedArrays[threadNum].partitionedKeys[threadPartitionElementsStart]),
+                      threadPartitionElements);
+        std::cout << "Indexes: " << std::endl;
+        printArray<int32_t>(&(partitionedArrays[threadNum].indexes[threadPartitionElementsStart]),
+                            threadPartitionElements);
+#endif
+        memcpy(indexesBuffer + totalElements,
+               &(partitionedArrays[threadNum].indexes[threadPartitionElementsStart]),
+               threadPartitionElements * sizeof(int32_t));
+
+        totalElements += threadPartitionElements;
+      }
+    }
+  }
+
+  template <typename T>
+  inline std::vector<int> createCumulativeBatchSizes(const ExpressionSpanArguments& spans) {
+    std::vector<int> cumulativeBatchSizes(1, 0);
+    cumulativeBatchSizes.reserve(spans.size() + 1);
+    for(const auto& batch : spans) {
+      cumulativeBatchSizes.push_back(cumulativeBatchSizes.back() + get<Span<T>>(batch).size());
+    }
+    return cumulativeBatchSizes;
+  }
+
+  template <typename U> inline int getMsb(const ExpressionSpanArguments& keySpans, int& n) {
+    auto largest = std::numeric_limits<U>::min();
+    for(auto& untypedSpan : keySpans) {
+      auto& span = std::get<Span<U>>(untypedSpan);
+      n += span.size();
+      for(auto& key : span) {
+        largest = std::max(largest, key);
+      }
+    }
+
+    int msbToPartition = 0;
+    while(largest != 0) {
+      largest >>= 1;
+      msbToPartition++;
+    }
+    return msbToPartition;
+  }
+
+  int nInput1;
+  const ExpressionSpanArguments& keySpans1;
+  std::shared_ptr<std::remove_cv_t<T1>[]> returnBuffer1;
+  std::shared_ptr<int32_t[]> returnIndexes1;
+  vectorOfPairs<int, int> outputPartitions1;
+
+  int nInput2;
+  const ExpressionSpanArguments& keySpans2;
+  std::shared_ptr<std::remove_cv_t<T2>[]> returnBuffer2;
+  std::shared_ptr<int32_t[]> returnIndexes2;
+  vectorOfPairs<int, int> outputPartitions2;
+
+  int dop;
+  int minimumRadixBits;
+  std::atomic<int> radixBits;
+  int msbToPartitionInput{};
+  int maxElementsPerPartition;
+  std::atomic<int> threadsStillRunning;
+  ThreadPool& threadPool;
+  std::atomic<int> totalOutputPartitions;
+};
+
+/********************************** UTILITY FUNCTIONS *********************************/
 
 template <typename T>
 std::pair<std::vector<ExpressionSpanArguments>, std::vector<ExpressionSpanArguments>>
-createPartitionsOfSpansAlignedToTableBatches(PartitionedArray<T>& partitionedArray,
-                                             const ExpressionSpanArguments& tableKeys) {
+createPartitionsOfSpansAlignedToTableBatches(
+    const PartitionedArray<std::remove_cv_t<T>>& partitionedArray,
+    const ExpressionSpanArguments& tableKeys) {
   auto keys = partitionedArray.partitionedKeys.get();
   auto indexes = partitionedArray.indexes.get();
   auto partitions = *(partitionedArray.partitionPositions.get());
@@ -902,12 +2034,10 @@ createPartitionsOfSpansAlignedToTableBatches(PartitionedArray<T>& partitionedArr
   partitionsOfKeySpans.reserve(partitions.size());
   partitionsOfIndexSpans.reserve(partitions.size());
 
-  int cumulativeBatchSize = 0;
   std::vector<int> cumulativeBatchSizes(1, 0);
   cumulativeBatchSizes.reserve(tableKeys.size() + 1);
   for(const auto& batch : tableKeys) {
-    cumulativeBatchSize += get<Span<T>>(batch).size();
-    cumulativeBatchSizes.push_back(cumulativeBatchSize);
+    cumulativeBatchSizes.push_back(cumulativeBatchSizes.back() + get<Span<T>>(batch).size());
   }
 
   for(size_t partitionNum = 0; partitionNum < partitions.size(); ++partitionNum) {
@@ -922,11 +2052,12 @@ createPartitionsOfSpansAlignedToTableBatches(PartitionedArray<T>& partitionedArr
         indexes[index++] -= cumulativeBatchSizes[batchNum - 1];
       }
       if(index == prevSpanEndIndex) {
-        outputKeySpans.emplace_back(Span<T>());
+        outputKeySpans.emplace_back(Span<std::remove_cv_t<T>>());
         outputIndexSpans.emplace_back(Span<int32_t>());
       } else {
-        outputKeySpans.emplace_back(Span<T>(keys + prevSpanEndIndex, index - prevSpanEndIndex,
-                                            [ptr = partitionedArray.partitionedKeys]() {}));
+        outputKeySpans.emplace_back(
+            Span<std::remove_cv_t<T>>(keys + prevSpanEndIndex, index - prevSpanEndIndex,
+                                      [ptr = partitionedArray.partitionedKeys]() {}));
         outputIndexSpans.emplace_back(Span<int32_t>(indexes + prevSpanEndIndex,
                                                     index - prevSpanEndIndex,
                                                     [ptr = partitionedArray.indexes]() {}));
@@ -945,29 +2076,71 @@ createPartitionsOfSpansAlignedToTableBatches(PartitionedArray<T>& partitionedArr
 template <typename T1, typename T2>
 PartitionedJoinArguments partitionJoinExpr(PartitionOperators partitionImplementation,
                                            const ExpressionSpanArguments& tableOneKeys,
-                                           const ExpressionSpanArguments& tableTwoKeys) {
+                                           const ExpressionSpanArguments& tableTwoKeys, int dop) {
   static_assert(std::is_integral<T1>::value, "PartitionOperators column must be an integer type");
   static_assert(std::is_integral<T2>::value, "PartitionOperators column must be an integer type");
 
-  TwoPartitionedArrays partitionedTables = [partitionImplementation, &tableOneKeys,
-                                            &tableTwoKeys]() {
-    if(partitionImplementation == PartitionOperators::RadixBitsFixed) {
-      auto partitionOperator = Partition<T1, T2>(tableOneKeys, tableTwoKeys);
-      return partitionOperator.processInput();
-    } else if(partitionImplementation == PartitionOperators::RadixBitsAdaptive) {
-      auto partitionOperator = PartitionAdaptive<T1, T2>(tableOneKeys, tableTwoKeys);
-      return partitionOperator.processInput();
-    } else {
-      throw std::runtime_error("Invalid selection of 'Partition' implementation!");
-    }
-  }();
+  TwoPartitionedArrays<std::remove_cv_t<T1>, std::remove_cv_t<T2>> partitionedTables =
+      [partitionImplementation, &tableOneKeys, &tableTwoKeys, dop]() {
+#ifdef USE_ADAPTIVE_OVER_ADAPTIVE_PARALLEL_FOR_DOP_1
+        if(partitionImplementation == PartitionOperators::RadixBitsAdaptiveParallel && dop == 1) {
+          auto partitionOperator = PartitionAdaptive<T1, T2>(tableOneKeys, tableTwoKeys);
+          return partitionOperator.processInput();
+        }
+#endif
+        if(partitionImplementation == PartitionOperators::RadixBitsAdaptiveParallel) {
+          assert(adaptive::config::nonVectorizedDOP >= dop); // Will have a deadlock otherwise
+          auto partitionOperator =
+              PartitionAdaptiveParallel<T1, T2>(tableOneKeys, tableTwoKeys, dop);
+          return partitionOperator.processInput();
+        }
+        assert(dop == 1);
+        if(partitionImplementation == PartitionOperators::RadixBitsFixed) {
+          auto partitionOperator = Partition<T1, T2>(tableOneKeys, tableTwoKeys);
+          return partitionOperator.processInput();
+        } else if(partitionImplementation == PartitionOperators::RadixBitsAdaptive) {
+          auto partitionOperator = PartitionAdaptive<T1, T2>(tableOneKeys, tableTwoKeys);
+          return partitionOperator.processInput();
+        } else {
+          throw std::runtime_error("Invalid selection of 'Partition' implementation!");
+        }
+      }();
 
-  auto [tableOnePartitionsOfKeySpans, tableOnePartitionsOfIndexSpans] =
-      createPartitionsOfSpansAlignedToTableBatches<T1>(partitionedTables.partitionedArrayOne,
-                                                       tableOneKeys);
-  auto [tableTwoPartitionsOfKeySpans, tableTwoPartitionsOfIndexSpans] =
-      createPartitionsOfSpansAlignedToTableBatches<T2>(partitionedTables.partitionedArrayTwo,
-                                                       tableTwoKeys);
+  std::vector<ExpressionSpanArguments> tableOnePartitionsOfKeySpans, tableOnePartitionsOfIndexSpans,
+      tableTwoPartitionsOfKeySpans, tableTwoPartitionsOfIndexSpans;
+  if(dop == 1) {
+    auto [tableOnePartitionsOfKeySpansTmp, tableOnePartitionsOfIndexSpansTmp] =
+        createPartitionsOfSpansAlignedToTableBatches<T1>(partitionedTables.partitionedArrayOne,
+                                                         tableOneKeys);
+    tableOnePartitionsOfKeySpans = std::move(tableOnePartitionsOfKeySpansTmp);
+    tableOnePartitionsOfIndexSpans = std::move(tableOnePartitionsOfIndexSpansTmp);
+    auto [tableTwoPartitionsOfKeySpansTmp, tableTwoPartitionsOfIndexSpansTmp] =
+        createPartitionsOfSpansAlignedToTableBatches<T2>(partitionedTables.partitionedArrayTwo,
+                                                         tableTwoKeys);
+    tableTwoPartitionsOfKeySpans = std::move(tableTwoPartitionsOfKeySpansTmp);
+    tableTwoPartitionsOfIndexSpans = std::move(tableTwoPartitionsOfIndexSpansTmp);
+  } else {
+    ThreadPool::getInstance().enqueue([&tableOneKeys, &partitionedTables,
+                                       &tableOnePartitionsOfKeySpans,
+                                       &tableOnePartitionsOfIndexSpans] {
+      auto [tableOnePartitionsOfKeySpansTmp, tableOnePartitionsOfIndexSpansTmp] =
+          createPartitionsOfSpansAlignedToTableBatches<T1>(partitionedTables.partitionedArrayOne,
+                                                           tableOneKeys);
+      tableOnePartitionsOfKeySpans = std::move(tableOnePartitionsOfKeySpansTmp);
+      tableOnePartitionsOfIndexSpans = std::move(tableOnePartitionsOfIndexSpansTmp);
+    });
+    ThreadPool::getInstance().enqueue([&tableTwoKeys, &partitionedTables,
+                                       &tableTwoPartitionsOfKeySpans,
+                                       &tableTwoPartitionsOfIndexSpans] {
+      auto [tableTwoPartitionsOfKeySpansTmp, tableTwoPartitionsOfIndexSpansTmp] =
+          createPartitionsOfSpansAlignedToTableBatches<T1>(partitionedTables.partitionedArrayTwo,
+                                                           tableTwoKeys);
+      tableTwoPartitionsOfKeySpans = std::move(tableTwoPartitionsOfKeySpansTmp);
+      tableTwoPartitionsOfIndexSpans = std::move(tableTwoPartitionsOfIndexSpansTmp);
+    });
+    ThreadPool::getInstance().waitUntilComplete(2);
+  }
+
   return {std::move(tableOnePartitionsOfKeySpans), std::move(tableOnePartitionsOfIndexSpans),
           std::move(tableTwoPartitionsOfKeySpans), std::move(tableTwoPartitionsOfIndexSpans)};
 }

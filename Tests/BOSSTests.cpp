@@ -2780,6 +2780,36 @@ auto createTwoSpansInt = [](intType n1, intType n2) {
   return boss::expressions::ComplexExpression("List"_, {}, {}, std::move(args));
 };
 
+auto createTwoSpansIntDecrease = [](intType n1, intType n2) {
+  using SpanArguments = boss::expressions::ExpressionSpanArguments;
+  std::vector<intType> v1 = {n1 + 2, n1 + 1, n1};
+  std::vector<intType> v2 = {n2 + 2, n2 + 1, n2};
+  auto s1 = boss::Span<intType>(std::move(v1));
+  auto s2 = boss::Span<intType>(std::move(v2));
+  SpanArguments args;
+  args.emplace_back(std::move(s1));
+  args.emplace_back(std::move(s2));
+  return boss::expressions::ComplexExpression("List"_, {}, {}, std::move(args));
+};
+
+auto createFourSpansIntFrom = [](intType n) {
+  using SpanArguments = boss::expressions::ExpressionSpanArguments;
+  std::vector<intType> v1 = {7 + n, 3 + n};
+  std::vector<intType> v2 = {6 + n, 2 + n};
+  std::vector<intType> v3 = {5 + n, 1 + n};
+  std::vector<intType> v4 = {4 + n, 0 + n};
+  auto s1 = boss::Span<intType>(std::move(v1));
+  auto s2 = boss::Span<intType>(std::move(v2));
+  auto s3 = boss::Span<intType>(std::move(v3));
+  auto s4 = boss::Span<intType>(std::move(v4));
+  SpanArguments args;
+  args.emplace_back(std::move(s1));
+  args.emplace_back(std::move(s2));
+  args.emplace_back(std::move(s3));
+  args.emplace_back(std::move(s4));
+  return boss::expressions::ComplexExpression("List"_, {}, {}, std::move(args));
+};
+
 TEST_CASE("Project - multiple spans", "[hazard-adaptive-engine]") {
   auto engine = boss::engines::BootstrapEngine();
   REQUIRE(!librariesToTest.empty());
@@ -3041,6 +3071,139 @@ TEST_CASE("Join - multi-span", "[hazard-adaptive-engine]") {
                                               "Partition"_("O_key"_("List"_(2)),"Indexes"_(1)),
                                               "Partition"_("O_key"_("List"_(3)),"Indexes"_(2))),
                             "Where"_("Equal"_("L_key"_,"O_key"_))));
+  }
+}
+
+TEST_CASE("Join - multi-span-test", "[hazard-adaptive-engine]") {
+  auto engine = boss::engines::BootstrapEngine();
+  REQUIRE(!librariesToTest.empty());
+  auto eval = [&engine](boss::Expression&& expression) mutable {
+    return engine.evaluate("EvaluateInEngines"_("List"_(GENERATE(from_range(librariesToTest))),
+                                                std::move(expression)));
+  };
+
+  SECTION("Simple join 1") {
+    auto intTable1 = "Table"_("L_key"_(createTwoSpansInt(1,100)),
+                              "L_value"_(createTwoSpansInt(1,4))); // NOLINT
+    auto intTable2 = "Table"_("O_key"_(createTwoSpansInt(10000,1)),
+                              "O_value"_(createTwoSpansInt(1,4))); // NOLINT
+    auto result = eval("Join"_(std::move(intTable1), std::move(intTable2),
+                               "Where"_("Equal"_("L_key"_, "O_key"_))));
+
+    CHECK(result == "Join"_("RadixPartition"_("Table"_("L_value"_("List"_(1,2,3,4,5,6))),
+                                              "Partition"_("L_key"_("List"_(1)),"Indexes"_(0)),
+                                              "Partition"_("L_key"_("List"_(2)),"Indexes"_(1)),
+                                              "Partition"_("L_key"_("List"_(3)),"Indexes"_(2))),
+                            "RadixPartition"_("Table"_("O_value"_("List"_(1,2,3,4,5,6))),
+                                              "Partition"_("O_key"_("List"_(1)),"Indexes"_(0)),
+                                              "Partition"_("O_key"_("List"_(2)),"Indexes"_(1)),
+                                              "Partition"_("O_key"_("List"_(3)),"Indexes"_(2))),
+                            "Where"_("Equal"_("L_key"_,"O_key"_)))
+    );
+  }
+
+  SECTION("Simple join 2") {
+    auto intTable1 = "Table"_("L_key"_(createTwoSpansIntDecrease(1,100)),
+                              "L_value"_(createTwoSpansInt(1,4))); // NOLINT
+    auto intTable2 = "Table"_("O_key"_(createTwoSpansIntDecrease(10000,1)),
+                              "O_value"_(createTwoSpansInt(1,4))); // NOLINT
+    auto result = eval("Join"_(std::move(intTable1), std::move(intTable2),
+                               "Where"_("Equal"_("L_key"_, "O_key"_))));
+
+    CHECK(result == "Join"_("RadixPartition"_("Table"_("L_value"_("List"_(1,2,3,4,5,6))),
+                                              "Partition"_("L_key"_("List"_(1)),"Indexes"_(2)),
+                                              "Partition"_("L_key"_("List"_(2)),"Indexes"_(1)),
+                                              "Partition"_("L_key"_("List"_(3)),"Indexes"_(0))),
+                            "RadixPartition"_("Table"_("O_value"_("List"_(1,2,3,4,5,6))),
+                                              "Partition"_("O_key"_("List"_(1)),"Indexes"_(2)),
+                                              "Partition"_("O_key"_("List"_(2)),"Indexes"_(1)),
+                                              "Partition"_("O_key"_("List"_(3)),"Indexes"_(0))),
+                            "Where"_("Equal"_("L_key"_,"O_key"_)))
+    );
+  }
+
+  SECTION("Simple join 3") {
+    auto intTable1 = "Table"_("L_key"_(createTwoSpansIntDecrease(1,100)),
+                              "L_value"_(createTwoSpansInt(1,4))); // NOLINT
+    auto intTable2 = "Table"_("O_key"_(createIntSpanOf(10002,10001,10000,3,2,1)),
+                              "O_value"_(createIntSpanOf(1,2,3,4,5,6))); // NOLINT
+    auto result = eval("Join"_(std::move(intTable1), std::move(intTable2),
+                               "Where"_("Equal"_("L_key"_, "O_key"_))));
+
+    CHECK(result == "Join"_("RadixPartition"_("Table"_("L_value"_("List"_(1,2,3,4,5,6))),
+                                              "Partition"_("L_key"_("List"_(1)),"Indexes"_(2)),
+                                              "Partition"_("L_key"_("List"_(2)),"Indexes"_(1)),
+                                              "Partition"_("L_key"_("List"_(3)),"Indexes"_(0))),
+                            "RadixPartition"_("Table"_("O_value"_("List"_(1,2,3,4,5,6))),
+                                              "Partition"_("O_key"_("List"_(1)),"Indexes"_(5)),
+                                              "Partition"_("O_key"_("List"_(2)),"Indexes"_(4)),
+                                              "Partition"_("O_key"_("List"_(3)),"Indexes"_(3))),
+                            "Where"_("Equal"_("L_key"_,"O_key"_)))
+    );
+  }
+
+  SECTION("Simple join 4") {
+    auto intTable1 = "Table"_("L_key"_(createFourSpansIntFrom(1)),
+                              "L_value"_(createFourSpansIntFrom(1))); // NOLINT
+    auto intTable2 = "Table"_("O_key"_(createTwoSpansIntDecrease(10000,1)),
+                              "O_value"_(createTwoSpansInt(1,4))); // NOLINT
+    auto result = eval("Join"_(std::move(intTable1), std::move(intTable2),
+                               "Where"_("Equal"_("L_key"_, "O_key"_))));
+
+    CHECK(result == "Join"_("RadixPartition"_("Table"_("L_value"_("List"_(8,4,7,3,6,2,5,1))),
+                                              "Partition"_("L_key"_("List"_(1)),"Indexes"_(1)),
+                                              "Partition"_("L_key"_("List"_(2)),"Indexes"_(1)),
+                                              "Partition"_("L_key"_("List"_(3)),"Indexes"_(1))),
+                            "RadixPartition"_("Table"_("O_value"_("List"_(1,2,3,4,5,6))),
+                                              "Partition"_("O_key"_("List"_(1)),"Indexes"_(2)),
+                                              "Partition"_("O_key"_("List"_(2)),"Indexes"_(1)),
+                                              "Partition"_("O_key"_("List"_(3)),"Indexes"_(0))),
+                            "Where"_("Equal"_("L_key"_,"O_key"_)))
+    );
+  }
+
+  SECTION("Simple join 5") {
+    auto intTable1 = "Table"_("L_key"_(createFourSpansIntFrom(1)),
+                              "L_value"_(createFourSpansIntFrom(1))); // NOLINT
+    auto intTable2 = "Table"_("O_key"_(createFourSpansIntFrom(4)),
+                              "O_value"_(createFourSpansIntFrom(4))); // NOLINT
+    auto result = eval("Join"_(std::move(intTable1), std::move(intTable2),
+                               "Where"_("Equal"_("L_key"_, "O_key"_))));
+
+    CHECK(result == "Join"_("RadixPartition"_("Table"_("L_value"_("List"_(8,4,7,3,6,2,5,1))),
+                                              "Partition"_("L_key"_("List"_(4)),"Indexes"_(1)),
+                                              "Partition"_("L_key"_("List"_(5)),"Indexes"_(0)),
+                                              "Partition"_("L_key"_("List"_(6)),"Indexes"_(0)),
+                                              "Partition"_("L_key"_("List"_(7)),"Indexes"_(0)),
+                                              "Partition"_("L_key"_("List"_(8)),"Indexes"_(0))),
+                            "RadixPartition"_("Table"_("O_value"_("List"_(11,7,10,6,9,5,8,4))),
+                                              "Partition"_("O_key"_("List"_(4)),"Indexes"_(1)),
+                                              "Partition"_("O_key"_("List"_(5)),"Indexes"_(1)),
+                                              "Partition"_("O_key"_("List"_(6)),"Indexes"_(1)),
+                                              "Partition"_("O_key"_("List"_(7)),"Indexes"_(1)),
+                                              "Partition"_("O_key"_("List"_(8)),"Indexes"_(0))),
+                            "Where"_("Equal"_("L_key"_,"O_key"_)))
+    );
+  }
+
+  SECTION("Simple join 6") {
+    auto intTable1 = "Table"_("L_key"_(createTwoSpansInt(1,100)),
+                              "L_value"_(createTwoSpansInt(1,4))); // NOLINT
+    auto intTable2 = "Table"_("O_key"_(createTwoSpansInt(10000000,1)),
+                              "O_value"_(createTwoSpansInt(1,4))); // NOLINT
+    auto result = eval("Join"_(std::move(intTable1), std::move(intTable2),
+                               "Where"_("Equal"_("L_key"_, "O_key"_))));
+
+    CHECK(result == "Join"_("RadixPartition"_("Table"_("L_value"_("List"_(1,2,3,4,5,6))),
+                                              "Partition"_("L_key"_("List"_(1)),"Indexes"_(0)),
+                                              "Partition"_("L_key"_("List"_(2)),"Indexes"_(1)),
+                                              "Partition"_("L_key"_("List"_(3)),"Indexes"_(2))),
+                            "RadixPartition"_("Table"_("O_value"_("List"_(1,2,3,4,5,6))),
+                                              "Partition"_("O_key"_("List"_(1)),"Indexes"_(0)),
+                                              "Partition"_("O_key"_("List"_(2)),"Indexes"_(1)),
+                                              "Partition"_("O_key"_("List"_(3)),"Indexes"_(2))),
+                            "Where"_("Equal"_("L_key"_,"O_key"_)))
+    );
   }
 }
 

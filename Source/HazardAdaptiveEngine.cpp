@@ -1144,6 +1144,10 @@ public:
         return constructTableWithEmptyColumns(std::move(leftRelationColumns));
       }
 
+      auto engineDOP = getEngineInstanceState().getVectorizedDOP() == -1
+                           ? nonVectorizedDOP
+                           : getEngineInstanceState().getVectorizedDOP();
+
       auto partitionedTables = std::visit(
           boss::utilities::overload(
               [](auto&& typedSpan1, auto&& typedSpan2) -> adaptive::PartitionedJoinArguments {
@@ -1154,11 +1158,11 @@ public:
                     std::string(typeid(typename SpanType1::element_type).name()) + ", " +
                     std::string(typeid(typename SpanType2::element_type).name()));
               },
-              [&leftKeySpans, &rightKeySpans]<IntegralType Type1, IntegralType Type2>(
-                  boss::expressions::atoms::Span<Type1> const& typedSpan1,
-                  boss::expressions::atoms::Span<Type2> const& typedSpan2) {
-                return adaptive::partitionJoinExpr<Type2, Type2>(partitionImplementation,
-                                                                 leftKeySpans, rightKeySpans);
+              [&leftKeySpans, &rightKeySpans, engineDOP]<IntegralType Type1, IntegralType Type2>(
+                  boss::expressions::atoms::Span<Type1> const& /*typedSpan1*/,
+                  boss::expressions::atoms::Span<Type2> const& /*typedSpan2*/) {
+                return adaptive::partitionJoinExpr<Type2, Type2>(
+                    partitionImplementation, leftKeySpans, rightKeySpans, engineDOP);
               }),
           leftKeySpans.at(0), rightKeySpans.at(0));
 
@@ -1166,9 +1170,11 @@ public:
       auto& tableOnePartitionsOfIndexSpans = partitionedTables.tableOnePartitionsOfIndexSpans;
       auto& tableTwoPartitionsOfKeySpans = partitionedTables.tableTwoPartitionsOfKeySpans;
       auto& tableTwoPartitionsOfIndexSpans = partitionedTables.tableTwoPartitionsOfIndexSpans;
+#ifdef DEBUG_MODE
       assert(tableOnePartitionsOfKeySpans.size() == tableOnePartitionsOfIndexSpans.size() &&
              tableOnePartitionsOfIndexSpans.size() == tableTwoPartitionsOfKeySpans.size() &&
              tableTwoPartitionsOfKeySpans.size() == tableTwoPartitionsOfIndexSpans.size());
+#endif
 
       ExpressionArguments leftArgs, rightArgs, joinArgs;
       leftArgs.emplace_back(

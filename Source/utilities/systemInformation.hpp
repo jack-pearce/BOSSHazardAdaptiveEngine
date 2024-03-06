@@ -3,6 +3,7 @@
 
 #include <immintrin.h>
 #include "config.hpp"
+#include <unistd.h>
 
 namespace adaptive {
 

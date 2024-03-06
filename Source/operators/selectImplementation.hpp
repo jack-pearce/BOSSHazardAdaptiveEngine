@@ -714,7 +714,7 @@ Span<int32_t> select(Select implementation, const Span<T>& column, U value, bool
                      P& predicate, Span<int32_t>&& candidateIndexes, size_t engineDOP,
                      SelectOperatorState* state) {
   assert(1 <= engineDOP && engineDOP <= logicalCoresCount());
-  // Adaptive Parallel means engine is not vectorized. Will execute constantsDOP threads in engine
+  // Adaptive Parallel means engine is not vectorized. Will execute engineDOP threads in engine
   if(implementation == Select::AdaptiveParallel) {
     SelectAdaptiveParallel<T, P> selectOperator(column, value, columnIsFirstArg, predicate,
                                                 std::move(candidateIndexes), engineDOP);
@@ -722,7 +722,7 @@ Span<int32_t> select(Select implementation, const Span<T>& column, U value, bool
   }
 
   // Branch, Predication, and Adaptive are all single threaded in engine instance, but the engine
-  // could be vectorized, in this case the constantsDOP represents the vectorized DOP.
+  // could be vectorized, in this case the engineDOP represents the vectorized DOP.
   if(implementation == Select::Adaptive) {
     return std::move(getSelectAdaptiveOperator<T, P>().processInput(
         column, value, columnIsFirstArg, predicate, std::move(candidateIndexes), state, engineDOP));
