@@ -29,7 +29,7 @@
 #include <vector>
 
 // #define DEBUG_MODE
-// #define DEFER_TO_OTHER_ENGINE
+#define DEFER_TO_OTHER_ENGINE
 
 using ExpressionBuilder = boss::utilities::ExtensibleExpressionBuilder<HAExpressionSystem>;
 static ExpressionBuilder operator""_(const char* name, size_t /*unused*/) {

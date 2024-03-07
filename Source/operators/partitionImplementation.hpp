@@ -17,10 +17,11 @@
 #include "utilities/papiWrapper.hpp"
 #include "utilities/systemInformation.hpp"
 
-// #define DEBUG
-#define ADAPTIVITY_OUTPUT
-// #define CHANGE_PARTITION_TO_SORT_FOR_TESTING
 #define USE_ADAPTIVE_OVER_ADAPTIVE_PARALLEL_FOR_DOP_1
+#define CREATE_SPANS_ALIGNED_TO_BATCHES
+#define ADAPTIVITY_OUTPUT
+// #define DEBUG
+// #define CHANGE_PARTITION_TO_SORT_FOR_TESTING
 
 constexpr int TUPLES_PER_HAZARD_CHECK = 10 * 1000;
 
@@ -2004,11 +2005,20 @@ private:
 
 /********************************** UTILITY FUNCTIONS *********************************/
 
+#ifdef CREATE_SPANS_ALIGNED_TO_BATCHES
 template <typename T>
 std::pair<std::vector<ExpressionSpanArguments>, std::vector<ExpressionSpanArguments>>
 createPartitionsOfSpansAlignedToTableBatches(
     const PartitionedArray<std::remove_cv_t<T>>& partitionedArray,
     const ExpressionSpanArguments& tableKeys) {
+#else
+template <typename T>
+std::pair<std::vector<ExpressionSpanArguments>, std::vector<ExpressionSpanArguments>>
+createPartitionsOfSpansAlignedToTableBatches(
+    const PartitionedArray<std::remove_cv_t<T>>& partitionedArray,
+    const ExpressionSpanArguments& /*unused*/) {
+#endif
+
   auto keys = partitionedArray.partitionedKeys.get();
   auto indexes = partitionedArray.indexes.get();
   auto partitions = *(partitionedArray.partitionPositions.get());
@@ -2034,6 +2044,7 @@ createPartitionsOfSpansAlignedToTableBatches(
   partitionsOfKeySpans.reserve(partitions.size());
   partitionsOfIndexSpans.reserve(partitions.size());
 
+#ifdef CREATE_SPANS_ALIGNED_TO_BATCHES
   std::vector<int> cumulativeBatchSizes(1, 0);
   cumulativeBatchSizes.reserve(tableKeys.size() + 1);
   for(const auto& batch : tableKeys) {
@@ -2067,6 +2078,17 @@ createPartitionsOfSpansAlignedToTableBatches(
     partitionsOfKeySpans.push_back(std::move(outputKeySpans));
     partitionsOfIndexSpans.push_back(std::move(outputIndexSpans));
   }
+#else
+  for(auto& partition : partitions) {
+    ExpressionSpanArguments outputKeySpans, outputIndexSpans;
+    outputKeySpans.emplace_back(Span<std::remove_cv_t<T>>(
+        keys + partition.first, partition.second, [ptr = partitionedArray.partitionedKeys]() {}));
+    outputIndexSpans.emplace_back(Span<int32_t>(indexes + partition.first, partition.second,
+                                                [ptr = partitionedArray.indexes]() {}));
+    partitionsOfKeySpans.push_back(std::move(outputKeySpans));
+    partitionsOfIndexSpans.push_back(std::move(outputIndexSpans));
+  }
+#endif
 
   return std::make_pair(std::move(partitionsOfKeySpans), std::move(partitionsOfIndexSpans));
 }
