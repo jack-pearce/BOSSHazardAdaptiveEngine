@@ -18,10 +18,18 @@
 #include "utilities/systemInformation.hpp"
 
 #define USE_ADAPTIVE_OVER_ADAPTIVE_PARALLEL_FOR_DOP_1
-#define CREATE_SPANS_ALIGNED_TO_BATCHES
+// #define CREATE_SPANS_ALIGNED_TO_BATCHES
 #define ADAPTIVITY_OUTPUT
 // #define DEBUG
 // #define CHANGE_PARTITION_TO_SORT_FOR_TESTING
+
+#ifndef CREATE_SPANS_ALIGNED_TO_BATCHES
+// #define INCLUDE_MIN_PARTITION_SIZE // Toggle, requires not creating spans aligned to batches
+#endif
+
+#ifdef INCLUDE_MIN_PARTITION_SIZE
+constexpr int MIN_PARTITION_SIZE = 1;
+#endif
 
 constexpr int TUPLES_PER_HAZARD_CHECK = 10 * 1000;
 
@@ -2005,6 +2013,102 @@ private:
 
 /********************************** UTILITY FUNCTIONS *********************************/
 
+#ifdef INCLUDE_MIN_PARTITION_SIZE
+
+template <typename T1, typename T2>
+PartitionedJoinArguments
+createPartitionsWithMinimumSize(const TwoPartitionedArrays<T1, T2>& partitionedTables) {
+
+  auto keys1 = partitionedTables.partitionedArrayOne.partitionedKeys.get();
+  auto indexes1 = partitionedTables.partitionedArrayOne.indexes.get();
+  auto partitions1 = *(partitionedTables.partitionedArrayOne.partitionPositions.get());
+
+  auto keys2 = partitionedTables.partitionedArrayTwo.partitionedKeys.get();
+  auto indexes2 = partitionedTables.partitionedArrayTwo.indexes.get();
+  auto partitions2 = *(partitionedTables.partitionedArrayTwo.partitionPositions.get());
+
+  std::vector<ExpressionSpanArguments> partitionsOfKeySpans1, partitionsOfIndexSpans1,
+      partitionsOfKeySpans2, partitionsOfIndexSpans2;
+  partitionsOfKeySpans1.reserve(partitions1.size());
+  partitionsOfIndexSpans1.reserve(partitions1.size());
+  partitionsOfKeySpans2.reserve(partitions1.size());
+  partitionsOfIndexSpans2.reserve(partitions1.size());
+
+  size_t partitionNum = 0;
+  while(partitionNum < partitions1.size()) {
+    int partitionStart1 = partitions1[partitionNum].first;
+    int partitionStart2 = partitions2[partitionNum].first;
+    int partitionSize1 = partitions1[partitionNum].second;
+    int partitionSize2 = partitions2[partitionNum].second;
+    ++partitionNum;
+
+    while(partitionSize1 < MIN_PARTITION_SIZE && partitionNum < partitions1.size()) {
+      partitionSize1 =
+          (partitions1[partitionNum].first - partitionStart1) + partitions1[partitionNum].second;
+      partitionSize2 =
+          (partitions2[partitionNum].first - partitionStart2) + partitions2[partitionNum].second;
+      ++partitionNum;
+    }
+
+    partitionsOfKeySpans1.emplace_back(
+        Span<T1>(keys1 + partitionStart1, partitionSize1,
+                 [ptr = partitionedTables.partitionedArrayOne.partitionedKeys]() {}));
+    partitionsOfIndexSpans1.emplace_back(
+        Span<int32_t>(indexes1 + partitionStart1, partitionSize1,
+                      [ptr = partitionedTables.partitionedArrayOne.indexes]() {}));
+
+    partitionsOfKeySpans2.emplace_back(
+        Span<T2>(keys2 + partitionStart2, partitionSize2,
+                 [ptr = partitionedTables.partitionedArrayTwo.partitionedKeys]() {}));
+    partitionsOfIndexSpans2.emplace_back(
+        Span<int32_t>(indexes2 + partitionStart2, partitionSize2,
+                      [ptr = partitionedTables.partitionedArrayTwo.indexes]() {}));
+  }
+
+  return {std::move(partitionsOfKeySpans1), std::move(partitionsOfIndexSpans1),
+          std::move(partitionsOfKeySpans2), std::move(partitionsOfIndexSpans2)};
+}
+
+/*********************************** ENTRY FUNCTION ***********************************/
+
+template <typename T1, typename T2>
+PartitionedJoinArguments partitionJoinExpr(PartitionOperators partitionImplementation,
+                                           const ExpressionSpanArguments& tableOneKeys,
+                                           const ExpressionSpanArguments& tableTwoKeys, int dop) {
+  static_assert(std::is_integral<T1>::value, "PartitionOperators column must be an integer type");
+  static_assert(std::is_integral<T2>::value, "PartitionOperators column must be an integer type");
+
+  TwoPartitionedArrays<std::remove_cv_t<T1>, std::remove_cv_t<T2>> partitionedTables =
+      [partitionImplementation, &tableOneKeys, &tableTwoKeys, dop]() {
+#ifdef USE_ADAPTIVE_OVER_ADAPTIVE_PARALLEL_FOR_DOP_1
+        if(partitionImplementation == PartitionOperators::RadixBitsAdaptiveParallel && dop == 1) {
+          auto partitionOperator = PartitionAdaptive<T1, T2>(tableOneKeys, tableTwoKeys);
+          return partitionOperator.processInput();
+        }
+#endif
+        if(partitionImplementation == PartitionOperators::RadixBitsAdaptiveParallel) {
+          assert(adaptive::config::nonVectorizedDOP >= dop); // Will have a deadlock otherwise
+          auto partitionOperator =
+              PartitionAdaptiveParallel<T1, T2>(tableOneKeys, tableTwoKeys, dop);
+          return partitionOperator.processInput();
+        }
+        assert(dop == 1);
+        if(partitionImplementation == PartitionOperators::RadixBitsFixed) {
+          auto partitionOperator = Partition<T1, T2>(tableOneKeys, tableTwoKeys);
+          return partitionOperator.processInput();
+        } else if(partitionImplementation == PartitionOperators::RadixBitsAdaptive) {
+          auto partitionOperator = PartitionAdaptive<T1, T2>(tableOneKeys, tableTwoKeys);
+          return partitionOperator.processInput();
+        } else {
+          throw std::runtime_error("Invalid selection of 'Partition' implementation!");
+        }
+      }();
+
+  return createPartitionsWithMinimumSize(partitionedTables);
+}
+
+#else
+
 #ifdef CREATE_SPANS_ALIGNED_TO_BATCHES
 template <typename T>
 std::pair<std::vector<ExpressionSpanArguments>, std::vector<ExpressionSpanArguments>>
@@ -2166,6 +2270,8 @@ PartitionedJoinArguments partitionJoinExpr(PartitionOperators partitionImplement
   return {std::move(tableOnePartitionsOfKeySpans), std::move(tableOnePartitionsOfIndexSpans),
           std::move(tableTwoPartitionsOfKeySpans), std::move(tableTwoPartitionsOfIndexSpans)};
 }
+
+#endif
 
 } // namespace adaptive
 
