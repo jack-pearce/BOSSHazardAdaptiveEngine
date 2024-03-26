@@ -2069,44 +2069,6 @@ createPartitionsWithMinimumSize(const TwoPartitionedArrays<T1, T2>& partitionedT
           std::move(partitionsOfKeySpans2), std::move(partitionsOfIndexSpans2)};
 }
 
-/*********************************** ENTRY FUNCTION ***********************************/
-
-template <typename T1, typename T2>
-PartitionedJoinArguments partitionJoinExpr(PartitionOperators partitionImplementation,
-                                           const ExpressionSpanArguments& tableOneKeys,
-                                           const ExpressionSpanArguments& tableTwoKeys, int dop) {
-  static_assert(std::is_integral<T1>::value, "PartitionOperators column must be an integer type");
-  static_assert(std::is_integral<T2>::value, "PartitionOperators column must be an integer type");
-
-  TwoPartitionedArrays<std::remove_cv_t<T1>, std::remove_cv_t<T2>> partitionedTables =
-      [partitionImplementation, &tableOneKeys, &tableTwoKeys, dop]() {
-#ifdef USE_ADAPTIVE_OVER_ADAPTIVE_PARALLEL_FOR_DOP_1
-        if(partitionImplementation == PartitionOperators::RadixBitsAdaptiveParallel && dop == 1) {
-          auto partitionOperator = PartitionAdaptive<T1, T2>(tableOneKeys, tableTwoKeys);
-          return partitionOperator.processInput();
-        }
-#endif
-        if(partitionImplementation == PartitionOperators::RadixBitsAdaptiveParallel) {
-          assert(adaptive::config::nonVectorizedDOP >= dop); // Will have a deadlock otherwise
-          auto partitionOperator =
-              PartitionAdaptiveParallel<T1, T2>(tableOneKeys, tableTwoKeys, dop);
-          return partitionOperator.processInput();
-        }
-        assert(dop == 1);
-        if(partitionImplementation == PartitionOperators::RadixBitsFixed) {
-          auto partitionOperator = Partition<T1, T2>(tableOneKeys, tableTwoKeys);
-          return partitionOperator.processInput();
-        } else if(partitionImplementation == PartitionOperators::RadixBitsAdaptive) {
-          auto partitionOperator = PartitionAdaptive<T1, T2>(tableOneKeys, tableTwoKeys);
-          return partitionOperator.processInput();
-        } else {
-          throw std::runtime_error("Invalid selection of 'Partition' implementation!");
-        }
-      }();
-
-  return createPartitionsWithMinimumSize(partitionedTables);
-}
-
 #else
 
 #ifdef CREATE_SPANS_ALIGNED_TO_BATCHES
@@ -2197,6 +2159,8 @@ createPartitionsOfSpansAlignedToTableBatches(
   return std::make_pair(std::move(partitionsOfKeySpans), std::move(partitionsOfIndexSpans));
 }
 
+#endif
+
 /*********************************** ENTRY FUNCTION ***********************************/
 
 template <typename T1, typename T2>
@@ -2231,6 +2195,12 @@ PartitionedJoinArguments partitionJoinExpr(PartitionOperators partitionImplement
           throw std::runtime_error("Invalid selection of 'Partition' implementation!");
         }
       }();
+
+#ifdef INCLUDE_MIN_PARTITION_SIZE
+
+  return createPartitionsWithMinimumSize(partitionedTables);
+
+#else
 
   std::vector<ExpressionSpanArguments> tableOnePartitionsOfKeySpans, tableOnePartitionsOfIndexSpans,
       tableTwoPartitionsOfKeySpans, tableTwoPartitionsOfIndexSpans;
@@ -2269,9 +2239,9 @@ PartitionedJoinArguments partitionJoinExpr(PartitionOperators partitionImplement
 
   return {std::move(tableOnePartitionsOfKeySpans), std::move(tableOnePartitionsOfIndexSpans),
           std::move(tableTwoPartitionsOfKeySpans), std::move(tableTwoPartitionsOfIndexSpans)};
-}
 
 #endif
+}
 
 } // namespace adaptive
 
