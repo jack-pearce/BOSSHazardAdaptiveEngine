@@ -8,12 +8,14 @@ namespace adaptive {
 
 enum Select { Branch, Predication, Adaptive, AdaptiveParallel };
 enum PartitionOperators { RadixBitsFixed, RadixBitsAdaptive, RadixBitsAdaptiveParallel };
+enum Group { Hash, Sort, GroupAdaptive, GroupAdaptiveParallel };
 
 namespace config {
 
 extern int32_t nonVectorizedDOP;
 extern adaptive::Select selectImplementation;
 extern adaptive::PartitionOperators partitionImplementation;
+extern adaptive::Group groupImplementation;
 extern uint32_t minTuplesPerThread;
 
 extern int32_t LOGICAL_CORE_COUNT;

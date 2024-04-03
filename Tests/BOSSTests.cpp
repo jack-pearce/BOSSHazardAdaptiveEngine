@@ -826,6 +826,7 @@ TEST_CASE("Basics", "[basics]") { // NOLINT
 }
 
 static int64_t operator""_i64(char c) { return static_cast<int64_t>(c); };
+static int32_t operator""_i32(char c) { return static_cast<int32_t>(c); };
 
 TEST_CASE("TPC-H", "[tpch]") {
   auto engine = boss::engines::BootstrapEngine();
@@ -2271,180 +2272,40 @@ TEST_CASE("Dates and Group", "[hazard-adaptive-engine]") {
   }
 
   SECTION("Group 1") {
-    auto output = eval("Group"_(lineitem.clone(CloneReason::FOR_TESTING), "Sum"_("L_DISCOUNT"_)));
-#ifdef DEFERRED_TO_OTHER_ENGINE
-    CHECK(output ==
-          "Group"_(
-              "Table"_("L_ORDERKEY"_("List"_(1, 1, 2, 3)),                                 // NOLINT
-                       "L_PARTKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
-                       "L_SUPPKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
-                       "L_RETURNFLAG"_("List"_("N", "N", "A", "A")),                       // NOLINT
-                       "L_LINESTATUS"_("List"_("O", "O", "F", "F")),                       // NOLINT
-                       "L_RETURNFLAG_INT"_("List"_('N'_i64, 'N'_i64, 'A'_i64, 'A'_i64)),   // NOLINT
-                       "L_LINESTATUS_INT"_("List"_('O'_i64, 'O'_i64, 'F'_i64, 'F'_i64)),   // NOLINT
-                       "L_QUANTITY"_("List"_(17, 21, 8, 5)),                               // NOLINT
-                       "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
-                       "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
-                       "L_TAX"_("List"_(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
-                       "L_SHIPDATE"_("List"_(8400, 9130, 9861, 9130))),
-              "Sum"_("L_DISCOUNT"_)));
-#else
-    CHECK(output == "Table"_("L_DISCOUNT"_("List"_(0.27)))); // NOLINT
-#endif
+    auto output = eval("Group"_(lineitem.clone(CloneReason::FOR_TESTING),
+                                "As"_("total_discount"_, "Sum"_("L_DISCOUNT"_))));
+    CHECK(output == "Table"_("total_discount"_("List"_(0.27)))); // NOLINT
   }
 
   SECTION("Group 2") {
-    auto output = eval("Group"_(lineitem.clone(CloneReason::FOR_TESTING), "Sum"_("L_DISCOUNT"_),
-                                "Count"_("L_DISCOUNT"_)));
-#ifdef DEFERRED_TO_OTHER_ENGINE
+    auto output = eval("Group"_(lineitem.clone(CloneReason::FOR_TESTING), "By"_("L_ORDERKEY"_),
+                                "As"_("sumParts"_, "Sum"_("L_PARTKEY"_))));
     CHECK(output ==
-          "Group"_(
-              "Table"_("L_ORDERKEY"_("List"_(1, 1, 2, 3)),                                 // NOLINT
-                       "L_PARTKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
-                       "L_SUPPKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
-                       "L_RETURNFLAG"_("List"_("N", "N", "A", "A")),                       // NOLINT
-                       "L_LINESTATUS"_("List"_("O", "O", "F", "F")),                       // NOLINT
-                       "L_RETURNFLAG_INT"_("List"_('N'_i64, 'N'_i64, 'A'_i64, 'A'_i64)),   // NOLINT
-                       "L_LINESTATUS_INT"_("List"_('O'_i64, 'O'_i64, 'F'_i64, 'F'_i64)),   // NOLINT
-                       "L_QUANTITY"_("List"_(17, 21, 8, 5)),                               // NOLINT
-                       "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
-                       "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
-                       "L_TAX"_("List"_(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
-                       "L_SHIPDATE"_("List"_(8400, 9130, 9861, 9130))),
-              "Sum"_("L_DISCOUNT"_), "Count"_("L_DISCOUNT"_)));
-#else
-    CHECK(output == "Table"_("L_DISCOUNT"_("List"_(0.27)),
-                             "L_DISCOUNT"_("List"_(4)))); // NOLINT
-#endif
+          "Table"_("L_ORDERKEY"_("List"_(1, 2, 3)), "sumParts"_("List"_(3, 3, 4)))); // NOLINT
   }
 
   SECTION("Group 3") {
-    auto output = eval("Group"_(lineitem.clone(CloneReason::FOR_TESTING),
-                                "As"_("total_discount"_, "Sum"_("L_DISCOUNT"_))));
-#ifdef DEFERRED_TO_OTHER_ENGINE
+    auto output = eval("Group"_(lineitem.clone(CloneReason::FOR_TESTING), "By"_("L_ORDERKEY"_),
+                                "As"_("count"_, "Count"_("L_ORDERKEY"_))));
     CHECK(output ==
-          "Group"_(
-              "Table"_("L_ORDERKEY"_("List"_(1, 1, 2, 3)),                                 // NOLINT
-                       "L_PARTKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
-                       "L_SUPPKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
-                       "L_RETURNFLAG"_("List"_("N", "N", "A", "A")),                       // NOLINT
-                       "L_LINESTATUS"_("List"_("O", "O", "F", "F")),                       // NOLINT
-                       "L_RETURNFLAG_INT"_("List"_('N'_i64, 'N'_i64, 'A'_i64, 'A'_i64)),   // NOLINT
-                       "L_LINESTATUS_INT"_("List"_('O'_i64, 'O'_i64, 'F'_i64, 'F'_i64)),   // NOLINT
-                       "L_QUANTITY"_("List"_(17, 21, 8, 5)),                               // NOLINT
-                       "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
-                       "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
-                       "L_TAX"_("List"_(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
-                       "L_SHIPDATE"_("List"_(8400, 9130, 9861, 9130))),
-              "As"_("total_discount"_, "Sum"_("L_DISCOUNT"_))));
-#else
-    CHECK(output == "Table"_("total_discount"_("List"_(0.27)))); // NOLINT
-#endif
+          "Table"_("L_ORDERKEY"_("List"_(1, 2, 3)), "count"_("List"_(2, 1, 1)))); // NOLINT
   }
 
   SECTION("Group 4") {
-    auto output = eval("Group"_(lineitem.clone(CloneReason::FOR_TESTING), "By"_("L_ORDERKEY"_),
-                                "As"_("sumParts"_, "Sum"_("L_PARTKEY"_))));
-#ifdef DEFERRED_TO_OTHER_ENGINE
-    CHECK(output ==
-          "Group"_(
-              "Table"_("L_ORDERKEY"_("List"_(1, 1, 2, 3)),                                 // NOLINT
-                       "L_PARTKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
-                       "L_SUPPKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
-                       "L_RETURNFLAG"_("List"_("N", "N", "A", "A")),                       // NOLINT
-                       "L_LINESTATUS"_("List"_("O", "O", "F", "F")),                       // NOLINT
-                       "L_RETURNFLAG_INT"_("List"_('N'_i64, 'N'_i64, 'A'_i64, 'A'_i64)),   // NOLINT
-                       "L_LINESTATUS_INT"_("List"_('O'_i64, 'O'_i64, 'F'_i64, 'F'_i64)),   // NOLINT
-                       "L_QUANTITY"_("List"_(17, 21, 8, 5)),                               // NOLINT
-                       "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
-                       "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
-                       "L_TAX"_("List"_(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
-                       "L_SHIPDATE"_("List"_(8400, 9130, 9861, 9130))),
-              "By"_("L_ORDERKEY"_), "As"_("sumParts"_, "Sum"_("L_PARTKEY"_))));
-#else
-    CHECK(output ==
-          "Table"_("L_ORDERKEY"_("List"_(1, 2, 3)), "sumParts"_("List"_(3, 3, 4)))); // NOLINT
-#endif
-  }
-
-  SECTION("Group 5") {
-    auto output = eval("Group"_(lineitem.clone(CloneReason::FOR_TESTING), "By"_("L_ORDERKEY"_),
-                                "As"_("count"_, "Count"_("L_ORDERKEY"_))));
-#ifdef DEFERRED_TO_OTHER_ENGINE
-    CHECK(output ==
-          "Group"_(
-              "Table"_("L_ORDERKEY"_("List"_(1, 1, 2, 3)),                                 // NOLINT
-                       "L_PARTKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
-                       "L_SUPPKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
-                       "L_RETURNFLAG"_("List"_("N", "N", "A", "A")),                       // NOLINT
-                       "L_LINESTATUS"_("List"_("O", "O", "F", "F")),                       // NOLINT
-                       "L_RETURNFLAG_INT"_("List"_('N'_i64, 'N'_i64, 'A'_i64, 'A'_i64)),   // NOLINT
-                       "L_LINESTATUS_INT"_("List"_('O'_i64, 'O'_i64, 'F'_i64, 'F'_i64)),   // NOLINT
-                       "L_QUANTITY"_("List"_(17, 21, 8, 5)),                               // NOLINT
-                       "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
-                       "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
-                       "L_TAX"_("List"_(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
-                       "L_SHIPDATE"_("List"_(8400, 9130, 9861, 9130))),
-              "By"_("L_ORDERKEY"_), "As"_("count"_, "Count"_("L_ORDERKEY"_))));
-#else
-    CHECK(output ==
-          "Table"_("L_ORDERKEY"_("List"_(1, 2, 3)), "count"_("List"_(2, 1, 1)))); // NOLINT
-#endif
-  }
-
-  SECTION("Group 6") {
     auto output = eval(
         "Group"_(lineitem.clone(CloneReason::FOR_TESTING), "By"_("L_ORDERKEY"_),
                  "As"_("sum_quantity"_, "Sum"_("L_QUANTITY"_), "count"_, "Count"_("L_ORDERKEY"_))));
-#ifdef DEFERRED_TO_OTHER_ENGINE
-    CHECK(output ==
-          "Group"_(
-              "Table"_("L_ORDERKEY"_("List"_(1, 1, 2, 3)),                                 // NOLINT
-                       "L_PARTKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
-                       "L_SUPPKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
-                       "L_RETURNFLAG"_("List"_("N", "N", "A", "A")),                       // NOLINT
-                       "L_LINESTATUS"_("List"_("O", "O", "F", "F")),                       // NOLINT
-                       "L_RETURNFLAG_INT"_("List"_('N'_i64, 'N'_i64, 'A'_i64, 'A'_i64)),   // NOLINT
-                       "L_LINESTATUS_INT"_("List"_('O'_i64, 'O'_i64, 'F'_i64, 'F'_i64)),   // NOLINT
-                       "L_QUANTITY"_("List"_(17, 21, 8, 5)),                               // NOLINT
-                       "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
-                       "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
-                       "L_TAX"_("List"_(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
-                       "L_SHIPDATE"_("List"_(8400, 9130, 9861, 9130))),
-              "By"_("L_ORDERKEY"_),
-              "As"_("sum_quantity"_, "Sum"_("L_QUANTITY"_), "count"_, "Count"_("L_ORDERKEY"_))));
-#else
     CHECK(output == "Table"_("L_ORDERKEY"_("List"_(1, 2, 3)), "sum_quantity"_("List"_(38, 8, 5)),
                              "count"_("List"_(2, 1, 1)))); // NOLINT
-#endif
   }
 
-  SECTION("Group 7") {
+  SECTION("Group 5") {
     auto output = eval("Group"_(
         lineitem.clone(CloneReason::FOR_TESTING), "By"_("L_ORDERKEY"_),
         "As"_("sum_price"_, "Sum"_("L_EXTENDEDPRICE"_), "count"_, "Count"_("L_ORDERKEY"_))));
-#ifdef DEFERRED_TO_OTHER_ENGINE
-    CHECK(output ==
-          "Group"_(
-              "Table"_("L_ORDERKEY"_("List"_(1, 1, 2, 3)),                                 // NOLINT
-                       "L_PARTKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
-                       "L_SUPPKEY"_("List"_(1, 2, 3, 4)),                                  // NOLINT
-                       "L_RETURNFLAG"_("List"_("N", "N", "A", "A")),                       // NOLINT
-                       "L_LINESTATUS"_("List"_("O", "O", "F", "F")),                       // NOLINT
-                       "L_RETURNFLAG_INT"_("List"_('N'_i64, 'N'_i64, 'A'_i64, 'A'_i64)),   // NOLINT
-                       "L_LINESTATUS_INT"_("List"_('O'_i64, 'O'_i64, 'F'_i64, 'F'_i64)),   // NOLINT
-                       "L_QUANTITY"_("List"_(17, 21, 8, 5)),                               // NOLINT
-                       "L_EXTENDEDPRICE"_("List"_(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
-                       "L_DISCOUNT"_("List"_(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
-                       "L_TAX"_("List"_(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
-                       "L_SHIPDATE"_("List"_(8400, 9130, 9861, 9130))),
-              "By"_("L_ORDERKEY"_),
-              "As"_("sum_price"_, "Sum"_("L_EXTENDEDPRICE"_), "count"_, "Count"_("L_ORDERKEY"_))));
-#else
     CHECK(output == "Table"_("L_ORDERKEY"_("List"_(1, 2, 3)),
                              "sum_price"_("List"_(17954.55 + 34850.16, 7712.48, 25284.00)),
                              "count"_("List"_(2, 1, 1)))); // NOLINT
-#endif
   }
 }
 
@@ -2922,36 +2783,20 @@ TEST_CASE("Group multiple spans", "[hazard-adaptive-engine]") {
                         "payload"_(createTwoSpansIntStartingFrom(4)));
 
   SECTION("Group sum multiple spans") {
-    auto output = eval("Group"_(table.clone(CloneReason::FOR_TESTING), "Sum"_("key"_)));
-#ifdef DEFERRED_TO_OTHER_ENGINE
-    CHECK(output == "Group"_("Table"_("key"_("List"_(0, 1, 2, 3)), // NOLINT
-                                      "payload"_("List"_(4, 5, 6, 7))), "Sum"_("key"_)));
-#else
-    CHECK(output == "Table"_("key"_("List"_(6)))); // NOLINT
-#endif
+    auto output = eval("Group"_(table.clone(CloneReason::FOR_TESTING), "As"_("sum_result"_,"Sum"_("key"_))));
+    CHECK(output == "Table"_("sum_result"_("List"_(6)))); // NOLINT
   }
 
   SECTION("Group count multiple spans") {
-    auto output = eval("Group"_(table.clone(CloneReason::FOR_TESTING), "Count"_("key"_)));
-#ifdef DEFERRED_TO_OTHER_ENGINE
-    CHECK(output == "Group"_("Table"_("key"_("List"_(0, 1, 2, 3)), // NOLINT
-                                      "payload"_("List"_(4, 5, 6, 7))), "Count"_("key"_)));
-#else
-    CHECK(output == "Table"_("key"_("List"_(4)))); // NOLINT
-#endif
+    auto output = eval("Group"_(table.clone(CloneReason::FOR_TESTING), "As"_("count_result"_,"Count"_("key"_))));
+    CHECK(output == "Table"_("count_result"_("List"_(4)))); // NOLINT
   }
 
   SECTION("Group count multiple spans with grouping") {
     auto output = eval("Group"_(table.clone(CloneReason::FOR_TESTING), "By"_("key"_),
                                 "As"_("countKeys"_, "Count"_("key"_))));
-#ifdef DEFERRED_TO_OTHER_ENGINE
-    CHECK(output == "Group"_("Table"_("key"_("List"_(0, 1, 2, 3)), // NOLINT
-                                      "payload"_("List"_(4, 5, 6, 7))), "By"_("key"_),
-                                      "As"_("countKeys"_, "Count"_("key"_))));
-#else
     CHECK(output ==
           "Table"_("key"_("List"_(0, 1, 2, 3)), "countKeys"_("List"_(1, 1, 1, 1)))); // NOLINT
-#endif
   }
 }
 
@@ -3204,6 +3049,128 @@ TEST_CASE("Join - multi-span-test", "[hazard-adaptive-engine]") {
                                               "Partition"_("O_key"_("List"_(3)),"Indexes"_(2))),
                             "Where"_("Equal"_("L_key"_,"O_key"_)))
     );
+  }
+}
+
+TEST_CASE("Group tests", "[hazard-adaptive-engine]") {
+  auto engine = boss::engines::BootstrapEngine();
+  REQUIRE(!librariesToTest.empty());
+  auto eval = [&engine](boss::Expression&& expression) mutable {
+    return engine.evaluate("EvaluateInEngines"_("List"_(GENERATE(from_range(librariesToTest))),
+                                                std::move(expression)));
+  };
+
+  auto lineitem =
+      "Table"_("L_ORDERKEY"_(createIntSpanOf(1, 1, 2, 3)),                                 // NOLINT
+               "L_PARTKEY"_(createIntSpanOf(1, 2, 3, 4)),                                  // NOLINT
+               "L_SUPPKEY"_(createIntSpanOf(1, 2, 3, 4)),                                  // NOLINT
+               "L_RETURNFLAG"_(createStringSpanOf("N", "N", "A", "A")),                       // NOLINT
+               "L_LINESTATUS"_(createStringSpanOf("O", "O", "F", "F")),                       // NOLINT
+               "L_RETURNFLAG_INT"_(createIntSpanOf('N'_i32, 'N'_i32, 'A'_i32, 'A'_i32)),   // NOLINT
+               "L_LINESTATUS_INT"_(createIntSpanOf('O'_i32, 'O'_i32, 'F'_i32, 'F'_i32)),   // NOLINT
+               "L_QUANTITY"_(createIntSpanOf(17, 21, 8, 5)),                               // NOLINT
+               "L_EXTENDEDPRICE"_(createFloatSpanOf(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
+               "L_DISCOUNT"_(createFloatSpanOf(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
+               "L_TAX"_(createFloatSpanOf(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
+               "L_SHIPDATE"_(createIntSpanOf(8400, 9130, 9861, 9130)));
+
+  SECTION("Group 1") {
+    auto output = eval("Group"_(
+        lineitem.clone(CloneReason::FOR_TESTING), "By"_("L_ORDERKEY"_),
+        "As"_("count_result"_, "Count"_("L_ORDERKEY"_))));
+    CHECK(output == "Table"_("L_ORDERKEY"_("List"_(1, 2, 3)),
+                             "count_result"_("List"_(2, 1, 1)))); // NOLINT
+  }
+
+  SECTION("Group 2") {
+    auto output = eval("Group"_(
+        lineitem.clone(CloneReason::FOR_TESTING), "By"_("L_ORDERKEY"_),
+        "As"_("count_result"_, "Count"_("L_ORDERKEY"_), "sum_result"_, "Sum"_("L_ORDERKEY"_))));
+    CHECK(output == "Table"_("L_ORDERKEY"_("List"_(1, 2, 3)),
+                             "count_result"_("List"_(2, 1, 1)),
+                             "sum_result"_("List"_(2, 2, 3)))); // NOLINT
+  }
+
+  SECTION("Group 3") {
+    auto output = eval("Group"_(
+        lineitem.clone(CloneReason::FOR_TESTING), "By"_("L_ORDERKEY"_),
+        "As"_("count_result"_, "Count"_("L_ORDERKEY"_), "sum_result"_, "Sum"_("L_ORDERKEY"_),
+              "sum_quantity"_, "Sum"_("L_QUANTITY"_))));
+    CHECK(output == "Table"_("L_ORDERKEY"_("List"_(1, 2, 3)),
+                             "count_result"_("List"_(2, 1, 1)),
+                             "sum_result"_("List"_(2, 2, 3)),
+                             "sum_quantity"_("List"_(38, 8, 5)))); // NOLINT
+  }
+
+  SECTION("Group 4") {
+    auto output = eval("Group"_(
+        lineitem.clone(CloneReason::FOR_TESTING), "By"_("L_ORDERKEY"_),
+        "As"_("count_result"_, "Count"_("L_ORDERKEY"_), "sum_result"_, "Sum"_("L_ORDERKEY"_),
+              "sum_quantity"_, "Sum"_("L_QUANTITY"_), "min_discount"_, "Min"_("L_DISCOUNT"_))));
+    CHECK(output == "Table"_("L_ORDERKEY"_("List"_(1, 2, 3)),
+                             "count_result"_("List"_(2, 1, 1)),
+                             "sum_result"_("List"_(2, 2, 3)),
+                             "sum_quantity"_("List"_(38, 8, 5)),
+                             "min_discount"_("List"_(0.05, 0.06, 0.06)))); // NOLINT
+  }
+
+  SECTION("Group 5") {
+    auto output = eval("Group"_(
+        lineitem.clone(CloneReason::FOR_TESTING), "By"_("L_ORDERKEY"_),
+        "As"_("count_result"_, "Count"_("L_ORDERKEY"_), "sum_result"_, "Sum"_("L_ORDERKEY"_),
+              "sum_quantity"_, "Sum"_("L_QUANTITY"_), "min_discount"_, "Min"_("L_DISCOUNT"_),
+              "max_extended_price"_, "Max"_("L_EXTENDEDPRICE"_))));
+    CHECK(output == "Table"_("L_ORDERKEY"_("List"_(1, 2, 3)),
+                             "count_result"_("List"_(2, 1, 1)),
+                             "sum_result"_("List"_(2, 2, 3)),
+                             "sum_quantity"_("List"_(38, 8, 5)),
+                             "min_discount"_("List"_(0.05, 0.06, 0.06)),
+                             "max_extended_price"_("List"_(34850.16, 7712.48, 25284.00)))); // NOLINT
+  }
+
+  SECTION("Group 6") {
+    auto output = eval("Group"_(
+        lineitem.clone(CloneReason::FOR_TESTING), "By"_("L_RETURNFLAG_INT"_, "L_LINESTATUS_INT"_),
+        "As"_("count_result"_, "Count"_("L_ORDERKEY"_), "sum_result"_, "Sum"_("L_ORDERKEY"_),
+              "sum_quantity"_, "Sum"_("L_QUANTITY"_), "min_discount"_, "Min"_("L_DISCOUNT"_),
+              "max_extended_price"_, "Max"_("L_EXTENDEDPRICE"_))));
+    CHECK(output == "Table"_("L_RETURNFLAG_INT"_("List"_(65, 78)),
+                             "L_LINESTATUS_INT"_("List"_(70, 79)),
+                             "count_result"_("List"_(2, 2)),
+                             "sum_result"_("List"_(5, 2)),
+                             "sum_quantity"_("List"_(13, 38)),
+                             "min_discount"_("List"_(0.06, 0.05)),
+                             "max_extended_price"_("List"_(25284.00, 34850.16)))); // NOLINT
+  }
+
+  SECTION("Group 7") {
+    auto output = eval("Group"_(
+        lineitem.clone(CloneReason::FOR_TESTING),
+        "As"_("count_result"_, "Count"_("L_ORDERKEY"_), "sum_result"_, "Sum"_("L_ORDERKEY"_),
+              "sum_quantity"_, "Sum"_("L_QUANTITY"_), "min_discount"_, "Min"_("L_DISCOUNT"_),
+              "max_extended_price"_, "Max"_("L_EXTENDEDPRICE"_))));
+    CHECK(output == "Table"_("count_result"_("List"_(4)),
+                             "sum_result"_("List"_(7)),
+                             "sum_quantity"_("List"_(51)),
+                             "min_discount"_("List"_(0.05)),
+                             "max_extended_price"_("List"_(34850.16)))); // NOLINT
+  }
+
+  SECTION("Multi-span group 1") {
+    auto intTable = "Table"_("L_key"_(createTwoSpansInt(5,5)),
+                              "L_value"_(createTwoSpansInt(4,1))); // NOLINT
+    auto output = eval("Group"_(std::move(intTable),
+                                "By"_("L_key"_),
+                                "As"_("count_result"_, "Count"_("L_value"_),
+                                      "sum_result"_, "Sum"_("L_value"_),
+                                      "min_result"_, "Min"_("L_value"_),
+                                      "max_result"_, "Max"_("L_value"_))));
+
+    CHECK(output == "Table"_("L_key"_("List"_(5,6,7)),
+                             "count_result"_("List"_(2,2,2)),
+                             "sum_result"_("List"_(5,7,9)),
+                             "min_result"_("List"_(1,2,3)),
+                             "max_result"_("List"_(4,5,6)))); // NOLINT
   }
 }
 

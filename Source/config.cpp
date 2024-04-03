@@ -6,6 +6,7 @@ int32_t nonVectorizedDOP = 1;
 adaptive::Select selectImplementation = adaptive::Select::Adaptive;
 adaptive::PartitionOperators partitionImplementation =
     adaptive::PartitionOperators::RadixBitsAdaptiveParallel;
+adaptive::Group groupImplementation = adaptive::Group::Hash;
 uint32_t minTuplesPerThread = 100;
 
 // TODO - machine config, these should be determined and set during the build process

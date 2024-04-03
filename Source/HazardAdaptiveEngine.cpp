@@ -4,6 +4,7 @@
 #include "HazardAdaptiveEngine.hpp"
 #include "config.hpp"
 #include "engineInstanceState.hpp"
+#include "operators/group.hpp"
 #include "operators/partition.hpp"
 #include "operators/select.hpp"
 #include "utilities/memory.hpp"
@@ -31,6 +32,8 @@
 // #define DEBUG_MODE
 #define DEFER_TO_OTHER_ENGINE
 
+constexpr int MAX_AGGREGATION_ARGS = 5;
+
 using ExpressionBuilder = boss::utilities::ExtensibleExpressionBuilder<HAExpressionSystem>;
 static ExpressionBuilder operator""_(const char* name, size_t /*unused*/) {
   return ExpressionBuilder(name);
@@ -40,9 +43,11 @@ using boss::expressions::CloneReason;
 using BOSSExpressionSpanArguments = boss::DefaultExpressionSystem::ExpressionSpanArguments;
 using BOSSExpressionSpanArgument = boss::DefaultExpressionSystem::ExpressionSpanArgument;
 
+using adaptive::Aggregation;
 using adaptive::EngineInstanceState;
 using adaptive::SelectOperatorState;
 using adaptive::SelectOperatorStates;
+using adaptive::config::groupImplementation;
 using adaptive::config::nonVectorizedDOP;
 using adaptive::config::partitionImplementation;
 using adaptive::config::selectImplementation;
@@ -57,6 +62,75 @@ using namespace boss::algorithm;
 static EngineInstanceState& getEngineInstanceState() {
   thread_local static EngineInstanceState engineInstanceState;
   return engineInstanceState;
+}
+
+/******************************** AGGREGATION FUNCTIONS ********************************/
+
+template <typename T> using Aggregator = std::function<T(const T, const T, bool)>;
+
+template <typename T>
+Aggregator<T> minAggregator =
+    [](const T currentAggregate, const T numberToInclude, bool firstAggregation) -> T {
+  if(firstAggregation) {
+    return numberToInclude;
+  }
+  return std::min(currentAggregate, numberToInclude);
+};
+
+template <typename T>
+Aggregator<T> maxAggregator =
+    [](const T currentAggregate, const T numberToInclude, bool firstAggregation) -> T {
+  if(firstAggregation) {
+    return numberToInclude;
+  }
+  return std::max(currentAggregate, numberToInclude);
+};
+
+template <typename T>
+Aggregator<T> sumAggregator =
+    [](const T currentAggregate, const T numberToInclude, bool firstAggregation) -> T {
+  if(firstAggregation) {
+    return numberToInclude;
+  }
+  return currentAggregate + numberToInclude;
+};
+
+template <typename T>
+Aggregator<T> countAggregator =
+    [](const T currentAggregate, const T /*unused*/, bool firstAggregation) -> T {
+  if(firstAggregation) {
+    return 1;
+  }
+  return 1 + currentAggregate;
+};
+
+auto getAggregatorName = [](std::string_view name) -> adaptive::Aggregation {
+  if(name == "Min") {
+    return adaptive::Aggregation::Min;
+  } else if(name == "Max") {
+    return adaptive::Aggregation::Max;
+  } else if(name == "Sum") {
+    return adaptive::Aggregation::Sum;
+  } else if(name == "Count") {
+    return adaptive::Aggregation::Count;
+  } else {
+    throw std::runtime_error("Invalid aggregator function name");
+  }
+};
+
+template <typename T> auto getAggregatorFunction(const Aggregation aggregation) -> Aggregator<T> {
+  switch(aggregation) {
+  case Aggregation::Min:
+    return minAggregator<T>;
+  case Aggregation::Max:
+    return maxAggregator<T>;
+  case Aggregation::Sum:
+    return sumAggregator<T>;
+  case Aggregation::Count:
+    return countAggregator<T>;
+  default:
+    throw std::invalid_argument("Invalid aggregator specified.");
+  }
 }
 
 /** Pred function takes a relation in the form of ExpressionArguments, and an optional pointer to
@@ -432,6 +506,20 @@ public:
   }
 };
 
+template <typename T> concept LimitedNumericType = requires(T param) {
+  requires std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t> || std::is_same_v<T, double>;
+  requires !std::is_same_v<bool, std::remove_cv_t<T>>;
+  requires std::is_arithmetic_v<decltype(param + 1)>;
+  requires !std::is_pointer_v<T>;
+};
+
+template <typename T> concept LimitedIntegralType = requires(T param) {
+  requires std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t>;
+  requires !std::is_same_v<bool, std::remove_cv_t<T>>;
+  requires std::is_arithmetic_v<decltype(param + 1)>;
+  requires !std::is_pointer_v<T>;
+};
+
 template <typename T> concept NumericType = requires(T param) {
   requires std::is_integral_v<T> || std::is_floating_point_v<T>;
   requires !std::is_same_v<bool, std::remove_cv_t<T>>;
@@ -445,6 +533,57 @@ template <typename T> concept IntegralType = requires(T param) {
   requires std::is_arithmetic_v<decltype(param + 1)>;
   requires !std::is_pointer_v<T>;
 };
+
+static ComplexExpression constructOutputTable(std::vector<ExpressionSpanArguments>&& groupedColumns,
+                                              std::vector<Symbol>&& names) {
+  assert(groupedColumns.size() == names.size());
+  auto resultColumns = ExpressionArguments{};
+  for(size_t i = 0; i < groupedColumns.size(); ++i) {
+    auto dynamics = ExpressionArguments{};
+    dynamics.emplace_back(ComplexExpression("List"_, {}, {}, std::move(groupedColumns[i])));
+    resultColumns.emplace_back(ComplexExpression(std::move(names[i]), {}, std::move(dynamics), {}));
+  }
+  return ComplexExpression("Table"_, std::move(resultColumns));
+}
+
+// TODO - set cardinality
+template <typename K1, typename... Ts>
+static ComplexExpression
+typeColumnsAndGroup(size_t index, size_t numCols, int numKeys, std::vector<Symbol>&& names,
+                    ExpressionSpanArguments&& key1, ExpressionSpanArguments&& key2,
+                    std::vector<ExpressionSpanArguments>&& untypedAggCols,
+                    std::vector<Aggregation>&& aggNames, std::vector<Span<Ts>>&&... typedAggCols,
+                    Aggregator<Ts>... aggregators) {
+  if constexpr(sizeof...(Ts) <= MAX_AGGREGATION_ARGS) {
+    if(index >= numCols) {
+      auto groupedColumns = adaptive::group<K1, Ts...>(
+          groupImplementation, 100, numKeys, std::move(key1), std::move(key2),
+          std::move(typedAggCols)..., std::move(aggregators)...);
+      return constructOutputTable(std::move(groupedColumns), std::move(names));
+    }
+    return std::visit(boss::utilities::overload(
+                          [&](auto&) -> ComplexExpression {
+                            throw std::runtime_error("Unsupported aggregation column type");
+                          },
+                          [&]<LimitedNumericType T>(Span<T>&) {
+                            ExpressionSpanArguments untypedSpans = std::move(untypedAggCols[index]);
+                            std::vector<Span<T>> typedSpans;
+                            typedSpans.reserve(untypedSpans.size());
+                            for(auto& untypedSpan : untypedSpans) {
+                              typedSpans.push_back(std::get<Span<T>>(std::move(untypedSpan)));
+                            }
+                            Aggregator<T> aggregator = getAggregatorFunction<T>(aggNames[index]);
+                            return typeColumnsAndGroup<K1, Ts..., T>(
+                                index + 1, numCols, numKeys, std::move(names), std::move(key1),
+                                std::move(key2), std::move(untypedAggCols), std::move(aggNames),
+                                std::move(typedAggCols)..., std::move(typedSpans), aggregators...,
+                                aggregator);
+                          }),
+                      untypedAggCols[index].at(0));
+  } else {
+    throw std::runtime_error("too many args");
+  }
+}
 
 class OperatorMap : public std::unordered_map<boss::Symbol, StatelessOperator> {
 private:
@@ -771,6 +910,17 @@ private:
     }
     return {"Table"_, {}, std::move(args), {}};
   }
+
+  static const ExpressionSpanArguments& getColumnSpans(ExpressionArguments& columns,
+                                                       const Symbol& columnSymbol) {
+    for(auto& columnExpr : columns) {
+      auto& column = get<ComplexExpression>(columnExpr);
+      if(column.getHead().getName() == columnSymbol.getName()) {
+        return get<ComplexExpression>(column.getArguments().at(0)).getSpanArguments();
+      }
+    }
+    throw std::runtime_error("column name not in relation: " + columnSymbol.getName());
+  };
 
 public:
   OperatorMap() {
@@ -1123,17 +1273,6 @@ public:
         return constructTableWithEmptyColumns(std::move(leftRelationColumns));
       }
 
-      auto getColumnSpans = [](ExpressionArguments& columns,
-                               const Symbol& columnSymbol) -> const ExpressionSpanArguments& {
-        for(auto& columnExpr : columns) {
-          auto& column = get<ComplexExpression>(columnExpr);
-          if(column.getHead().getName() == columnSymbol.getName()) {
-            return get<ComplexExpression>(column.getArguments().at(0)).getSpanArguments();
-          }
-        }
-        throw std::runtime_error("column name not in relation: " + columnSymbol.getName());
-      };
-
       auto& leftKeySpans = getColumnSpans(leftRelationColumns, leftKeySymbol);
       auto& rightKeySpans = getColumnSpans(rightRelationColumns, rightKeySymbol);
 
@@ -1222,167 +1361,117 @@ public:
       return ComplexExpression("Join"_, {}, std::move(joinArgs), {});
     };
 
-#ifndef DEFER_TO_OTHER_ENGINE
-    // TODO: Group currently does not handle multiple spans
-    // TODO: Group currently only supports grouping on a single column (type long or double)
+    /** Currently only accepts grouping on 0-2 keys. If two keys, they must be the same type.
+     *  Currently hardcoded that the two keys will be int32_t but only use first 8 bits for value.
+     */
     (*this)["Group"_] = [](ComplexExpression&& inputExpr) -> Expression {
+      if(!holds_alternative<ComplexExpression>(*(inputExpr.getArguments().begin())) ||
+         get<ComplexExpression>(*(inputExpr.getArguments().begin())).getHead().getName() !=
+             "Table") {
+#ifdef DEBUG_MODE
+        std::cout << "Group input Table is invalid, Group left unevaluated..." << std::endl;
+#endif
+        return toBOSSExpression(std::move(inputExpr));
+      }
+
       ExpressionArguments args = std::move(inputExpr).getArguments();
       auto it = std::make_move_iterator(args.begin());
       auto relation = get<ComplexExpression>(std::move(*it++));
       auto columns = std::move(relation).getDynamicArguments();
-      auto resultColumns = ExpressionArguments{};
 
       auto byFlag = get<ComplexExpression>(args.at(1)).getHead().getName() == "By";
-      std::map<long, std::vector<size_t>> map;
-      if(byFlag) {
-        auto byExpr = get<ComplexExpression>(std::move(*it++));
-        auto groupingColumnSymbol = get<Symbol>(byExpr.getDynamicArguments().at(0));
-        auto groupingPred = createLambdaArgument(groupingColumnSymbol);
-        if(auto column = groupingPred(columns, nullptr)) {
-          ExpressionSpanArgument span;
-          std::visit(
-              [&](auto&& typedSpan) {
-                using Type = std::decay_t<decltype(typedSpan)>;
-                if constexpr(std::is_same_v<Type, Span<int32_t>> ||
-                             std::is_same_v<Type, Span<int64_t>> ||
-                             std::is_same_v<Type, Span<double>> ||
-                             std::is_same_v<Type, Span<int32_t const>> ||
-                             std::is_same_v<Type, Span<int64_t const>> ||
-                             std::is_same_v<Type, Span<double const>>) {
-                  using ElementType = typename Type::element_type;
-                  std::vector<std::remove_cv_t<ElementType>> uniqueList;
-                  while(true) {
-                    for(size_t i = 0; i < typedSpan.size(); ++i) {
-                      map[static_cast<long>(typedSpan[i])].push_back(i);
-                    }
-                    auto column = groupingPred(columns, nullptr);
-                    if(!column.has_value()) {
-                      break;
-                    }
-                    typedSpan = std::get<Span<ElementType>>(std::move(*column));
-                  }
-                  uniqueList.reserve(map.size());
-                  for(const auto& pair : map) {
-                    uniqueList.push_back(static_cast<ElementType>(pair.first));
-                  }
-                  span = Span<ElementType>(std::move(std::vector(uniqueList)));
-                } else {
-                  throw std::runtime_error("unsupported column type in group: " +
-                                           std::string(typeid(typename Type::element_type).name()));
-                }
-              },
-              std::move(*column));
-          ExpressionSpanArguments spans{};
-          spans.emplace_back(std::move(span));
-          auto dynamics = ExpressionArguments{};
-          dynamics.emplace_back(ComplexExpression("List"_, {}, {}, std::move(spans)));
-          resultColumns.emplace_back(
-              ComplexExpression(std::move(groupingColumnSymbol), {}, std::move(dynamics), {}));
-        } else {
-          throw std::runtime_error("couldn't access grouping column");
+      auto byArgs = byFlag ? get<ComplexExpression>(std::move(*it++)).getDynamicArguments()
+                           : ExpressionArguments{};
+      if(get<ComplexExpression>(args.at(1 + byFlag)).getHead().getName() != "As") {
+        throw std::runtime_error("Group must contain 'As' expression.");
+      }
+      size_t numKeys = byArgs.size();
+      assert(numKeys <= 2);
+
+      ExpressionArguments asArgs = get<ComplexExpression>(std::move(*it)).getArguments();
+      assert(asArgs.size() >= 2);
+      assert(asArgs.size() % 2 == 0);
+      size_t numAggregations = asArgs.size() / 2;
+      auto asIt = std::make_move_iterator(asArgs.begin());
+      size_t numColumns = numKeys + numAggregations;
+
+      std::vector<Symbol> outputColumnNames;
+      outputColumnNames.reserve(numColumns);
+      std::vector<ExpressionSpanArguments> aggregationColumns;
+      aggregationColumns.reserve(numAggregations);
+      std::vector<Aggregation> aggFuncs;
+      aggFuncs.reserve(numAggregations);
+
+      auto getColumnSpansCopy =
+          [&columns](const Symbol& columnSymbol) mutable -> ExpressionSpanArguments {
+        for(auto& columnExpr : columns) {
+          auto& column = get<ComplexExpression>(columnExpr);
+          if(column.getHead().getName() == columnSymbol.getName()) {
+            const ExpressionSpanArguments& spans =
+                get<ComplexExpression>(column.getDynamicArguments().at(0)).getSpanArguments();
+            ExpressionSpanArguments spansCopy;
+            std::transform(spans.begin(), spans.end(), std::back_inserter(spansCopy),
+                           [](auto const& span) {
+                             return std::visit(
+                                 [](auto const& typedSpan) -> ExpressionSpanArgument {
+                                   using SpanType = std::decay_t<decltype(typedSpan)>;
+                                   using T = std::remove_const_t<typename SpanType::element_type>;
+                                   if constexpr(std::is_same_v<T, bool>) {
+                                     return SpanType(typedSpan.begin(), typedSpan.size(), []() {});
+                                   } else {
+                                     auto* ptr = const_cast<T*>(typedSpan.begin()); // NOLINT
+                                     return Span<T>(ptr, typedSpan.size(), []() {});
+                                   }
+                                 },
+                                 span);
+                           });
+            return spansCopy;
+          }
         }
+        throw std::runtime_error("column name not in relation: " + columnSymbol.getName());
+      };
+
+      auto assignKey = [&](size_t keyNum) -> ExpressionSpanArguments {
+        if(numKeys >= keyNum) {
+          auto columnSymbol = get<Symbol>(byArgs.at(keyNum - 1));
+          ExpressionSpanArguments key = getColumnSpansCopy(columnSymbol);
+          outputColumnNames.push_back(std::move(columnSymbol));
+          return key;
+        }
+        return ExpressionSpanArguments{};
+      };
+
+      ExpressionSpanArguments dummy;
+      dummy.emplace_back(Span<int32_t>());
+      const ExpressionSpanArguments& key1Ref =
+          numKeys >= 1 ? getColumnSpans(columns, get<Symbol>(byArgs.at(0))) : dummy;
+
+      ExpressionSpanArguments key1 = assignKey(1);
+      ExpressionSpanArguments key2 = assignKey(2);
+
+      for(size_t i = 0; i < numAggregations; ++i) {
+        auto specifiedName = get<Symbol>(std::move(*asIt++));
+        auto aggregationExpr = get<ComplexExpression>(std::move(*asIt++));
+        auto aggColumnSymbol = get<Symbol>(aggregationExpr.getDynamicArguments().at(0));
+        aggFuncs.push_back(getAggregatorName(aggregationExpr.getHead().getName()));
+        aggregationColumns.emplace_back(getColumnSpansCopy(aggColumnSymbol));
+        outputColumnNames.push_back(std::move(specifiedName));
       }
 
-      auto asFlag = get<ComplexExpression>(args.at(1 + byFlag)).getHead().getName() == "As";
-      if(asFlag) {
-        auto asExpr = get<ComplexExpression>(std::move(*it));
-        args = std::move(asExpr).getArguments();
-        it = std::make_move_iterator(args.begin());
-      }
-
-      for(auto aggFuncIt = it; aggFuncIt != std::make_move_iterator(args.end()); ++aggFuncIt) {
-        std::string specifiedName;
-        if(asFlag) {
-          auto name = get<Symbol>(std::move(*aggFuncIt++));
-          specifiedName = name.getName();
-        }
-        auto aggFunc = get<ComplexExpression>(std::move(*aggFuncIt));
-        assert(aggFunc.getDynamicArguments().size() == 1);
-        auto columnSymbol = get<Symbol>(aggFunc.getDynamicArguments().at(0));
-        auto aggFuncName = aggFunc.getHead().getName();
-        auto pred = createLambdaArgument(columnSymbol);
-        if(auto column = pred(columns, nullptr)) {
-          ExpressionSpanArgument span;
-          std::visit(
-              [&](auto&& typedSpan) {
-                using Type = std::decay_t<decltype(typedSpan)>;
-                if constexpr(std::is_same_v<Type, Span<int32_t>> ||
-                             std::is_same_v<Type, Span<int64_t>> ||
-                             std::is_same_v<Type, Span<double>> ||
-                             std::is_same_v<Type, Span<int32_t const>> ||
-                             std::is_same_v<Type, Span<int64_t const>> ||
-                             std::is_same_v<Type, Span<double const>>) {
-                  using ElementType = typename Type::element_type;
-                  if(aggFuncName == "Sum") {
-                    // TODO: Group "Sum By" currently only works with single span columns
-                    if(byFlag) {
-                      std::vector<std::remove_cv_t<ElementType>> results;
-                      results.reserve(map.size());
-                      for(auto const& pair : map) {
-                        std::remove_cv_t<ElementType> sum = 0;
-                        for(auto const& index : pair.second) {
-                          sum += typedSpan[index];
-                        }
-                        results.push_back(sum);
-                      }
-                      span = Span<ElementType>(std::move(std::vector(results)));
-                    } else {
-                      std::remove_cv_t<ElementType> sum = 0;
-                      while(true) {
-                        sum += std::accumulate(typedSpan.begin(), typedSpan.end(),
-                                               static_cast<ElementType>(0));
-                        auto column = pred(columns, nullptr);
-                        if(!column.has_value()) {
-                          break;
-                        }
-                        typedSpan = std::get<Span<ElementType>>(std::move(*column));
-                      }
-                      span = Span<ElementType>({sum});
-                    }
-                  } else if(aggFuncName == "Count") {
-                    if(byFlag) {
-                      std::vector<int32_t> results;
-                      results.reserve(map.size());
-                      for(auto const& pair : map) {
-                        results.push_back(static_cast<int32_t>(pair.second.size()));
-                      }
-                      span = Span<int32_t>(std::vector(results));
-                    } else {
-                      int32_t count = 0;
-                      while(true) {
-                        count += static_cast<int32_t>(typedSpan.size());
-                        auto column = pred(columns, nullptr);
-                        if(!column.has_value()) {
-                          break;
-                        }
-                        typedSpan = std::get<Span<ElementType>>(std::move(*column));
-                      }
-                      span = Span<int32_t>({count});
-                    }
-                  } else {
-                    throw std::runtime_error("unsupported aggregate function in group");
-                  }
-                } else {
-                  throw std::runtime_error("unsupported column type in group: " +
-                                           std::string(typeid(typename Type::element_type).name()));
-                }
+      return std::visit(
+          boss::utilities::overload(
+              [&](auto&) -> ComplexExpression {
+                throw std::runtime_error("Key has unsupported column type");
               },
-              std::move(*column));
-          ExpressionSpanArguments spans{};
-          spans.emplace_back(std::move(span));
-          auto dynamics = ExpressionArguments{};
-          dynamics.emplace_back(ComplexExpression("List"_, {}, {}, std::move(spans)));
-          auto name = asFlag ? Symbol(specifiedName) : columnSymbol;
-          resultColumns.emplace_back(
-              ComplexExpression(std::move(name), {}, std::move(dynamics), {}));
-        } else {
-          throw std::runtime_error("couldn't access aggregate column");
-        }
-      }
-      return ComplexExpression("Table"_, std::move(resultColumns));
+              [&]<LimitedIntegralType K1>(const Span<K1>&) mutable -> ComplexExpression {
+                return typeColumnsAndGroup<K1>(0, numAggregations, static_cast<int>(numKeys),
+                                               std::move(outputColumnNames), std::move(key1),
+                                               std::move(key2), std::move(aggregationColumns),
+                                               std::move(aggFuncs));
+              }),
+          key1Ref.at(0));
     };
-#endif
-  }
+  };
 };
 
 static Expression evaluateInternal(Expression&& e) {

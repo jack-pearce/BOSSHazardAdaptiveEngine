@@ -14,10 +14,6 @@ namespace adaptive {
 
 std::string getPartitionName(PartitionOperators partitionImplementation);
 
-template <typename T>
-std::vector<int> partition(PartitionOperators partitionImplementation, int n, T* keys,
-                           int radixBits = -1);
-
 struct PartitionedJoinArguments {
   std::vector<ExpressionSpanArguments> tableOnePartitionsOfKeySpans;
   std::vector<ExpressionSpanArguments> tableOnePartitionsOfIndexSpans;
