@@ -547,7 +547,7 @@ static ComplexExpression constructOutputTable(std::vector<ExpressionSpanArgument
 }
 
 // TODO - set cardinality
-template <typename K1, typename... Ts>
+template <typename K, typename... Ts>
 static ComplexExpression
 typeColumnsAndGroup(size_t index, size_t numCols, int numKeys, std::vector<Symbol>&& names,
                     ExpressionSpanArguments&& key1, ExpressionSpanArguments&& key2,
@@ -556,7 +556,7 @@ typeColumnsAndGroup(size_t index, size_t numCols, int numKeys, std::vector<Symbo
                     Aggregator<Ts>... aggregators) {
   if constexpr(sizeof...(Ts) <= MAX_AGGREGATION_ARGS) {
     if(index >= numCols) {
-      auto groupedColumns = adaptive::group<K1, Ts...>(
+      auto groupedColumns = adaptive::group<K, Ts...>(
           groupImplementation, 100, numKeys, std::move(key1), std::move(key2),
           std::move(typedAggCols)..., std::move(aggregators)...);
       return constructOutputTable(std::move(groupedColumns), std::move(names));
@@ -573,7 +573,7 @@ typeColumnsAndGroup(size_t index, size_t numCols, int numKeys, std::vector<Symbo
                               typedSpans.push_back(std::get<Span<T>>(std::move(untypedSpan)));
                             }
                             Aggregator<T> aggregator = getAggregatorFunction<T>(aggNames[index]);
-                            return typeColumnsAndGroup<K1, Ts..., T>(
+                            return typeColumnsAndGroup<K, Ts..., T>(
                                 index + 1, numCols, numKeys, std::move(names), std::move(key1),
                                 std::move(key2), std::move(untypedAggCols), std::move(aggNames),
                                 std::move(typedAggCols)..., std::move(typedSpans), aggregators...,
@@ -1463,8 +1463,8 @@ public:
               [&](auto&) -> ComplexExpression {
                 throw std::runtime_error("Key has unsupported column type");
               },
-              [&]<LimitedIntegralType K1>(const Span<K1>&) mutable -> ComplexExpression {
-                return typeColumnsAndGroup<K1>(0, numAggregations, static_cast<int>(numKeys),
+              [&]<LimitedIntegralType K>(const Span<K>&) mutable -> ComplexExpression {
+                return typeColumnsAndGroup<K>(0, numAggregations, static_cast<int>(numKeys),
                                                std::move(outputColumnNames), std::move(key1),
                                                std::move(key2), std::move(aggregationColumns),
                                                std::move(aggFuncs));

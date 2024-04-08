@@ -3174,151 +3174,167 @@ TEST_CASE("Group tests", "[hazard-adaptive-engine]") {
   }
 }
 
-#if 0
- TEST_CASE("Select multiple predicates with OR", "[hazard-adaptive-engine]") {
-   auto engine = boss::engines::BootstrapEngine();
-   REQUIRE(!librariesToTest.empty());
-   auto eval = [&engine](boss::Expression&& expression) mutable {
-     return engine.evaluate("EvaluateInEngines"_("List"_(GENERATE(from_range(librariesToTest))),
-                                                 std::move(expression)));
-   };
+TEST_CASE("Group tests (msb = 14, single key)", "[hazard-adaptive-engine]") {
+  auto engine = boss::engines::BootstrapEngine();
+  REQUIRE(!librariesToTest.empty());
+  auto eval = [&engine](boss::Expression&& expression) mutable {
+    return engine.evaluate("EvaluateInEngines"_("List"_(GENERATE(from_range(librariesToTest))),
+                                                std::move(expression)));
+  };
 
-   SECTION("Selection multiple columns 1") {
-     auto intTable =
-         "Table"_("Value1"_("List"_(5, 3, 1, 4, 1)), "Value2"_("List"_(1, 2, 3, 4, 5))); // NOLINT
-     auto result = eval("Select"_(
-         std::move(intTable), "Where"_("Or"_("Greater"_("Value2"_, 3), "Greater"_(3,
-         "Value2"_)))));
-     CHECK(result == "Table"_("Value1"_("List"_(5, 3, 4, 1)), "Value2"_("List"_(1, 2, 4, 5))));
-   }
- }
+  auto lineitem =
+      "Table"_("L_ORDERKEY"_(createIntSpanOf(15423, 15423, 456, 56)),                       // NOLINT
+               "L_PARTKEY"_(createIntSpanOf(1, 2, 3, 4)),                                  // NOLINT
+               "L_SUPPKEY"_(createIntSpanOf(1, 2, 3, 4)),                                  // NOLINT
+               "L_RETURNFLAG"_(createStringSpanOf("N", "N", "A", "A")),                       // NOLINT
+               "L_LINESTATUS"_(createStringSpanOf("O", "O", "F", "F")),                       // NOLINT
+               "L_RETURNFLAG_INT"_(createIntSpanOf('N'_i32, 'N'_i32, 'A'_i32, 'A'_i32)),   // NOLINT
+               "L_LINESTATUS_INT"_(createIntSpanOf('O'_i32, 'O'_i32, 'F'_i32, 'F'_i32)),   // NOLINT
+               "L_QUANTITY"_(createIntSpanOf(17, 21, 8, 5)),                               // NOLINT
+               "L_EXTENDEDPRICE"_(createFloatSpanOf(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
+               "L_DISCOUNT"_(createFloatSpanOf(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
+               "L_TAX"_(createFloatSpanOf(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
+               "L_SHIPDATE"_(createIntSpanOf(8400, 9130, 9861, 9130)));
 
- To complete - Grouping on multiple columns
-
-  SECTION("Q1 (No Order, No Strings)") {
-    auto output = eval("Project"_(
-        "Group"_(
-            "Project"_(
-                "Project"_(
-                    "Select"_(
-                        "Project"_(lineitem.clone(CloneReason::FOR_TESTING),
-                                   "As"_("L_RETURNFLAG_INT"_, "L_RETURNFLAG_INT"_,
-                                         "L_LINESTATUS_INT"_, "L_LINESTATUS_INT"_,
-                                         "L_QUANTITY"_, "L_QUANTITY"_, "L_DISCOUNT"_,
-                                         "L_DISCOUNT"_, "L_SHIPDATE"_, "L_SHIPDATE"_,
-                                         "L_EXTENDEDPRICE"_, "L_EXTENDEDPRICE"_, "L_TAX"_,
-                                         "L_TAX"_)),
-                        "Where"_("Greater"_("DateObject"_("1998-08-31"), "L_SHIPDATE"_))),
-                    "As"_("L_RETURNFLAG_INT"_, "L_RETURNFLAG_INT"_, "L_LINESTATUS_INT"_,
-                          "L_LINESTATUS_INT"_, "L_QUANTITY"_, "L_QUANTITY"_, "L_EXTENDEDPRICE"_,
-                          "L_EXTENDEDPRICE"_, "calc1"_, "Minus"_(1.0, "L_DISCOUNT"_), "calc2"_,
-                          "Plus"_("L_TAX"_, 1.0), "L_DISCOUNT"_, "L_DISCOUNT"_)),
-                "As"_("L_RETURNFLAG_INT"_, "L_RETURNFLAG_INT"_, "L_LINESTATUS_INT"_,
-                      "L_LINESTATUS_INT"_, "L_QUANTITY"_, "L_QUANTITY"_, "L_EXTENDEDPRICE"_,
-                      "L_EXTENDEDPRICE"_, "disc_price"_, "Times"_("L_EXTENDEDPRICE"_, "calc1"_),
-                      "charge"_, "Times"_("L_EXTENDEDPRICE"_, "calc1"_, "calc2"_),
-                      "L_DISCOUNT"_, "L_DISCOUNT"_)),
-            "By"_("L_RETURNFLAG_INT"_, "L_LINESTATUS_INT"_),
-            "As"_("SUM_QTY"_, "Sum"_("L_QUANTITY"_), "SUM_BASE_PRICE"_,
-            "Sum"_("L_EXTENDEDPRICE"_),
-                  "SUM_DISC_PRICE"_, "Sum"_("DISC_PRICE"_), "SUM_CHARGES"_,
-                  "Sum"_("Times"_("DISC_PRICE"_, "calc"_)), "SUM_DISC"_, "Sum"_("L_DISCOUNT"_),
-                  "COUNT_ORDER"_, "Count"_)),
-        "As"_("L_RETURNFLAG_INT"_, "L_RETURNFLAG_INT"_, "L_LINESTATUS_INT"_,
-        "L_LINESTATUS_INT"_,
-              "SUM_QTY"_, "SUM_QTY"_, "SUM_BASE_PRICE"_, "SUM_BASE_PRICE"_, "SUM_DISC_PRICE"_,
-              "SUM_DISC_PRICE"_, "SUM_CHARGES"_, "SUM_CHARGES"_, "AVG_QTY"_,
-              "Divide"_("SUM_QTY"_, "COUNT_ORDER"_), "AVG_PRICE"_,
-              "Divide"_("SUM_BASE_PRICE"_, "COUNT_ORDER"_), "AVG_DISC"_,
-              "Divide"_("SUM_DISC"_, "COUNT_ORDER"_), "COUNT_ORDER"_, "COUNT_ORDER"_)));
-    CHECK(output ==
-          "Table"_("L_RETURNFLAG_INT"_("List"_('N'_i64, 'A'_i64)),                      //
-          NOLINT
-                   "L_LINESTATUS_INT"_("List"_('O'_i64, 'F'_i64)),                      //
-                   NOLINT "SUM_QTY"_("List"_(17 + 21, 8 + 5)), // NOLINT
-                   "SUM_BASE_PRICE"_("List"_(17954.55 + 34850.16, 7712.48 + 25284.00)), //
-                   NOLINT "SUM_DISC_PRICE"_(
-                       "List"_(17954.55 * (1.0 - 0.10) + 34850.16 * (1.0 - 0.05),       //
-                       NOLINT
-                               7712.48 * (1.0 - 0.06) + 25284.00 * (1.0 - 0.06))),      //
-                               NOLINT
-                   "SUM_CHARGES"_("List"_(17954.55 * (1.0 - 0.10) * (0.02 + 1.0) +      //
-                   NOLINT
-                                              34850.16 * (1.0 - 0.05) * (0.06 + 1.0),   //
-                                              NOLINT
-                                          7712.48 * (1.0 - 0.06) * (0.02 + 1.0) +       //
-                                          NOLINT
-                                              25284.00 * (1.0 - 0.06) * (0.06 + 1.0))), //
-                                              NOLINT
-                   "AVG_PRICE"_("List"_((17954.55 + 34850.16) / 2,                      //
-                   NOLINT
-                                        (7712.48 + 25284.00) / 2)),                     //
-                                        NOLINT
-                   "AVG_DISC"_("List"_((0.10 + 0.05) / 2, (0.06 + 0.06) / 2)),          //
-                   NOLINT "COUNT_ORDER"_("List"_(2, 2)))); // NOLINT
+  SECTION("Group - single span") {
+    auto output = eval("Group"_(
+        lineitem.clone(CloneReason::FOR_TESTING), "By"_("L_ORDERKEY"_),
+        "As"_("count_result"_, "Count"_("L_ORDERKEY"_), "sum_result"_, "Sum"_("L_ORDERKEY"_),
+              "sum_quantity"_, "Sum"_("L_QUANTITY"_), "min_discount"_, "Min"_("L_DISCOUNT"_),
+              "max_extended_price"_, "Max"_("L_EXTENDEDPRICE"_))));
+    CHECK(output == "Table"_("L_ORDERKEY"_("List"_(56, 456, 15423)),
+                             "count_result"_("List"_(1, 1, 2)),
+                             "sum_result"_("List"_(56, 456, 30846)),
+                             "sum_quantity"_("List"_(5, 8, 38)),
+                             "min_discount"_("List"_(0.06, 0.06, 0.05)),
+                             "max_extended_price"_("List"_(25284.00, 7712.48, 34850.16)))); // NOLINT
   }
 
-  SECTION("Q1 (No Order)") {
-    auto output = eval("Project"_(
-        "Group"_(
-            "Project"_(
-                "Project"_(
-                    "Select"_("Project"_(lineitem.clone(CloneReason::FOR_TESTING),
-                                         "As"_("L_RETURNFLAG"_, "L_RETURNFLAG"_,
-                                         "L_LINESTATUS"_,
-                                               "L_LINESTATUS"_, "L_QUANTITY"_, "L_QUANTITY"_,
-                                               "L_DISCOUNT"_, "L_DISCOUNT"_, "L_SHIPDATE"_,
-                                               "L_SHIPDATE"_, "L_EXTENDEDPRICE"_,
-                                               "L_EXTENDEDPRICE"_, "L_TAX"_, "L_TAX"_)),
-                              "Where"_("Greater"_("DateObject"_("1998-08-31"), "L_SHIPDATE"_))),
-                    "As"_("L_RETURNFLAG"_, "L_RETURNFLAG"_, "L_LINESTATUS"_, "L_LINESTATUS"_,
-                          "L_QUANTITY"_, "L_QUANTITY"_, "L_EXTENDEDPRICE"_, "L_EXTENDEDPRICE"_,
-                          "calc1"_, "Minus"_(1.0, "L_DISCOUNT"_), "calc2"_,
-                          "Plus"_("L_TAX"_, 1.0), "L_DISCOUNT"_, "L_DISCOUNT"_)),
-                "As"_("L_RETURNFLAG"_, "L_RETURNFLAG"_, "L_LINESTATUS"_, "L_LINESTATUS"_,
-                      "L_QUANTITY"_, "L_QUANTITY"_, "L_EXTENDEDPRICE"_, "L_EXTENDEDPRICE"_,
-                      "disc_price"_, "Times"_("L_EXTENDEDPRICE"_, "calc1"_), "charge"_,
-                      "Times"_("L_EXTENDEDPRICE"_, "calc1"_, "calc2"_), "L_DISCOUNT"_,
-                      "L_DISCOUNT"_)),
-            "By"_("L_RETURNFLAG"_, "L_LINESTATUS"_),
-            "As"_("SUM_QTY"_, "Sum"_("L_QUANTITY"_), "SUM_BASE_PRICE"_,
-            "Sum"_("L_EXTENDEDPRICE"_),
-                  "SUM_DISC_PRICE"_, "Sum"_("DISC_PRICE"_), "SUM_CHARGES"_,
-                  "Sum"_("Times"_("DISC_PRICE"_, "calc"_)), "SUM_DISC"_, "Sum"_("L_DISCOUNT"_),
-                  "COUNT_ORDER"_, "Count"_)),
-        "As"_("L_RETURNFLAG"_, "L_RETURNFLAG"_, "L_LINESTATUS"_, "L_LINESTATUS"_, "SUM_QTY"_,
-              "SUM_QTY"_, "SUM_BASE_PRICE"_, "SUM_BASE_PRICE"_, "SUM_DISC_PRICE"_,
-              "SUM_DISC_PRICE"_, "SUM_CHARGES"_, "SUM_CHARGES"_, "AVG_QTY"_,
-              "Divide"_("SUM_QTY"_, "COUNT_ORDER"_), "AVG_PRICE"_,
-              "Divide"_("SUM_BASE_PRICE"_, "COUNT_ORDER"_), "AVG_DISC"_,
-              "Divide"_("SUM_DISC"_, "COUNT_ORDER"_), "COUNT_ORDER"_, "COUNT_ORDER"_)));
-    CHECK(output ==
-          "Table"_("L_RETURNFLAG"_("List"_("N", "A")),                                  //
-          NOLINT
-                   "L_LINESTATUS"_("List"_("O", "F")),                                  //
-                   NOLINT "SUM_QTY"_("List"_(17 + 21, 8 + 5)), // NOLINT
-                   "SUM_BASE_PRICE"_("List"_(17954.55 + 34850.16, 7712.48 + 25284.00)), //
-                   NOLINT "SUM_DISC_PRICE"_(
-                       "List"_(17954.55 * (1.0 - 0.10) + 34850.16 * (1.0 - 0.05),       //
-                       NOLINT
-                               7712.48 * (1.0 - 0.06) + 25284.00 * (1.0 - 0.06))),      //
-                               NOLINT
-                   "SUM_CHARGES"_("List"_(17954.55 * (1.0 - 0.10) * (0.02 + 1.0) +      //
-                   NOLINT
-                                              34850.16 * (1.0 - 0.05) * (0.06 + 1.0),   //
-                                              NOLINT
-                                          7712.48 * (1.0 - 0.06) * (0.02 + 1.0) +       //
-                                          NOLINT
-                                              25284.00 * (1.0 - 0.06) * (0.06 + 1.0))), //
-                                              NOLINT
-                   "AVG_PRICE"_("List"_((17954.55 + 34850.16) / 2,                      //
-                   NOLINT
-                                        (7712.48 + 25284.00) / 2)),                     //
-                                        NOLINT
-                   "AVG_DISC"_("List"_((0.10 + 0.05) / 2, (0.06 + 0.06) / 2)),          //
-                   NOLINT "COUNT_ORDER"_("List"_(2, 2)))); // NOLINT
+  SECTION("Group - multi-span") {
+    auto intTable = "Table"_("L_key"_(createTwoSpansInt(15423,15423)),
+                             "L_value"_(createTwoSpansInt(4,1))); // NOLINT
+    auto output = eval("Group"_(std::move(intTable),
+                                "By"_("L_key"_),
+                                "As"_("count_result"_, "Count"_("L_value"_),
+                                      "sum_result"_, "Sum"_("L_value"_),
+                                      "min_result"_, "Min"_("L_value"_),
+                                      "max_result"_, "Max"_("L_value"_))));
+
+    CHECK(output == "Table"_("L_key"_("List"_(15423,15424,15425)),
+                             "count_result"_("List"_(2,2,2)),
+                             "sum_result"_("List"_(5,7,9)),
+                             "min_result"_("List"_(1,2,3)),
+                             "max_result"_("List"_(4,5,6)))); // NOLINT
   }
-#endif
+}
+
+TEST_CASE("Group tests (msb = 22, single key)", "[hazard-adaptive-engine]") {
+  auto engine = boss::engines::BootstrapEngine();
+  REQUIRE(!librariesToTest.empty());
+  auto eval = [&engine](boss::Expression&& expression) mutable {
+    return engine.evaluate("EvaluateInEngines"_("List"_(GENERATE(from_range(librariesToTest))),
+                                                std::move(expression)));
+  };
+
+  auto lineitem =
+      "Table"_("L_ORDERKEY"_(createIntSpanOf(4194004, 4194004, 456, 56)),                       // NOLINT
+               "L_PARTKEY"_(createIntSpanOf(1, 2, 3, 4)),                                  // NOLINT
+               "L_SUPPKEY"_(createIntSpanOf(1, 2, 3, 4)),                                  // NOLINT
+               "L_RETURNFLAG"_(createStringSpanOf("N", "N", "A", "A")),                       // NOLINT
+               "L_LINESTATUS"_(createStringSpanOf("O", "O", "F", "F")),                       // NOLINT
+               "L_RETURNFLAG_INT"_(createIntSpanOf('N'_i32, 'N'_i32, 'A'_i32, 'A'_i32)),   // NOLINT
+               "L_LINESTATUS_INT"_(createIntSpanOf('O'_i32, 'O'_i32, 'F'_i32, 'F'_i32)),   // NOLINT
+               "L_QUANTITY"_(createIntSpanOf(17, 21, 8, 5)),                               // NOLINT
+               "L_EXTENDEDPRICE"_(createFloatSpanOf(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
+               "L_DISCOUNT"_(createFloatSpanOf(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
+               "L_TAX"_(createFloatSpanOf(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
+               "L_SHIPDATE"_(createIntSpanOf(8400, 9130, 9861, 9130)));
+
+  SECTION("Group - single span") {
+    auto output = eval("Group"_(
+        lineitem.clone(CloneReason::FOR_TESTING), "By"_("L_ORDERKEY"_),
+        "As"_("count_result"_, "Count"_("L_ORDERKEY"_), "sum_result"_, "Sum"_("L_ORDERKEY"_),
+              "sum_quantity"_, "Sum"_("L_QUANTITY"_), "min_discount"_, "Min"_("L_DISCOUNT"_),
+              "max_extended_price"_, "Max"_("L_EXTENDEDPRICE"_))));
+    CHECK(output == "Table"_("L_ORDERKEY"_("List"_(56, 456, 4194004)),
+                             "count_result"_("List"_(1, 1, 2)),
+                             "sum_result"_("List"_(56, 456, 8388008)),
+                             "sum_quantity"_("List"_(5, 8, 38)),
+                             "min_discount"_("List"_(0.06, 0.06, 0.05)),
+                             "max_extended_price"_("List"_(25284.00, 7712.48, 34850.16)))); // NOLINT
+  }
+
+  SECTION("Group - multi-span") {
+    auto intTable = "Table"_("L_key"_(createTwoSpansInt(4194004,4194004)),
+                             "L_value"_(createTwoSpansInt(4,1))); // NOLINT
+    auto output = eval("Group"_(std::move(intTable),
+                                "By"_("L_key"_),
+                                "As"_("count_result"_, "Count"_("L_value"_),
+                                      "sum_result"_, "Sum"_("L_value"_),
+                                      "min_result"_, "Min"_("L_value"_),
+                                      "max_result"_, "Max"_("L_value"_))));
+
+    CHECK(output == "Table"_("L_key"_("List"_(4194004,4194005,4194006)),
+                             "count_result"_("List"_(2,2,2)),
+                             "sum_result"_("List"_(5,7,9)),
+                             "min_result"_("List"_(1,2,3)),
+                             "max_result"_("List"_(4,5,6)))); // NOLINT
+  }
+}
+
+TEST_CASE("Group tests (msb = 30, single key)", "[hazard-adaptive-engine]") {
+  auto engine = boss::engines::BootstrapEngine();
+  REQUIRE(!librariesToTest.empty());
+  auto eval = [&engine](boss::Expression&& expression) mutable {
+    return engine.evaluate("EvaluateInEngines"_("List"_(GENERATE(from_range(librariesToTest))),
+                                                std::move(expression)));
+  };
+
+  auto lineitem =
+      "Table"_("L_ORDERKEY"_(createIntSpanOf(1073741124, 1073741124, 456, 56)),                       // NOLINT
+               "L_PARTKEY"_(createIntSpanOf(1, 2, 3, 4)),                                  // NOLINT
+               "L_SUPPKEY"_(createIntSpanOf(1, 2, 3, 4)),                                  // NOLINT
+               "L_RETURNFLAG"_(createStringSpanOf("N", "N", "A", "A")),                       // NOLINT
+               "L_LINESTATUS"_(createStringSpanOf("O", "O", "F", "F")),                       // NOLINT
+               "L_RETURNFLAG_INT"_(createIntSpanOf('N'_i32, 'N'_i32, 'A'_i32, 'A'_i32)),   // NOLINT
+               "L_LINESTATUS_INT"_(createIntSpanOf('O'_i32, 'O'_i32, 'F'_i32, 'F'_i32)),   // NOLINT
+               "L_QUANTITY"_(createIntSpanOf(17, 21, 8, 5)),                               // NOLINT
+               "L_EXTENDEDPRICE"_(createFloatSpanOf(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
+               "L_DISCOUNT"_(createFloatSpanOf(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
+               "L_TAX"_(createFloatSpanOf(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
+               "L_SHIPDATE"_(createIntSpanOf(8400, 9130, 9861, 9130)));
+
+  SECTION("Group - single span") {
+    auto output = eval("Group"_(
+        lineitem.clone(CloneReason::FOR_TESTING), "By"_("L_ORDERKEY"_),
+        "As"_("count_result"_, "Count"_("L_ORDERKEY"_), "sum_result"_, "Sum"_("L_ORDERKEY"_),
+              "sum_quantity"_, "Sum"_("L_QUANTITY"_), "min_discount"_, "Min"_("L_DISCOUNT"_),
+              "max_extended_price"_, "Max"_("L_EXTENDEDPRICE"_))));
+    CHECK(output == "Table"_("L_ORDERKEY"_("List"_(56, 456, 1073741124)),
+                             "count_result"_("List"_(1, 1, 2)),
+                             "sum_result"_("List"_(56, 456, 2147482248)),
+                             "sum_quantity"_("List"_(5, 8, 38)),
+                             "min_discount"_("List"_(0.06, 0.06, 0.05)),
+                             "max_extended_price"_("List"_(25284.00, 7712.48, 34850.16)))); // NOLINT
+  }
+
+  SECTION("Group - multi-span") {
+    auto intTable = "Table"_("L_key"_(createTwoSpansInt(1073741124,1073741124)),
+                             "L_value"_(createTwoSpansInt(4,1))); // NOLINT
+    auto output = eval("Group"_(std::move(intTable),
+                                "By"_("L_key"_),
+                                "As"_("count_result"_, "Count"_("L_value"_),
+                                      "sum_result"_, "Sum"_("L_value"_),
+                                      "min_result"_, "Min"_("L_value"_),
+                                      "max_result"_, "Max"_("L_value"_))));
+
+    CHECK(output == "Table"_("L_key"_("List"_(1073741124,1073741125,1073741126)),
+                             "count_result"_("List"_(2,2,2)),
+                             "sum_result"_("List"_(5,7,9)),
+                             "min_result"_("List"_(1,2,3)),
+                             "max_result"_("List"_(4,5,6)))); // NOLINT
+  }
+}
 
 int main(int argc, char* argv[]) {
   Catch::Session session;
