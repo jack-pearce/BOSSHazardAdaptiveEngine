@@ -2,22 +2,96 @@
 #define BOSSHAZARDADAPTIVEENGINE_GROUPIMPLEMENTATION_HPP
 
 #include <algorithm>
+#include <cstdlib>
 #include <functional>
 #include <stdexcept>
 
 #include "hash_map/robin_map.h"
 #include "tsl/robin_map.h"
 
+#define DEBUG
+
 namespace adaptive {
 
 constexpr int BITS_PER_GROUPBY_RADIX_PASS = 8;
+constexpr int DEFAULT_GROUPBY_RESULT_CARDINALITY = 100;
 
 template <typename T> using Aggregator = std::function<T(const T, const T, bool)>;
 
-/****************************** FOUNDATIONAL ALGORITHMS ********************************/
+/********************************** UTILITY FUNCTIONS **********************************/
 
-// TODO - move this file into a .cpp and use explicit instantiation?
-// https://indii.org/blog/revisited-combinatorial-instantiation-of-templates-with-std-variant/
+inline int getGroupResultCardinality() {
+  int cardinality = DEFAULT_GROUPBY_RESULT_CARDINALITY;
+  char* cardinalityStr = std::getenv("GROUP_RESULT_CARDINALITY");
+  if(cardinalityStr != nullptr) {
+    cardinality = std::atoi(cardinalityStr);
+#ifdef DEBUG
+    std::cout << "Read 'GROUP' result cardinality environment variable value of: " << cardinality
+              << std::endl;
+#endif
+    return cardinality;
+  }
+#ifdef DEBUG
+  std::cout << "'GROUP' result cardinality environment variable not set, using default value: "
+            << cardinality << std::endl;
+#endif
+  return cardinality;
+}
+
+template <typename... As>
+std::vector<ExpressionSpanArguments> groupNoKeys(std::vector<Span<As>>&&... typedAggCols,
+                                                 Aggregator<As>... aggregators) {
+
+  std::tuple<As...> resultValues = std::make_tuple(aggregators(0, typedAggCols[0][0], true)...);
+
+  std::vector<size_t> sizes;
+  bool sizesUpdated = false;
+  (
+      [&] {
+        if(!sizesUpdated) {
+          sizes.reserve(typedAggCols.size());
+          for(auto& typedAggSpan : typedAggCols) {
+            sizes.push_back(typedAggSpan.size());
+          }
+          sizesUpdated = true;
+        }
+      }(),
+      ...);
+
+  for(size_t i = 1; i < sizes[0]; ++i) {
+    resultValues = std::apply(
+        [&](auto&&... args) {
+          return std::make_tuple(aggregators(args, typedAggCols[0][i], false)...);
+        },
+        std::move(resultValues));
+  }
+
+  for(size_t i = 1; i < sizes.size(); ++i) {
+    for(size_t j = 0; j < sizes[i]; ++j) {
+      resultValues = std::apply(
+          [&](auto&&... args) {
+            return std::make_tuple(aggregators(args, typedAggCols[i][j], false)...);
+          },
+          std::move(resultValues));
+    }
+  }
+
+  std::vector<ExpressionSpanArguments> result;
+  result.reserve(sizeof...(As));
+  std::tuple<std::vector<std::remove_cv_t<As>>...> valueVectors;
+
+  [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
+    ((std::get<Is>(valueVectors).push_back(std::get<Is>(resultValues))), ...);
+  }(std::make_index_sequence<sizeof...(As)>());
+
+  [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
+    (result.emplace_back(Span<std::remove_cv_t<As>>(std::move(std::get<Is>(valueVectors)))), ...);
+  }(std::make_index_sequence<sizeof...(As)>());
+
+  return result;
+}
+
+/****************************** FOUNDATIONAL ALGORITHMS ********************************/
 
 template <typename K, typename... As>
 inline void groupByHashAux(HA_tsl::robin_map<K, std::tuple<As...>>& map, int& index, int n,
@@ -48,7 +122,6 @@ inline void groupByHashAux(HA_tsl::robin_map<K, std::tuple<As...>>& map, int& in
   }
 }
 
-// TODO - turn into class - see SIGMOD submission code
 template <typename K, typename... As>
 std::vector<ExpressionSpanArguments>
 groupByHash(int cardinality, bool secondKey, ExpressionSpanArguments&& keySpans1,
@@ -150,12 +223,9 @@ void groupBySortFinalPassAndAgg(
     std::tuple<std::vector<std::remove_cv_t<As>>...>& resultValueVectors, bool secondKey,
     int msbPosition, Aggregator<As>... aggregators) {
 
-  std::cout << "Entered groupBySortAux" << std::endl;
-  std::cout << "keys: ";
-  for(size_t j = 0; j < n; ++j) {
-    std::cout << keys[j] << " ";
-  }
-  std::cout << std::endl;
+  static bool bucketEntryPresent[1 << BITS_PER_GROUPBY_RADIX_PASS];
+  static std::tuple<As...> payloadAggs[1 << BITS_PER_GROUPBY_RADIX_PASS];
+  std::fill(std::begin(bucketEntryPresent), std::end(bucketEntryPresent), false);
 
   auto addKeys = [&resultKeys, &resultKeys2, secondKey](auto key) mutable {
     if(!secondKey) {
@@ -169,9 +239,7 @@ void groupBySortFinalPassAndAgg(
   size_t i;
   int radixBits = msbPosition;
   size_t numBuckets = 1 << radixBits;
-  int mask = (1 << radixBits) - 1;
-  bool bucketEntryPresent[1 << BITS_PER_GROUPBY_RADIX_PASS] = {false};
-  std::tuple<As...> payloadAggs[1 << BITS_PER_GROUPBY_RADIX_PASS]; // TODO class attribute?
+  int mask = static_cast<int>(numBuckets) - 1;
 
   for(i = 0; i < n; i++) {
     auto keyLowerBits = keys[i] & mask;
@@ -202,13 +270,6 @@ void groupBySortAux(size_t n, std::vector<int>& buckets, K* keys, std::tuple<As.
                     std::vector<std::remove_cv_t<K>>& resultKeys2,
                     std::tuple<std::vector<std::remove_cv_t<As>>...>& resultValueVectors,
                     bool secondKey, int msbPosition, Aggregator<As>... aggregators) {
-  std::cout << "Entered groupBySortAux" << std::endl;
-  std::cout << "keys: ";
-  for(size_t j = 0; j < n; ++j) {
-    std::cout << keys[j] << " ";
-  }
-  std::cout << std::endl;
-
   size_t i;
   int radixBits = BITS_PER_GROUPBY_RADIX_PASS;
   size_t numBuckets = 1 << radixBits;
@@ -232,25 +293,8 @@ void groupBySortAux(size_t n, std::vector<int>& buckets, K* keys, std::tuple<As.
     payloadsBuffer[index] = payloads[i];
   }
 
-  std::cout << "msbPosition before update: " << msbPosition << std::endl;
-
   std::fill(buckets.begin(), buckets.end(), 0);
   msbPosition -= radixBits;
-
-  std::cout << "msbPosition after update: " << msbPosition << std::endl;
-
-  std::cout << "Partitions: ";
-  for(auto& partition : partitions) {
-    std::cout << partition << " ";
-  }
-  std::cout << std::endl;
-
-  std::cout << "After update" << std::endl;
-  std::cout << "keysBuffer: ";
-  for(size_t j = 0; j < n; ++j) {
-    std::cout << keysBuffer[j] << " ";
-  }
-  std::cout << std::endl;
 
   if(msbPosition <= BITS_PER_GROUPBY_RADIX_PASS) {
     int prevPartitionEnd = 0;
@@ -277,8 +321,6 @@ void groupBySortAux(size_t n, std::vector<int>& buckets, K* keys, std::tuple<As.
   }
 }
 
-// TODO - turn into class - see SIGMOD submission code
-// TODO - need to use all improvements from partition code
 template <typename K, typename... As>
 std::vector<ExpressionSpanArguments>
 groupBySort(int cardinality, bool secondKey, ExpressionSpanArguments&& keySpans1,
@@ -323,15 +365,19 @@ groupBySort(int cardinality, bool secondKey, ExpressionSpanArguments&& keySpans1
   }
 
   std::vector<int> buckets(1 + (1 << BITS_PER_GROUPBY_RADIX_PASS), 0);
-  K* keys = new K[n];
-  auto* payloads = new std::tuple<As...>[n];
-  K* keysBuffer = new K[n];
-  auto* payloadsBuffer = new std::tuple<As...>[n];
+  auto keysPtr = std::make_unique_for_overwrite<K[]>(n);
+  auto* keys = keysPtr.get();
+  auto payloadsPtr = std::make_unique_for_overwrite<std::tuple<As...>[]>(n);
+  auto* payloads = payloadsPtr.get();
+  auto keysBufferPtr = std::make_unique_for_overwrite<K[]>(n);
+  auto* keysBuffer = keysBufferPtr.get();
+  auto payloadsBufferPtr = std::make_unique_for_overwrite<std::tuple<As...>[]>(n);
+  auto* payloadsBuffer = payloadsBufferPtr.get();
 
-  int i;
+  size_t i;
   int radixBits = std::min(msbPosition, BITS_PER_GROUPBY_RADIX_PASS);
-  int numBuckets = 1 << radixBits;
-  int mask = numBuckets - 1;
+  size_t numBuckets = 1 << radixBits;
+  int mask = static_cast<int>(numBuckets) - 1;
   int shifts = msbPosition - radixBits;
 
   if(!secondKey) {
@@ -378,32 +424,15 @@ groupBySort(int cardinality, bool secondKey, ExpressionSpanArguments&& keySpans1
     }
   }
 
-  std::cout << "keys: ";
-  for(size_t j = 0; j < n; ++j) {
-    std::cout << keys[j] << " ";
-  }
-  std::cout << std::endl;
-
   msbPosition -= radixBits;
   if(msbPosition == 0) {
-    std::cout << "Sorted after first pass so doing a final aggregation pass" << std::endl;
     groupBySortAggPassOnly<K, As...>(n, keys, payloads, resultKeys, resultKeys2, resultValueVectors,
                                      secondKey, aggregators...);
   } else if(msbPosition <= BITS_PER_GROUPBY_RADIX_PASS) {
-    std::cout << "One pass left after first pass so merging final pass with agg pass" << std::endl;
     std::fill(buckets.begin(), buckets.end(), 0);
-
-    std::cout << "Partitions: ";
-    for(auto& partition : partitions) {
-      std::cout << partition << " ";
-    }
-    std::cout << std::endl;
-
     int prevPartitionEnd = 0;
     for(i = 0; i < numBuckets; i++) {
       if(partitions[i] != prevPartitionEnd) {
-        std::cout << "Calling with prevPartitionEnd: " << prevPartitionEnd << ", " << partitions[i]
-                  << std::endl;
         groupBySortFinalPassAndAgg<K, As...>(
             partitions[i] - prevPartitionEnd, prevPartitionEnd + keys, prevPartitionEnd + payloads,
             resultKeys, resultKeys2, resultValueVectors, secondKey, msbPosition, aggregators...);
@@ -411,7 +440,6 @@ groupBySort(int cardinality, bool secondKey, ExpressionSpanArguments&& keySpans1
       prevPartitionEnd = partitions[i];
     }
   } else {
-    std::cout << "At least two passes left after first pass" << std::endl;
     std::fill(buckets.begin(), buckets.end(), 0);
     int prevPartitionEnd = 0;
     for(i = 0; i < numBuckets; i++) {
@@ -433,11 +461,6 @@ groupBySort(int cardinality, bool secondKey, ExpressionSpanArguments&& keySpans1
      ...);
   }(std::make_index_sequence<sizeof...(As)>());
 
-  delete[] keys;
-  delete[] payloads;
-  delete[] keysBuffer;
-  delete[] payloadsBuffer;
-
   return result;
 }
 
@@ -447,69 +470,15 @@ groupBySort(int cardinality, bool secondKey, ExpressionSpanArguments&& keySpans1
 
 /************************************ MULTI-THREADED ***********************************/
 
-/********************************** UTILITY FUNCTIONS **********************************/
-
-template <typename... As>
-std::vector<ExpressionSpanArguments> groupNoKeys(std::vector<Span<As>>&&... typedAggCols,
-                                                 Aggregator<As>... aggregators) {
-
-  std::tuple<As...> resultValues = std::make_tuple(aggregators(0, typedAggCols[0][0], true)...);
-
-  std::vector<size_t> sizes;
-  bool sizesUpdated = false;
-  (
-      [&] {
-        if(!sizesUpdated) {
-          sizes.reserve(typedAggCols.size());
-          for(auto& typedAggSpan : typedAggCols) {
-            sizes.push_back(typedAggSpan.size());
-          }
-          sizesUpdated = true;
-        }
-      }(),
-      ...);
-
-  for(size_t i = 1; i < sizes[0]; ++i) {
-    resultValues = std::apply(
-        [&](auto&&... args) {
-          return std::make_tuple(aggregators(args, typedAggCols[0][i], false)...);
-        },
-        std::move(resultValues));
-  }
-
-  for(size_t i = 1; i < sizes.size(); ++i) {
-    for(size_t j = 0; j < sizes[i]; ++j) {
-      resultValues = std::apply(
-          [&](auto&&... args) {
-            return std::make_tuple(aggregators(args, typedAggCols[i][j], false)...);
-          },
-          std::move(resultValues));
-    }
-  }
-
-  std::vector<ExpressionSpanArguments> result;
-  result.reserve(sizeof...(As));
-  std::tuple<std::vector<std::remove_cv_t<As>>...> valueVectors;
-
-  [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
-    ((std::get<Is>(valueVectors).push_back(std::get<Is>(resultValues))), ...);
-  }(std::make_index_sequence<sizeof...(As)>());
-
-  [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
-    (result.emplace_back(Span<std::remove_cv_t<As>>(std::move(std::get<Is>(valueVectors)))), ...);
-  }(std::make_index_sequence<sizeof...(As)>());
-
-  return result;
-}
-
 /*********************************** ENTRY FUNCTION ************************************/
 
 template <typename K, typename... As>
 std::vector<ExpressionSpanArguments>
-group(Group implementation, int cardinality, int numKeys, ExpressionSpanArguments&& keySpans1,
+group(Group implementation, int numKeys, ExpressionSpanArguments&& keySpans1,
       ExpressionSpanArguments&& keySpans2, std::vector<Span<As>>&&... typedAggCols,
       Aggregator<As>... aggregators) {
   assert(numKeys >= 0 && numKeys <= 2);
+  int cardinality = getGroupResultCardinality();
   if(numKeys == 0) {
     return groupNoKeys<As...>(std::move(typedAggCols)..., aggregators...);
   }

@@ -546,7 +546,6 @@ static ComplexExpression constructOutputTable(std::vector<ExpressionSpanArgument
   return ComplexExpression("Table"_, std::move(resultColumns));
 }
 
-// TODO - set cardinality
 template <typename K, typename... Ts>
 static ComplexExpression
 typeColumnsAndGroup(size_t index, size_t numCols, int numKeys, std::vector<Symbol>&& names,
@@ -557,7 +556,7 @@ typeColumnsAndGroup(size_t index, size_t numCols, int numKeys, std::vector<Symbo
   if constexpr(sizeof...(Ts) <= MAX_AGGREGATION_ARGS) {
     if(index >= numCols) {
       auto groupedColumns = adaptive::group<K, Ts...>(
-          groupImplementation, 100, numKeys, std::move(key1), std::move(key2),
+          groupImplementation, numKeys, std::move(key1), std::move(key2),
           std::move(typedAggCols)..., std::move(aggregators)...);
       return constructOutputTable(std::move(groupedColumns), std::move(names));
     }

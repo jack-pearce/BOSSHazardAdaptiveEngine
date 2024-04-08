@@ -21,7 +21,7 @@ std::string getGroupName(Group groupImplementation);
 
 template <typename K, typename... As>
 std::vector<ExpressionSpanArguments>
-group(Group implementation, int cardinality, int numKeys, ExpressionSpanArguments&& keySpans1,
+group(Group implementation, int numKeys, ExpressionSpanArguments&& keySpans1,
       ExpressionSpanArguments&& keySpans2, std::vector<Span<As>>&&... typedAggCols,
       Aggregator<As>... aggregators);
 
