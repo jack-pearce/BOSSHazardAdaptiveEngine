@@ -15,4 +15,12 @@ int32_t LOGICAL_CORE_COUNT = 4;
 std::string projectFilePath = "/home/jcp122/repos/BOSSHazardAdaptiveEngine/";
 // std::string projectFilePath = "/repos/BOSSHazardAdaptiveEngine/";
 
+// TODO - to remove below once locked
+float percentInputToTrack_ = 0.001;           // DONE
+float tuplesPerPageFault_ = 1.8;
+float tuplesPerLastLevelCacheMiss_ = 0.4;
+float percentInputInTransientCheck_ = 0.0001; // DONE
+int tuplesInCacheMissCheck_ = 75 * 1000;      // DONE
+float percentInputBetweenHashing_ = 0.25;     // DONE
+
 } // namespace adaptive::config

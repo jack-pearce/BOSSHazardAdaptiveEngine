@@ -3336,6 +3336,33 @@ TEST_CASE("Group tests (msb = 30, single key)", "[hazard-adaptive-engine]") {
   }
 }
 
+TEST_CASE("Group tests - multi-keys 2", "[hazard-adaptive-engine]") {
+  auto engine = boss::engines::BootstrapEngine();
+  REQUIRE(!librariesToTest.empty());
+  auto eval = [&engine](boss::Expression&& expression) mutable {
+    return engine.evaluate("EvaluateInEngines"_("List"_(GENERATE(from_range(librariesToTest))),
+                                                std::move(expression)));
+  };
+
+  auto table =
+      "Table"_("NATION"_(createIntSpanOf(  2,    1,    1,    2,    1,    1,    3)),        // NOLINT
+               "YEAR"_(createIntSpanOf(    1985, 2035, 1800, 2035, 1800, 2035, 1985)),     // NOLINT
+               "QUANTITY"_(createIntSpanOf(17,   21,   8,    5,    8,    7,    3)));       // NOLINT
+
+  SECTION("Group - single span, multi-key") {
+    auto output = eval("Group"_(
+        table.clone(CloneReason::FOR_TESTING), "By"_("NATION"_, "YEAR"_),
+        "As"_("count_result"_, "Count"_("QUANTITY"_), "sum_result"_, "Sum"_("QUANTITY"_),
+              "min_result"_, "Min"_("QUANTITY"_), "max_result"_, "Max"_("QUANTITY"_))));
+    CHECK(output == "Table"_("NATION"_("List"_(1, 2, 3, 1, 2)),
+                             "YEAR"_("List"_(1800, 1985, 1985, 2035, 2035)),
+                             "count_result"_("List"_(2, 1, 1, 2, 1)),
+                             "sum_result"_("List"_(16,17, 3, 28, 5)),
+                             "min_result"_("List"_(8, 17, 3, 7, 5)),
+                             "max_result"_("List"_(8, 17, 3, 21, 5)))); // NOLINT
+  }
+}
+
 int main(int argc, char* argv[]) {
   Catch::Session session;
   session.configData().showSuccessfulTests = true;
