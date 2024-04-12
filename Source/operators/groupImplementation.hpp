@@ -10,13 +10,13 @@
 #include "utilities/papiWrapper.hpp"
 
 #define ADAPTIVITY_OUTPUT
-#define DEBUG
+// #define DEBUG
 
 namespace adaptive {
 
 constexpr int BITS_PER_GROUP_RADIX_PASS = 8;
 constexpr int DEFAULT_GROUP_RESULT_CARDINALITY = 100;
-constexpr float HASHMAP_OVERALLOCATION_FACTOR = 2.5;
+constexpr float HASHMAP_OVERALLOCATION_FACTOR = 2.5; // TODO - test this value at 2.0
 
 template <typename T> using Aggregator = std::function<T(const T, const T, bool)>;
 
@@ -479,16 +479,15 @@ groupBySort(int cardinality, bool secondKey, ExpressionSpanArguments&& keySpans1
 /************************************ SINGLE-THREADED **********************************/
 
 static inline PAPI_eventSet& getGroupEventSet() {
-  thread_local static PAPI_eventSet eventSet(
-      {"PERF_COUNT_SW_PAGE_FAULTS", "PERF_COUNT_HW_CACHE_MISSES"});
+  thread_local static PAPI_eventSet eventSet({"DTLB-LOAD-MISSES", "PERF_COUNT_HW_CACHE_MISSES"});
   return eventSet;
 }
 
 class MonitorGroup {
 public:
-  explicit MonitorGroup(const long_long* pageFaults_, const long_long* lastLevelCacheMisses_)
-      : pageFaults(pageFaults_), lastLevelCacheMisses(lastLevelCacheMisses_),
-        tuplesPerPageFault(adaptive::config::tuplesPerPageFault_),
+  explicit MonitorGroup(const long_long* dtlbLoadMisses_, const long_long* lastLevelCacheMisses_)
+      : dtlbLoadMisses(dtlbLoadMisses_), lastLevelCacheMisses(lastLevelCacheMisses_),
+        tuplesPerDtlbLoadMiss(adaptive::config::tuplesPerDtlbLoadMiss_),
         tuplesPerLastLevelCacheMiss(adaptive::config::tuplesPerLastLevelCacheMiss_) {
     // TODO - read machine constant values, rather than hardcoded in config
     // TODO - calculate machine constant values for GROUP
@@ -498,18 +497,18 @@ public:
     //                                  std::to_string(sizeof(T2)) + "B_inputAggregate_1_dop";
   }
 
-  inline bool robustnessIncreaseRequiredBasedOnPageFaults(int tuplesProcessed) {
+  inline bool robustnessIncreaseRequiredBasedOnDtlbLoadMisses(int tuplesProcessed) {
 #ifdef DEBUG
-    bool result = (static_cast<float>(tuplesProcessed) / static_cast<float>(*pageFaults)) <
-                  tuplesPerPageFault;
-    std::cout << "Page faults (" << tuplesProcessed << " tuples / " << *pageFaults
-              << " page faults): "
-              << (static_cast<float>(tuplesProcessed) / static_cast<float>(*pageFaults))
+    bool result = (static_cast<float>(tuplesProcessed) / static_cast<float>(*dtlbLoadMisses)) <
+                  tuplesPerDtlbLoadMiss;
+    std::cout << "DTLB load misses (" << tuplesProcessed << " tuples / " << *dtlbLoadMisses
+              << " DTLB load misses): "
+              << (static_cast<float>(tuplesProcessed) / static_cast<float>(*dtlbLoadMisses))
               << std::endl;
     return result;
 #else
-    return (static_cast<float>(tuplesProcessed) / static_cast<float>(*pageFaults)) <
-           tuplesPerPageFault;
+    return (static_cast<float>(tuplesProcessed) / static_cast<float>(*dtlbLoadMisses)) <
+           tuplesPerDtlbLoadMiss;
 #endif
   }
 
@@ -531,9 +530,9 @@ public:
   }
 
 private:
-  const long_long* pageFaults;
+  const long_long* dtlbLoadMisses;
   const long_long* lastLevelCacheMisses;
-  float tuplesPerPageFault;
+  float tuplesPerDtlbLoadMiss;
   float tuplesPerLastLevelCacheMiss;
 };
 
@@ -864,7 +863,7 @@ groupByAdaptive(int cardinality, bool secondKey, ExpressionSpanArguments&& keySp
     ///////////////////////////////////////////////////////////////////
     eventSet.readCountersAndUpdateDiff();
 
-    if(monitor.robustnessIncreaseRequiredBasedOnPageFaults(tuplesInCheck)) {
+    if(monitor.robustnessIncreaseRequiredBasedOnDtlbLoadMisses(tuplesInCheck)) {
 #ifdef ADAPTIVITY_OUTPUT
       std::cout << "Switched to sort at index " << index << std::endl;
 #endif
