@@ -7,7 +7,7 @@
 #include <pthread.h>
 #include <queue>
 
-//#define MEMORY_INFO
+// #define MEMORY_INFO
 
 class ThreadPool {
 public:
@@ -33,6 +33,8 @@ public:
     wait_cv.wait(lock, [this, tasksToComplete] { return tasksCompletedCount == tasksToComplete; });
     tasksCompletedCount = 0;
   }
+
+  void resetTaskCount() { tasksCompletedCount = 0; }
 
 private:
   explicit ThreadPool(size_t numThreads) : stop(false), tasksCompletedCount(0) {

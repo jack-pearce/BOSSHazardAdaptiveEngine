@@ -1567,6 +1567,8 @@ public:
                             const ExpressionSpanArguments& keySpans2_, int dop_)
       : nInput1(0), keySpans1(keySpans1_), nInput2(0), keySpans2(keySpans2_), dop(dop_),
         threadPool(ThreadPool::getInstance()), totalOutputPartitions(0) {
+    threadPool.resetTaskCount(); // Necessary for the 'waitUntilComplete' function
+
     std::string startName = "Partition_startRadixBits";
     radixBits = static_cast<int>(MachineConstants::getInstance().getMachineConstant(startName));
 

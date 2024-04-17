@@ -3,24 +3,34 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <cstring>
 #include <functional>
+#include <iostream>
 #include <stdexcept>
 
 #include "hash_map/robin_map.h"
+#include "utilities/memory.hpp"
 #include "utilities/papiWrapper.hpp"
 
 #define ADAPTIVITY_OUTPUT
 // #define DEBUG
+#define USE_ADAPTIVE_OVER_ADAPTIVE_PARALLEL_FOR_DOP_1
 
 namespace adaptive {
 
+constexpr int FIRST_KEY_BITS = 8; // Bits for first key when there are two keys
+constexpr int FIRST_KEY_MASK = static_cast<int>(1 << FIRST_KEY_BITS) - 1;
 constexpr int BITS_PER_GROUP_RADIX_PASS = 8;
 constexpr int DEFAULT_GROUP_RESULT_CARDINALITY = 100;
 constexpr float HASHMAP_OVERALLOCATION_FACTOR = 2.5; // TODO - test this value at 2.0
 
-template <typename T> using Aggregator = std::function<T(const T, const T, bool)>;
+template <typename T> using Aggregator = std::function<T(const T, const T)>;
 
 /********************************** UTILITY FUNCTIONS **********************************/
+
+template <typename K, typename... As>
+using AggregatedKeysAndPayload =
+    std::tuple<std::vector<K>, std::vector<K>, std::tuple<std::vector<As>...>>;
 
 template <typename K, typename... As> struct Section {
   size_t n;
@@ -54,7 +64,7 @@ template <typename... As>
 std::vector<ExpressionSpanArguments> groupNoKeys(std::vector<Span<As>>&&... typedAggCols,
                                                  Aggregator<As>... aggregators) {
 
-  std::tuple<As...> resultValues = std::make_tuple(aggregators(0, typedAggCols[0][0], true)...);
+  std::tuple<As...> resultValues = std::make_tuple(typedAggCols[0][0]...);
 
   std::vector<size_t> sizes;
   bool sizesUpdated = false;
@@ -72,18 +82,14 @@ std::vector<ExpressionSpanArguments> groupNoKeys(std::vector<Span<As>>&&... type
 
   for(size_t i = 1; i < sizes[0]; ++i) {
     resultValues = std::apply(
-        [&](auto&&... args) {
-          return std::make_tuple(aggregators(args, typedAggCols[0][i], false)...);
-        },
+        [&](auto&&... args) { return std::make_tuple(aggregators(args, typedAggCols[0][i])...); },
         std::move(resultValues));
   }
 
   for(size_t i = 1; i < sizes.size(); ++i) {
     for(size_t j = 0; j < sizes[i]; ++j) {
       resultValues = std::apply(
-          [&](auto&&... args) {
-            return std::make_tuple(aggregators(args, typedAggCols[i][j], false)...);
-          },
+          [&](auto&&... args) { return std::make_tuple(aggregators(args, typedAggCols[i][j])...); },
           std::move(resultValues));
     }
   }
@@ -103,6 +109,83 @@ std::vector<ExpressionSpanArguments> groupNoKeys(std::vector<Span<As>>&&... type
   return result;
 }
 
+template <typename K, typename... As>
+void sortByKeyAux(size_t start, size_t end, K* keys, std::tuple<As*...> payloads, K* keysBuffer,
+                  std::tuple<As*...> payloadBuffers, std::vector<int>& buckets, int msbPosition,
+                  bool copyRequired) {
+  size_t i;
+  int radixBits = std::min(msbPosition, BITS_PER_GROUP_RADIX_PASS);
+  int shifts = msbPosition - radixBits;
+  size_t numBuckets = 1 << radixBits;
+  unsigned int mask = static_cast<int>(numBuckets) - 1;
+
+  for(i = start; i < end; i++) {
+    buckets[1 + ((keys[i] >> shifts) & mask)]++;
+  }
+
+  for(i = 2; i <= numBuckets; i++) {
+    buckets[i] += buckets[i - 1];
+  }
+
+  std::vector<int> partitions(buckets.data() + 1, buckets.data() + numBuckets + 1);
+
+  for(i = start; i < end; i++) {
+    K key = keys[i];
+    auto index = start + buckets[(key >> shifts) & mask]++;
+    keysBuffer[index] = key;
+    [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
+      ((std::get<Is>(payloadBuffers)[index] = std::get<Is>(payloads)[i]), ...);
+    }(std::make_index_sequence<sizeof...(As)>());
+  }
+
+  std::fill(buckets.begin(), buckets.end(), 0);
+  msbPosition -= radixBits;
+
+  if(msbPosition == 0) {
+    if(copyRequired) {
+      std::memcpy(start + keys, start + keysBuffer, (end - start) * sizeof(K));
+      [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
+        ((std::memcpy(start + std::get<Is>(payloads), start + std::get<Is>(payloadBuffers),
+                      (end - start) * sizeof(std::tuple_element_t<Is, std::tuple<As...>>))),
+         ...);
+      }(std::make_index_sequence<sizeof...(As)>());
+    }
+  } else {
+    int prevPartitionEnd = 0;
+    for(i = 0; i < numBuckets; i++) {
+      if(partitions[i] != prevPartitionEnd) {
+        sortByKeyAux<K, As...>(start + prevPartitionEnd, start + partitions[i], keysBuffer,
+                               payloadBuffers, keys, payloads, buckets, msbPosition, !copyRequired);
+      }
+      prevPartitionEnd = partitions[i];
+    }
+  }
+}
+
+template <typename K, typename... As>
+void sortByKey(int n, K largestKey, K* keys, std::tuple<As*...> payloads) {
+  int msbPosition = 0;
+  while(largestKey != 0) {
+    largestKey >>= 1;
+    msbPosition++;
+  }
+
+  std::vector<int> buckets(1 + (1 << BITS_PER_GROUP_RADIX_PASS), 0);
+  auto keysBufferPtr = std::make_unique_for_overwrite<K[]>(n);
+  auto* keysBuffer = keysBufferPtr.get();
+  std::tuple<std::unique_ptr<As[]>...> payloadBufferPtrs =
+      [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
+        return std::make_tuple(
+            std::make_unique_for_overwrite<std::tuple_element_t<Is, std::tuple<As...>>[]>(n)...);
+      }(std::make_index_sequence<sizeof...(As)>());
+  std::tuple<As*...> payloadBuffers = [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
+    return std::make_tuple(std::get<Is>(payloadBufferPtrs).get()...);
+  }(std::make_index_sequence<sizeof...(As)>());
+
+  sortByKeyAux<K, As...>(0, n, keys, payloads, keysBuffer, payloadBuffers, buckets, msbPosition,
+                         true);
+}
+
 /****************************** FOUNDATIONAL ALGORITHMS ********************************/
 
 template <typename K, typename... As>
@@ -115,7 +198,7 @@ inline void groupByHashAux(HA_tsl::robin_map<K, std::tuple<As...>>& map, int& in
     if(!secondKey) {
       return keys1[index];
     }
-    return (keys2[index] << 8) | keys1[index];
+    return (keys2[index] << FIRST_KEY_BITS) | keys1[index];
   };
 
   int startingIndex = index;
@@ -124,12 +207,10 @@ inline void groupByHashAux(HA_tsl::robin_map<K, std::tuple<As...>>& map, int& in
     it = map.find(key);
     if(it != map.end()) {
       it.value() = std::apply(
-          [&](auto&&... args) {
-            return std::make_tuple(aggregators(args, aggregates[index], false)...);
-          },
+          [&](auto&&... args) { return std::make_tuple(aggregators(args, aggregates[index])...); },
           std::move(it->second));
     } else {
-      map.insert({key, std::make_tuple(aggregators(0, aggregates[index], true)...)});
+      map.insert({key, std::make_tuple(aggregates[index]...)});
     }
   }
 }
@@ -139,7 +220,8 @@ std::vector<ExpressionSpanArguments>
 groupByHash(int cardinality, bool secondKey, ExpressionSpanArguments&& keySpans1,
             ExpressionSpanArguments&& keySpans2, std::vector<Span<As>>&&... typedAggCols,
             Aggregator<As>... aggregators) {
-  int initialSize = std::max(static_cast<int>(HASHMAP_OVERALLOCATION_FACTOR * cardinality), 400000);
+  int initialSize = std::max(
+      static_cast<int>(HASHMAP_OVERALLOCATION_FACTOR * static_cast<float>(cardinality)), 400000);
   int index;
 
   HA_tsl::robin_map<std::remove_cv_t<K>, std::tuple<std::remove_cv_t<As>...>> map(initialSize);
@@ -169,8 +251,8 @@ groupByHash(int cardinality, bool secondKey, ExpressionSpanArguments&& keySpans1
     if(!secondKey) {
       keys.push_back(key);
     } else {
-      keys.push_back(key & 0xFF);
-      keys2->push_back(key >> 8);
+      keys.push_back(key & FIRST_KEY_MASK);
+      keys2->push_back(key >> FIRST_KEY_BITS);
     }
   };
 
@@ -197,13 +279,13 @@ void groupBySortAggPassOnly(size_t n, K* keys, std::tuple<As...>* payloads,
                             std::vector<std::remove_cv_t<K>>& resultKeys,
                             std::vector<std::remove_cv_t<K>>& resultKeys2,
                             std::tuple<std::vector<std::remove_cv_t<As>>...>& resultValueVectors,
-                            bool secondKey, Aggregator<As>... aggregators) {
-  auto addKeys = [&resultKeys, &resultKeys2, secondKey](auto key) mutable {
-    if(!secondKey) {
-      resultKeys.push_back(key);
+                            bool secondKey, bool splitKeysInResult, Aggregator<As>... aggregators) {
+  auto addKeys = [&resultKeys, &resultKeys2, secondKey, splitKeysInResult](auto key) mutable {
+    if(secondKey && splitKeysInResult) {
+      resultKeys.push_back(key & FIRST_KEY_MASK);
+      resultKeys2.push_back(key >> FIRST_KEY_BITS);
     } else {
-      resultKeys.push_back(key & 0xFF);
-      resultKeys2.push_back(key >> 8);
+      resultKeys.push_back(key);
     }
   };
 
@@ -211,13 +293,12 @@ void groupBySortAggPassOnly(size_t n, K* keys, std::tuple<As...>* payloads,
   while(i < n) {
     auto key = keys[i];
     auto tuple = [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
-      return std::make_tuple(aggregators(0, std::get<Is>(payloads[i]), true)...);
+      return std::make_tuple(std::get<Is>(payloads[i])...);
     }(std::make_index_sequence<sizeof...(As)>());
     ++i;
     while(keys[i] == key) {
       tuple = [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
-        return std::make_tuple(
-            aggregators(std::get<Is>(tuple), std::get<Is>(payloads[i]), false)...);
+        return std::make_tuple(aggregators(std::get<Is>(tuple), std::get<Is>(payloads[i]))...);
       }(std::make_index_sequence<sizeof...(As)>());
       ++i;
     }
@@ -233,18 +314,18 @@ void groupBySortFinalPassAndAgg(
     size_t n, K* keys, std::tuple<As...>* payloads, std::vector<std::remove_cv_t<K>>& resultKeys,
     std::vector<std::remove_cv_t<K>>& resultKeys2,
     std::tuple<std::vector<std::remove_cv_t<As>>...>& resultValueVectors, bool secondKey,
-    int msbPosition, Aggregator<As>... aggregators) {
+    bool splitKeysInResult, int msbPosition, Aggregator<As>... aggregators) {
 
   static bool bucketEntryPresent[1 << BITS_PER_GROUP_RADIX_PASS];
   static std::tuple<As...> payloadAggs[1 << BITS_PER_GROUP_RADIX_PASS];
   std::fill(std::begin(bucketEntryPresent), std::end(bucketEntryPresent), false);
 
-  auto addKeys = [&resultKeys, &resultKeys2, secondKey](auto key) mutable {
-    if(!secondKey) {
-      resultKeys.push_back(key);
+  auto addKeys = [&resultKeys, &resultKeys2, secondKey, splitKeysInResult](auto key) mutable {
+    if(secondKey && splitKeysInResult) {
+      resultKeys.push_back(key & FIRST_KEY_MASK);
+      resultKeys2.push_back(key >> FIRST_KEY_BITS);
     } else {
-      resultKeys.push_back(key & 0xFF);
-      resultKeys2.push_back(key >> 8);
+      resultKeys.push_back(key);
     }
   };
 
@@ -256,9 +337,12 @@ void groupBySortFinalPassAndAgg(
   for(i = 0; i < n; i++) {
     auto keyLowerBits = keys[i] & mask;
     payloadAggs[keyLowerBits] = [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
-      return std::make_tuple(aggregators(std::get<Is>(payloadAggs[keyLowerBits]),
-                                         std::get<Is>(payloads[i]),
-                                         !bucketEntryPresent[keyLowerBits])...);
+      if(bucketEntryPresent[keyLowerBits]) {
+        return std::make_tuple(
+            aggregators(std::get<Is>(payloadAggs[keyLowerBits]), std::get<Is>(payloads[i]))...);
+      } else {
+        return std::make_tuple(std::get<Is>(payloads[i])...);
+      }
     }(std::make_index_sequence<sizeof...(As)>());
     bucketEntryPresent[keyLowerBits] = true;
   }
@@ -281,7 +365,8 @@ void groupBySortAux(size_t n, std::vector<int>& buckets, K* keys, std::tuple<As.
                     std::vector<std::remove_cv_t<K>>& resultKeys,
                     std::vector<std::remove_cv_t<K>>& resultKeys2,
                     std::tuple<std::vector<std::remove_cv_t<As>>...>& resultValueVectors,
-                    bool secondKey, int msbPosition, Aggregator<As>... aggregators) {
+                    bool secondKey, bool splitKeysInResult, int msbPosition,
+                    Aggregator<As>... aggregators) {
   size_t i;
   int radixBits = BITS_PER_GROUP_RADIX_PASS;
   size_t numBuckets = 1 << radixBits;
@@ -315,7 +400,7 @@ void groupBySortAux(size_t n, std::vector<int>& buckets, K* keys, std::tuple<As.
         groupBySortFinalPassAndAgg<K, As...>(
             partitions[i] - prevPartitionEnd, prevPartitionEnd + keysBuffer,
             prevPartitionEnd + payloadsBuffer, resultKeys, resultKeys2, resultValueVectors,
-            secondKey, msbPosition, aggregators...);
+            secondKey, splitKeysInResult, msbPosition, aggregators...);
       }
       prevPartitionEnd = partitions[i];
     }
@@ -323,10 +408,11 @@ void groupBySortAux(size_t n, std::vector<int>& buckets, K* keys, std::tuple<As.
     int prevPartitionEnd = 0;
     for(i = 0; i < numBuckets; i++) {
       if(partitions[i] != prevPartitionEnd) {
-        groupBySortAux<K, As...>(
-            partitions[i] - prevPartitionEnd, buckets, prevPartitionEnd + keysBuffer,
-            prevPartitionEnd + payloadsBuffer, prevPartitionEnd + keys, prevPartitionEnd + payloads,
-            resultKeys, resultKeys2, resultValueVectors, secondKey, msbPosition, aggregators...);
+        groupBySortAux<K, As...>(partitions[i] - prevPartitionEnd, buckets,
+                                 prevPartitionEnd + keysBuffer, prevPartitionEnd + payloadsBuffer,
+                                 prevPartitionEnd + keys, prevPartitionEnd + payloads, resultKeys,
+                                 resultKeys2, resultValueVectors, secondKey, splitKeysInResult,
+                                 msbPosition, aggregators...);
       }
       prevPartitionEnd = partitions[i];
     }
@@ -352,28 +438,32 @@ groupBySort(int cardinality, bool secondKey, ExpressionSpanArguments&& keySpans1
 
   size_t n = 0;
   int msbPosition = 0;
+  K largest = std::numeric_limits<K>::lowest();
+  ;
 
   if(secondKey) {
-    msbPosition = 16;
-    for(const auto& untypedSpan : keySpans1) {
-      auto& keySpan1 = std::get<Span<K>>(untypedSpan);
-      n += keySpan1.size();
+    for(auto& untypedSpan : keySpans2) {
+      auto& keySpan2 = std::get<Span<K>>(untypedSpan);
+      n += keySpan2.size();
+      for(const auto& value : keySpan2) {
+        largest = std::max(largest, value); // Bits in second key
+      }
     }
   } else {
-    K largest = 0;
     for(auto& untypedSpan : keySpans1) {
       auto& keySpan1 = std::get<Span<K>>(untypedSpan);
       n += keySpan1.size();
       for(const auto& value : keySpan1) {
-        if(value > largest) {
-          largest = value;
-        }
+        largest = std::max(largest, value); // Bits in first key
       }
     }
-    while(largest != 0) {
-      largest >>= 1;
-      msbPosition++;
-    }
+  }
+  while(largest != 0) {
+    largest >>= 1;
+    msbPosition++;
+  }
+  if(secondKey) {
+    msbPosition += FIRST_KEY_BITS; // Add bits in first key for combined key
   }
 
   std::vector<int> buckets(1 + (1 << BITS_PER_GROUP_RADIX_PASS), 0);
@@ -403,7 +493,7 @@ groupBySort(int cardinality, bool secondKey, ExpressionSpanArguments&& keySpans1
       auto& keySpan1 = std::get<Span<K>>(keySpans1.at(spanNum));
       auto& keySpan2 = std::get<Span<K>>(keySpans2.at(spanNum));
       for(size_t index = 0; index < keySpan1.size(); ++index) {
-        buckets[1 + ((((keySpan2[index] << 8) | keySpan1[index]) >> shifts) & mask)]++;
+        buckets[1 + ((((keySpan2[index] << FIRST_KEY_BITS) | keySpan1[index]) >> shifts) & mask)]++;
       }
     }
   }
@@ -428,7 +518,7 @@ groupBySort(int cardinality, bool secondKey, ExpressionSpanArguments&& keySpans1
       auto& keySpan1 = std::get<Span<K>>(keySpans1.at(spanNum));
       auto& keySpan2 = std::get<Span<K>>(keySpans2.at(spanNum));
       for(size_t spanIndex = 0; spanIndex < keySpan1.size(); ++spanIndex) {
-        K key = (keySpan2[spanIndex] << 8) | keySpan1[spanIndex];
+        K key = (keySpan2[spanIndex] << FIRST_KEY_BITS) | keySpan1[spanIndex];
         auto index = buckets[(key >> shifts) & mask]++;
         keys[index] = key;
         payloads[index] = std::make_tuple(typedAggCols[spanNum][spanIndex]...);
@@ -439,15 +529,16 @@ groupBySort(int cardinality, bool secondKey, ExpressionSpanArguments&& keySpans1
   msbPosition -= radixBits;
   if(msbPosition == 0) {
     groupBySortAggPassOnly<K, As...>(n, keys, payloads, resultKeys, resultKeys2, resultValueVectors,
-                                     secondKey, aggregators...);
+                                     secondKey, true, aggregators...);
   } else if(msbPosition <= BITS_PER_GROUP_RADIX_PASS) {
     std::fill(buckets.begin(), buckets.end(), 0);
     int prevPartitionEnd = 0;
     for(i = 0; i < numBuckets; i++) {
       if(partitions[i] != prevPartitionEnd) {
-        groupBySortFinalPassAndAgg<K, As...>(
-            partitions[i] - prevPartitionEnd, prevPartitionEnd + keys, prevPartitionEnd + payloads,
-            resultKeys, resultKeys2, resultValueVectors, secondKey, msbPosition, aggregators...);
+        groupBySortFinalPassAndAgg<K, As...>(partitions[i] - prevPartitionEnd,
+                                             prevPartitionEnd + keys, prevPartitionEnd + payloads,
+                                             resultKeys, resultKeys2, resultValueVectors, secondKey,
+                                             true, msbPosition, aggregators...);
       }
       prevPartitionEnd = partitions[i];
     }
@@ -459,7 +550,7 @@ groupBySort(int cardinality, bool secondKey, ExpressionSpanArguments&& keySpans1
         groupBySortAux<K, As...>(partitions[i] - prevPartitionEnd, buckets, prevPartitionEnd + keys,
                                  prevPartitionEnd + payloads, prevPartitionEnd + keysBuffer,
                                  prevPartitionEnd + payloadsBuffer, resultKeys, resultKeys2,
-                                 resultValueVectors, secondKey, msbPosition, aggregators...);
+                                 resultValueVectors, secondKey, true, msbPosition, aggregators...);
       }
       prevPartitionEnd = partitions[i];
     }
@@ -548,7 +639,7 @@ inline void groupByAdaptiveAuxHash(HA_tsl::robin_map<K, std::tuple<As...>>& map,
     if(!secondKey) {
       return keys1[index];
     }
-    return (keys2[index] << 8) | keys1[index];
+    return (keys2[index] << FIRST_KEY_BITS) | keys1[index];
   };
 
   int index = 0;
@@ -558,13 +649,10 @@ inline void groupByAdaptiveAuxHash(HA_tsl::robin_map<K, std::tuple<As...>>& map,
     it = map.find(key);
     if(it != map.end()) {
       it.value() = std::apply(
-          [&](auto&&... args) {
-            return std::make_tuple(aggregators(args, aggregates[index], false)...);
-          },
+          [&](auto&&... args) { return std::make_tuple(aggregators(args, aggregates[index])...); },
           std::move(it->second));
     } else {
-      auto insertionResult =
-          map.insert({key, std::make_tuple(aggregators(0, aggregates[index], true)...)});
+      auto insertionResult = map.insert({key, std::make_tuple(aggregates[index]...)});
       mapPtrs[mapPtrsSize++] =
           const_cast<std::pair<K, std::tuple<As...>>*>(&(*insertionResult.first));
       largestKey = std::max(largestKey, key);
@@ -577,26 +665,22 @@ inline void groupByAdaptiveAuxHash(HA_tsl::robin_map<K, std::tuple<As...>>& map,
     it = map.find(key);
     if(it != map.end()) {
       it.value() = std::apply(
-          [&](auto&&... args) {
-            return std::make_tuple(aggregators(args, aggregates[index], false)...);
-          },
+          [&](auto&&... args) { return std::make_tuple(aggregators(args, aggregates[index])...); },
           std::move(it->second));
     } else {
-      map.insert({key, std::make_tuple(aggregators(0, aggregates[index], true)...)});
+      map.insert({key, std::make_tuple(aggregates[index]...)});
       largestKey = std::max(largestKey, key);
     }
   }
 }
 
 template <typename K, typename... As>
-std::vector<ExpressionSpanArguments>
-groupByAdaptiveAuxSort(HA_tsl::robin_map<K, std::tuple<As...>>& map, K largestMapKey,
+AggregatedKeysAndPayload<K, As...>
+groupByAdaptiveAuxSort(HA_tsl::robin_map<K, std::tuple<As...>>& map, K& largestKey,
                        std::pair<K, std::tuple<As...>>** mapPtrs, const int entriesInMapToTrack,
                        size_t n, int cardinality, std::vector<Section<K, As...>>& sections,
-                       bool secondKey, Aggregator<As>... aggregators) {
+                       bool secondKey, bool splitKeysInResult, Aggregator<As>... aggregators) {
 
-  std::vector<ExpressionSpanArguments> result;
-  result.reserve(sizeof...(As) + 1 + secondKey);
   std::vector<std::remove_cv_t<K>> resultKeys;
   resultKeys.reserve(cardinality);
   std::vector<std::remove_cv_t<K>> resultKeys2;
@@ -610,19 +694,25 @@ groupByAdaptiveAuxSort(HA_tsl::robin_map<K, std::tuple<As...>>& map, K largestMa
   int msbPosition = 0;
 
   if(secondKey) {
-    msbPosition = 16;
+    K largestSecondKey = std::numeric_limits<K>::lowest();
+    for(const auto& section : sections) {
+      K* keyPtr = section.key2;
+      for(i = 0; i < section.n; ++i) {
+        largestSecondKey = std::max(largestSecondKey, keyPtr[i]); // Bits in second key
+      }
+    } // Bits in combined key
+    largestKey = std::max(largestKey, largestSecondKey << FIRST_KEY_BITS);
   } else {
-    K largest = largestMapKey;
     for(const auto& section : sections) {
       K* keyPtr = section.key1;
       for(i = 0; i < section.n; ++i) {
-        largest = std::max(largest, keyPtr[i]);
+        largestKey = std::max(largestKey, keyPtr[i]); // Bits in first key
       }
     }
-    while(largest != 0) {
-      largest >>= 1;
-      msbPosition++;
-    }
+  }
+  while(largestKey != 0) {
+    largestKey >>= 1;
+    msbPosition++;
   }
 
   std::vector<int> buckets(1 + (1 << BITS_PER_GROUP_RADIX_PASS), 0);
@@ -652,10 +742,11 @@ groupByAdaptiveAuxSort(HA_tsl::robin_map<K, std::tuple<As...>>& map, K largestMa
       K* keyPtr1 = section.key1;
       K* keyPtr2 = section.key2;
       for(i = 0; i < section.n; ++i) {
-        buckets[1 + ((((keyPtr2[i] << 8) | keyPtr1[i]) >> shifts) & mask)]++;
+        buckets[1 + ((((keyPtr2[i] << FIRST_KEY_BITS) | keyPtr1[i]) >> shifts) & mask)]++;
       }
     }
   }
+
   std::vector<std::pair<K, std::tuple<As...>>> mapEntries;
   if(map.size() <= static_cast<size_t>(entriesInMapToTrack)) {
     mapEntries.reserve(map.size());
@@ -707,7 +798,7 @@ groupByAdaptiveAuxSort(HA_tsl::robin_map<K, std::tuple<As...>>& map, K largestMa
       K* keyPtr1 = section.key1;
       K* keyPtr2 = section.key2;
       for(i = 0; i < section.n; ++i) {
-        K key = (keyPtr2[i] << 8) | keyPtr1[i];
+        K key = (keyPtr2[i] << FIRST_KEY_BITS) | keyPtr1[i];
         auto index = buckets[(key >> shifts) & mask]++;
         keys[index] = key;
         payloads[index] = [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
@@ -720,15 +811,16 @@ groupByAdaptiveAuxSort(HA_tsl::robin_map<K, std::tuple<As...>>& map, K largestMa
   msbPosition -= radixBits;
   if(msbPosition == 0) {
     groupBySortAggPassOnly<K, As...>(n, keys, payloads, resultKeys, resultKeys2, resultValueVectors,
-                                     secondKey, aggregators...);
+                                     secondKey, splitKeysInResult, aggregators...);
   } else if(msbPosition <= BITS_PER_GROUP_RADIX_PASS) {
     std::fill(buckets.begin(), buckets.end(), 0);
     int prevPartitionEnd = 0;
     for(i = 0; i < numBuckets; i++) {
       if(partitions[i] != prevPartitionEnd) {
-        groupBySortFinalPassAndAgg<K, As...>(
-            partitions[i] - prevPartitionEnd, prevPartitionEnd + keys, prevPartitionEnd + payloads,
-            resultKeys, resultKeys2, resultValueVectors, secondKey, msbPosition, aggregators...);
+        groupBySortFinalPassAndAgg<K, As...>(partitions[i] - prevPartitionEnd,
+                                             prevPartitionEnd + keys, prevPartitionEnd + payloads,
+                                             resultKeys, resultKeys2, resultValueVectors, secondKey,
+                                             splitKeysInResult, msbPosition, aggregators...);
       }
       prevPartitionEnd = partitions[i];
     }
@@ -740,46 +832,29 @@ groupByAdaptiveAuxSort(HA_tsl::robin_map<K, std::tuple<As...>>& map, K largestMa
         groupBySortAux<K, As...>(partitions[i] - prevPartitionEnd, buckets, prevPartitionEnd + keys,
                                  prevPartitionEnd + payloads, prevPartitionEnd + keysBuffer,
                                  prevPartitionEnd + payloadsBuffer, resultKeys, resultKeys2,
-                                 resultValueVectors, secondKey, msbPosition, aggregators...);
+                                 resultValueVectors, secondKey, splitKeysInResult, msbPosition,
+                                 aggregators...);
       }
       prevPartitionEnd = partitions[i];
     }
   }
 
-  result.emplace_back(Span<std::remove_cv_t<K>>(std::move(resultKeys)));
-  if(secondKey)
-    result.emplace_back(Span<std::remove_cv_t<K>>(std::move(resultKeys2)));
-  [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
-    (result.emplace_back(Span<std::remove_cv_t<As>>(std::move(std::get<Is>(resultValueVectors)))),
-     ...);
-  }(std::make_index_sequence<sizeof...(As)>());
-
-  return result;
+  return std::make_tuple(resultKeys, resultKeys2, resultValueVectors);
 }
 
 template <typename K, typename... As>
-std::vector<ExpressionSpanArguments>
-groupByAdaptive(int cardinality, bool secondKey, ExpressionSpanArguments&& keySpans1,
-                ExpressionSpanArguments&& keySpans2, std::vector<Span<As>>&&... typedAggCols,
-                Aggregator<As>... aggregators) {
-  int n = 0;
-  std::vector<int> spanSizes;
-  spanSizes.reserve(keySpans1.size());
-  for(const auto& untypedSpan : keySpans1) {
-    auto& keySpan1 = std::get<Span<K>>(untypedSpan);
-    n += keySpan1.size();
-    spanSizes.push_back(keySpan1.size());
-  }
+AggregatedKeysAndPayload<K, As...>
+groupByAdaptive(const std::vector<int>& spanSizes, int n, int outerIndex, int innerIndex,
+                int cardinality, bool secondKey, bool splitKeysInResult, K& largestKey,
+                const ExpressionSpanArguments& keySpans1, const ExpressionSpanArguments& keySpans2,
+                const std::vector<Span<As>>&... typedAggCols, Aggregator<As>... aggregators) {
 
-  //  constexpr float percentInputInTransientCheck = 0.0001;
   float percentInputInTransientCheck = adaptive::config::percentInputInTransientCheck_;
   int tuplesInTransientCheck =
       std::max(1, static_cast<int>(percentInputInTransientCheck * static_cast<float>(n)));
 
-  //  constexpr int tuplesInCacheMissCheck = 75 * 1000;
   int tuplesInCacheMissCheck = adaptive::config::tuplesInCacheMissCheck_;
 
-  //  constexpr float percentInputBetweenHashing = 0.25;
   float percentInputBetweenHashing = adaptive::config::percentInputBetweenHashing_;
   int tuplesBetweenHashing =
       std::max(1, static_cast<int>(percentInputBetweenHashing * static_cast<float>(n)));
@@ -790,7 +865,8 @@ groupByAdaptive(int cardinality, bool secondKey, ExpressionSpanArguments&& keySp
   std::cout << "tuplesBetweenHashing:   " << tuplesBetweenHashing << std::endl;
 #endif
 
-  int initialSize = std::max(static_cast<int>(HASHMAP_OVERALLOCATION_FACTOR * cardinality), 400000);
+  int initialSize = std::max(
+      static_cast<int>(HASHMAP_OVERALLOCATION_FACTOR * static_cast<float>(cardinality)), 400000);
   HA_tsl::robin_map<K, std::tuple<As...>> map(initialSize);
 
   float percentInputToTrack = adaptive::config::percentInputToTrack_;
@@ -806,23 +882,20 @@ groupByAdaptive(int cardinality, bool secondKey, ExpressionSpanArguments&& keySp
 
   std::vector<Section<K, As...>> sectionsToBeSorted;
   int elements = 0;
-  K mapLargestKey = std::numeric_limits<K>::lowest();
   int tuplesToProcess, tuplesInCheck;
 
-  int index = 0;
-  int outerIndex = 0;
-  int innerIndex = 0;
+  int tuplesProcessed = 0;
 
   auto runGroupByHashOnSection = [&](int tuplesToProcess_) mutable {
     if(!secondKey) {
-      groupByAdaptiveAuxHash<K, As...>(map, mapLargestKey, mapPtrs, mapPtrsSize,
-                                       entriesInMapToTrack, tuplesToProcess_, secondKey,
+      groupByAdaptiveAuxHash<K, As...>(map, largestKey, mapPtrs, mapPtrsSize, entriesInMapToTrack,
+                                       tuplesToProcess_, secondKey,
                                        &(std::get<Span<K>>(keySpans1.at(outerIndex))[innerIndex]),
                                        &(std::get<Span<K>>(keySpans1.at(outerIndex))[innerIndex]),
                                        &(typedAggCols[outerIndex][innerIndex])..., aggregators...);
     } else {
-      groupByAdaptiveAuxHash<K, As...>(map, mapLargestKey, mapPtrs, mapPtrsSize,
-                                       entriesInMapToTrack, tuplesToProcess_, secondKey,
+      groupByAdaptiveAuxHash<K, As...>(map, largestKey, mapPtrs, mapPtrsSize, entriesInMapToTrack,
+                                       tuplesToProcess_, secondKey,
                                        &(std::get<Span<K>>(keySpans1.at(outerIndex))[innerIndex]),
                                        &(std::get<Span<K>>(keySpans2.at(outerIndex))[innerIndex]),
                                        &(typedAggCols[outerIndex][innerIndex])..., aggregators...);
@@ -843,11 +916,11 @@ groupByAdaptive(int cardinality, bool secondKey, ExpressionSpanArguments&& keySp
     }
   };
 
-  while(index < n) {
+  while(tuplesProcessed < n) {
 
-    tuplesToProcess = std::min(tuplesInTransientCheck, n - index);
+    tuplesToProcess = std::min(tuplesInTransientCheck, n - tuplesProcessed);
     tuplesInCheck = tuplesToProcess;
-    index += tuplesToProcess;
+    tuplesProcessed += tuplesToProcess;
     eventSet.readCounters();
     //////////// GROUP BY HASH ON tuplesToProcess elements ////////////
     while(tuplesToProcess && (spanSizes[outerIndex] - innerIndex) <= tuplesToProcess) {
@@ -865,10 +938,11 @@ groupByAdaptive(int cardinality, bool secondKey, ExpressionSpanArguments&& keySp
 
     if(monitor.robustnessIncreaseRequiredBasedOnDtlbLoadMisses(tuplesInCheck)) {
 #ifdef ADAPTIVITY_OUTPUT
-      std::cout << "Switched to sort at index " << index << std::endl;
+      std::cout << "Switched to sort after processing " << tuplesProcessed << " tuples"
+                << std::endl;
 #endif
-      tuplesToProcess = std::min(tuplesBetweenHashing, n - index);
-      index += tuplesToProcess;
+      tuplesToProcess = std::min(tuplesBetweenHashing, n - tuplesProcessed);
+      tuplesProcessed += tuplesToProcess;
       elements += tuplesToProcess;
       //////////// GROUP BY SORT ON tuplesToProcess elements ////////////
       while(tuplesToProcess && (spanSizes[outerIndex] - innerIndex) <= tuplesToProcess) {
@@ -886,8 +960,8 @@ groupByAdaptive(int cardinality, bool secondKey, ExpressionSpanArguments&& keySp
     }
 
     // Cache warmup
-    tuplesToProcess = std::min(tuplesInCacheMissCheck, n - index);
-    index += tuplesToProcess;
+    tuplesToProcess = std::min(tuplesInCacheMissCheck, n - tuplesProcessed);
+    tuplesProcessed += tuplesToProcess;
     //////////// GROUP BY HASH ON tuplesToProcess elements ////////////
     while(tuplesToProcess && (spanSizes[outerIndex] - innerIndex) <= tuplesToProcess) {
       runGroupByHashOnSection(spanSizes[outerIndex] - innerIndex);
@@ -901,11 +975,11 @@ groupByAdaptive(int cardinality, bool secondKey, ExpressionSpanArguments&& keySp
     }
     ///////////////////////////////////////////////////////////////////
 
-    while(index < n) {
+    while(tuplesProcessed < n) {
 
-      tuplesToProcess = std::min(tuplesInCacheMissCheck, n - index);
+      tuplesToProcess = std::min(tuplesInCacheMissCheck, n - tuplesProcessed);
       tuplesInCheck = tuplesToProcess;
-      index += tuplesToProcess;
+      tuplesProcessed += tuplesToProcess;
       eventSet.readCounters();
       //////////// GROUP BY HASH ON tuplesToProcess elements ////////////
       while(tuplesToProcess && (spanSizes[outerIndex] - innerIndex) <= tuplesToProcess) {
@@ -923,10 +997,10 @@ groupByAdaptive(int cardinality, bool secondKey, ExpressionSpanArguments&& keySp
 
       if(monitor.robustnessIncreaseRequiredBasedOnCacheMisses(tuplesInCheck)) {
 #ifdef ADAPTIVITY_OUTPUT
-        std::cout << "Switched to sort at index " << index << std::endl;
+        std::cout << "Switched to sort at index " << tuplesProcessed << std::endl;
 #endif
-        tuplesToProcess = std::min(tuplesBetweenHashing, n - index);
-        index += tuplesToProcess;
+        tuplesToProcess = std::min(tuplesBetweenHashing, n - tuplesProcessed);
+        tuplesProcessed += tuplesToProcess;
         elements += tuplesToProcess;
         //////////// GROUP BY SORT ON tuplesToProcess elements ////////////
         while(tuplesToProcess && (spanSizes[outerIndex] - innerIndex) <= tuplesToProcess) {
@@ -958,12 +1032,12 @@ groupByAdaptive(int cardinality, bool secondKey, ExpressionSpanArguments&& keySp
     std::tuple<std::vector<std::remove_cv_t<As>>...> resultValueVectors;
     std::apply([&](auto&&... vec) { (vec.reserve(cardinality), ...); }, resultValueVectors);
 
-    auto addKeys = [&resultKeys, &resultKeys2, secondKey](auto key) mutable {
-      if(!secondKey) {
-        resultKeys.push_back(key);
+    auto addKeys = [&resultKeys, &resultKeys2, secondKey, splitKeysInResult](auto key) mutable {
+      if(secondKey && splitKeysInResult) {
+        resultKeys.push_back(key & FIRST_KEY_MASK);
+        resultKeys2.push_back(key >> FIRST_KEY_BITS);
       } else {
-        resultKeys.push_back(key & 0xFF);
-        resultKeys2.push_back(key >> 8);
+        resultKeys.push_back(key);
       }
     };
 
@@ -975,32 +1049,309 @@ groupByAdaptive(int cardinality, bool secondKey, ExpressionSpanArguments&& keySp
       }(std::make_index_sequence<sizeof...(As)>());
     }
 
-    result.emplace_back(Span<std::remove_cv_t<K>>(std::move(resultKeys)));
-    if(secondKey)
-      result.emplace_back(Span<std::remove_cv_t<K>>(std::move(resultKeys2)));
-    [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
-      (result.emplace_back(Span<std::remove_cv_t<As>>(std::move(std::get<Is>(resultValueVectors)))),
-       ...);
-    }(std::make_index_sequence<sizeof...(As)>());
-
-    return result;
+    return std::make_tuple(resultKeys, resultKeys2, resultValueVectors);
   }
 
   elements += map.size();
-  return groupByAdaptiveAuxSort<K, As...>(map, mapLargestKey, mapPtrs, entriesInMapToTrack,
-                                          elements, cardinality, sectionsToBeSorted, secondKey,
-                                          aggregators...);
+  return groupByAdaptiveAuxSort<K, As...>(map, largestKey, mapPtrs, entriesInMapToTrack, elements,
+                                          cardinality, sectionsToBeSorted, secondKey,
+                                          splitKeysInResult, aggregators...);
 }
 
-/************************** SINGLE-THREADED FOR MULTI-THREADED *************************/
+template <typename K, typename... As>
+std::vector<ExpressionSpanArguments>
+groupByAdaptive(int cardinality, bool secondKey, ExpressionSpanArguments&& keySpans1,
+                ExpressionSpanArguments&& keySpans2, std::vector<Span<As>>&&... typedAggCols,
+                Aggregator<As>... aggregators) {
+  K largestKey = std::numeric_limits<K>::lowest();
+  int n = 0;
+  std::vector<int> spanSizes;
+  spanSizes.reserve(keySpans1.size());
+  for(const auto& untypedSpan : keySpans1) {
+    auto& keySpan1 = std::get<Span<K>>(untypedSpan);
+    n += keySpan1.size();
+    spanSizes.push_back(keySpan1.size());
+  }
+
+  auto resultVectors =
+      groupByAdaptive<K, As...>(spanSizes, n, 0, 0, cardinality, secondKey, true, largestKey,
+                                keySpans1, keySpans2, typedAggCols..., aggregators...);
+
+  std::vector<ExpressionSpanArguments> result;
+  result.reserve(sizeof...(As) + 1 + secondKey);
+
+  result.emplace_back(Span<K>(std::move(std::get<0>(resultVectors))));
+  if(secondKey)
+    result.emplace_back(Span<K>(std::move(std::get<1>(resultVectors))));
+  [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
+    (result.emplace_back(Span<As>(std::move(std::get<Is>(std::get<2>(resultVectors))))), ...);
+  }(std::make_index_sequence<sizeof...(As)>());
+
+  return result;
+}
 
 /************************************ MULTI-THREADED ***********************************/
+
+template <typename K, typename... As>
+void groupByAdaptiveParallelPerformMerge(std::mutex& resultsMutex, int taskNum,
+                                         std::vector<int8_t>& threadFinishedAndWaitingFlags,
+                                         std::atomic<int>& numFinishedThreads,
+                                         std::condition_variable& cv, int mergeThreadId1,
+                                         int mergeThreadId2,
+                                         std::vector<AggregatedKeysAndPayload<K, As...>>& results,
+                                         Aggregator<As>... aggregators) {
+  AggregatedKeysAndPayload<K, As...> mergeInput1;
+  AggregatedKeysAndPayload<K, As...> mergeInput2;
+  {
+    std::lock_guard<std::mutex> lock(resultsMutex);
+    mergeInput1 = std::move(results[mergeThreadId1]);
+    mergeInput2 = std::move(results[mergeThreadId2]);
+  }
+
+  std::vector<K> keys1 = std::move(std::get<0>(mergeInput1));
+  std::vector<K> keys2 = std::move(std::get<0>(mergeInput2));
+  std::tuple<std::vector<As>...> payloads1 = std::move(std::get<2>(mergeInput1));
+  std::tuple<std::vector<As>...> payloads2 = std::move(std::get<2>(mergeInput2));
+
+  size_t n1 = keys1.size();
+  size_t n2 = keys2.size();
+  size_t maxOutputSize = n1 + n2;
+
+  std::vector<K> resultKeys;
+  resultKeys.reserve(maxOutputSize);
+  std::vector<K> resultKeys2;
+  std::tuple<std::vector<As>...> resultValueVectors;
+  std::apply([&](auto&&... vec) { (vec.reserve(maxOutputSize), ...); }, resultValueVectors);
+
+  size_t l = 0;
+  size_t r = 0;
+
+  while(l < n1 && r < n2) {
+    if(keys1[l] < keys2[r]) {
+      resultKeys.push_back(keys1[l]);
+      [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
+        ((std::get<Is>(resultValueVectors).push_back(std::get<Is>(payloads1)[l])), ...);
+      }(std::make_index_sequence<sizeof...(As)>());
+      l++;
+    } else if(keys2[r] < keys1[l]) {
+      resultKeys.push_back(keys2[r]);
+      [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
+        ((std::get<Is>(resultValueVectors).push_back(std::get<Is>(payloads2)[r])), ...);
+      }(std::make_index_sequence<sizeof...(As)>());
+      r++;
+    } else {
+      resultKeys.push_back(keys1[l]);
+      [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
+        ((std::get<Is>(resultValueVectors)
+              .push_back(aggregators(std::get<Is>(payloads1)[l], std::get<Is>(payloads2)[r]))),
+         ...);
+      }(std::make_index_sequence<sizeof...(As)>());
+      l++;
+      r++;
+    }
+  }
+
+  if(l < n1) {
+    if(!resultKeys.empty() && resultKeys.back() == keys1[l]) {
+      [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
+        ((std::get<Is>(resultValueVectors).back() =
+              aggregators(std::get<Is>(resultValueVectors).back(), std::get<Is>(payloads1)[l])),
+         ...);
+      }(std::make_index_sequence<sizeof...(As)>());
+      l++;
+    }
+    resultKeys.insert(resultKeys.end(), std::make_move_iterator(keys1.begin() + l),
+                      std::make_move_iterator(keys1.end()));
+    [&]<size_t... Is>(std::index_sequence<Is...>) {
+      ((std::get<Is>(resultValueVectors)
+            .insert(std::get<Is>(resultValueVectors).end(),
+                    std::make_move_iterator(std::get<Is>(payloads1).begin() + l),
+                    std::make_move_iterator(std::get<Is>(payloads1).end()))),
+       ...);
+    }(std::make_index_sequence<sizeof...(As)>());
+  } else if(r < n2) {
+    if(!resultKeys.empty() && resultKeys.back() == keys2[r]) {
+      [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
+        ((std::get<Is>(resultValueVectors).back() =
+              aggregators(std::get<Is>(resultValueVectors).back(), std::get<Is>(payloads2)[r])),
+         ...);
+      }(std::make_index_sequence<sizeof...(As)>());
+      r++;
+    }
+    resultKeys.insert(resultKeys.end(), std::make_move_iterator(keys2.begin() + r),
+                      std::make_move_iterator(keys2.end()));
+    [&]<size_t... Is>(std::index_sequence<Is...>) {
+      ((std::get<Is>(resultValueVectors)
+            .insert(std::get<Is>(resultValueVectors).end(),
+                    std::make_move_iterator(std::get<Is>(payloads2).begin() + r),
+                    std::make_move_iterator(std::get<Is>(payloads2).end()))),
+       ...);
+    }(std::make_index_sequence<sizeof...(As)>());
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(resultsMutex);
+    results[taskNum] = std::make_tuple(resultKeys, resultKeys2, resultValueVectors);
+    threadFinishedAndWaitingFlags[taskNum] = 1;
+  }
+  numFinishedThreads++;
+  cv.notify_one();
+}
+
+template <typename K, typename... As>
+std::vector<ExpressionSpanArguments> groupByAdaptiveParallelMerge(
+    std::condition_variable& cv, std::mutex& cvMutex, std::mutex& resultsMutex,
+    std::atomic<int>& numFinishedThreads, std::vector<int8_t>& threadFinishedAndWaitingFlags,
+    int dop, bool secondKey, std::vector<AggregatedKeysAndPayload<K, As...>>& results,
+    Aggregator<As>... aggregators) {
+
+  auto& threadPool = ThreadPool::getInstance();
+
+  int mergeTasks = dop - 1;
+  int mergeTasksCreated = 0;
+  std::unique_lock<std::mutex> lock(cvMutex);
+
+  while(mergeTasksCreated < mergeTasks) {
+    cv.wait(lock, [&numFinishedThreads] { return numFinishedThreads >= 2; });
+    numFinishedThreads -= 2;
+
+    int thread1Id = -1;
+    int thread2Id = -1;
+
+    for(int i = 0; i < static_cast<int>(threadFinishedAndWaitingFlags.size()); i++) {
+      if(threadFinishedAndWaitingFlags[i] == 1) {
+        threadFinishedAndWaitingFlags[i] = 0;
+        if(thread1Id < 0) {
+          thread1Id = i;
+        } else {
+          thread2Id = i;
+          break;
+        }
+      }
+    }
+
+    int taskNum = dop + mergeTasksCreated;
+    threadPool.enqueue([&resultsMutex, taskNum, &threadFinishedAndWaitingFlags, &numFinishedThreads,
+                        &cv, thread1Id, thread2Id, &results, aggregators...] {
+      groupByAdaptiveParallelPerformMerge<K, As...>(
+          resultsMutex, taskNum, threadFinishedAndWaitingFlags, numFinishedThreads, cv, thread1Id,
+          thread2Id, results, aggregators...);
+    });
+
+    mergeTasksCreated++;
+  }
+
+  cv.wait(lock, [&numFinishedThreads] { return numFinishedThreads == 1; });
+  AggregatedKeysAndPayload<K, As...>& resultVectors = results.back();
+
+  std::vector<ExpressionSpanArguments> result;
+  result.reserve(sizeof...(As) + 1 + secondKey);
+
+  if(!secondKey) {
+    result.emplace_back(Span<K>(std::move(std::get<0>(resultVectors))));
+  } else {
+    std::vector<K> resultKeys1 = std::move(std::get<0>(resultVectors));
+    std::vector<K> resultKeys2 = std::move(std::get<1>(resultVectors));
+    resultKeys2.reserve(resultKeys1.size());
+    for(size_t i = 0; i < resultKeys1.size(); ++i) {
+      resultKeys2.push_back(resultKeys1[i] >> FIRST_KEY_BITS);
+      resultKeys1[i] = resultKeys1[i] & FIRST_KEY_MASK;
+    }
+    result.emplace_back(Span<K>(std::move(resultKeys1)));
+    result.emplace_back(Span<K>(std::move(resultKeys2)));
+  }
+
+  [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
+    (result.emplace_back(Span<As>(std::move(std::get<Is>(std::get<2>(resultVectors))))), ...);
+  }(std::make_index_sequence<sizeof...(As)>());
+
+  return result;
+}
+
+template <typename K, typename... As>
+std::vector<ExpressionSpanArguments>
+groupByAdaptiveParallel(int dop, int cardinality, bool secondKey,
+                        ExpressionSpanArguments&& keySpans1, ExpressionSpanArguments&& keySpans2,
+                        std::vector<Span<As>>&&... typedAggCols, Aggregator<As>... aggregators) {
+
+  auto& threadPool = ThreadPool::getInstance();
+
+  int n = 0;
+  std::vector<int> spanSizes;
+  spanSizes.reserve(keySpans1.size());
+  for(const auto& untypedSpan : keySpans1) {
+    auto& keySpan1 = std::get<Span<K>>(untypedSpan);
+    n += keySpan1.size();
+    spanSizes.push_back(keySpan1.size());
+  }
+
+  dop = std::min(dop, n);
+  int threadTasks = (2 * dop) - 1;
+  std::mutex resultsMutex;
+  std::vector<AggregatedKeysAndPayload<K, As...>> results(threadTasks);
+
+  std::atomic<int> numFinishedThreads = 0;
+  // std::vector<bool> is not guaranteed thread safe so use int8_t with 0 for False, 1 for True
+  std::vector<int8_t> threadFinishedAndWaitingFlags(threadTasks, 0);
+  std::condition_variable cv;
+  std::mutex cvMutex;
+
+  int tuplesPerThreadBaseline = n / dop;
+  int remainingTuples = n % dop;
+  int outerIndex = 0;
+  int innerIndex = 0;
+  int tuplesPerThread;
+
+  for(auto taskNum = 0; taskNum < dop; ++taskNum) {
+    tuplesPerThread = tuplesPerThreadBaseline + (taskNum < remainingTuples);
+
+    threadPool.enqueue([&resultsMutex, &threadFinishedAndWaitingFlags, &numFinishedThreads, &cv,
+                        taskNum, &spanSizes, tuplesPerThread, outerIndex, innerIndex, cardinality,
+                        secondKey, &keySpans1, &keySpans2, &typedAggCols..., aggregators...,
+                        &results] {
+      K largestKey = std::numeric_limits<K>::lowest();
+      auto aggregatedKeysAndPayload = groupByAdaptive<K, As...>(
+          spanSizes, tuplesPerThread, outerIndex, innerIndex, cardinality, secondKey, false,
+          largestKey, keySpans1, keySpans2, typedAggCols..., aggregators...);
+
+      if(largestKey > 0) { // We only used hash-based Group, so need to sort result
+        std::tuple<As*...> payloadPtrs = [&]<size_t... Is>(std::index_sequence<Is...>) {
+          return std::make_tuple(std::get<Is>(std::get<2>(aggregatedKeysAndPayload)).data()...);
+        }(std::make_index_sequence<sizeof...(As)>());
+        sortByKey<K, As...>(std::get<0>(aggregatedKeysAndPayload).size(), largestKey,
+                            std::get<0>(aggregatedKeysAndPayload).data(), payloadPtrs);
+      }
+
+      {
+        std::lock_guard<std::mutex> lock(resultsMutex);
+        results[taskNum] = std::move(aggregatedKeysAndPayload);
+        threadFinishedAndWaitingFlags[taskNum] = 1;
+      }
+      numFinishedThreads++;
+      cv.notify_one();
+    });
+
+    // Update outer and inner indexes to the start of the next thread
+    while(tuplesPerThread && (spanSizes[outerIndex] - innerIndex) <= tuplesPerThread) {
+      tuplesPerThread -= (spanSizes[outerIndex] - innerIndex);
+      ++outerIndex;
+      innerIndex = 0;
+    }
+    if(tuplesPerThread > 0) {
+      innerIndex += tuplesPerThread;
+    }
+  }
+
+  return groupByAdaptiveParallelMerge<K, As...>(cv, cvMutex, resultsMutex, numFinishedThreads,
+                                                threadFinishedAndWaitingFlags, dop, secondKey,
+                                                results, aggregators...);
+}
 
 /*********************************** ENTRY FUNCTION ************************************/
 
 template <typename K, typename... As>
 std::vector<ExpressionSpanArguments>
-group(Group implementation, int numKeys, ExpressionSpanArguments&& keySpans1,
+group(Group implementation, int dop, int numKeys, ExpressionSpanArguments&& keySpans1,
       ExpressionSpanArguments&& keySpans2, std::vector<Span<As>>&&... typedAggCols,
       Aggregator<As>... aggregators) {
   assert(numKeys >= 0 && numKeys <= 2);
@@ -1008,19 +1359,32 @@ group(Group implementation, int numKeys, ExpressionSpanArguments&& keySpans1,
   if(numKeys == 0) {
     return groupNoKeys<As...>(std::move(typedAggCols)..., aggregators...);
   }
+#ifdef USE_ADAPTIVE_OVER_ADAPTIVE_PARALLEL_FOR_DOP_1
+  if(implementation == Group::GroupAdaptiveParallel && dop == 1) {
+    return groupByAdaptive<K, As...>(cardinality, numKeys == 2, std::move(keySpans1),
+                                     std::move(keySpans2), std::move(typedAggCols)...,
+                                     aggregators...);
+  }
+#endif
   switch(implementation) {
   case Group::Hash:
+    assert(dop == 1);
     return groupByHash<K, As...>(cardinality, numKeys == 2, std::move(keySpans1),
                                  std::move(keySpans2), std::move(typedAggCols)..., aggregators...);
   case Group::Sort:
+    assert(dop == 1);
     return groupBySort<K, As...>(cardinality, numKeys == 2, std::move(keySpans1),
                                  std::move(keySpans2), std::move(typedAggCols)..., aggregators...);
   case Group::GroupAdaptive:
+    assert(dop == 1);
     return groupByAdaptive<K, As...>(cardinality, numKeys == 2, std::move(keySpans1),
                                      std::move(keySpans2), std::move(typedAggCols)...,
                                      aggregators...);
   case Group::GroupAdaptiveParallel:
-    throw std::runtime_error("Not yet implemented");
+    assert(adaptive::config::nonVectorizedDOP >= dop); // Will have a deadlock otherwise
+    return groupByAdaptiveParallel<K, As...>(dop, cardinality, numKeys == 2, std::move(keySpans1),
+                                             std::move(keySpans2), std::move(typedAggCols)...,
+                                             aggregators...);
   default:
     throw std::runtime_error("Invalid selection of 'Group' implementation!");
   }

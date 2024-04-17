@@ -66,42 +66,21 @@ static EngineInstanceState& getEngineInstanceState() {
 
 /******************************** AGGREGATION FUNCTIONS ********************************/
 
-template <typename T> using Aggregator = std::function<T(const T, const T, bool)>;
+template <typename T> using Aggregator = std::function<T(const T, const T)>;
 
 template <typename T>
-Aggregator<T> minAggregator =
-    [](const T currentAggregate, const T numberToInclude, bool firstAggregation) -> T {
-  if(firstAggregation) {
-    return numberToInclude;
-  }
+Aggregator<T> minAggregator = [](const T currentAggregate, const T numberToInclude) -> T {
   return std::min(currentAggregate, numberToInclude);
 };
 
 template <typename T>
-Aggregator<T> maxAggregator =
-    [](const T currentAggregate, const T numberToInclude, bool firstAggregation) -> T {
-  if(firstAggregation) {
-    return numberToInclude;
-  }
+Aggregator<T> maxAggregator = [](const T currentAggregate, const T numberToInclude) -> T {
   return std::max(currentAggregate, numberToInclude);
 };
 
 template <typename T>
-Aggregator<T> sumAggregator =
-    [](const T currentAggregate, const T numberToInclude, bool firstAggregation) -> T {
-  if(firstAggregation) {
-    return numberToInclude;
-  }
+Aggregator<T> sumAggregator = [](const T currentAggregate, const T numberToInclude) -> T {
   return currentAggregate + numberToInclude;
-};
-
-template <typename T>
-Aggregator<T> countAggregator =
-    [](const T currentAggregate, const T /*unused*/, bool firstAggregation) -> T {
-  if(firstAggregation) {
-    return 1;
-  }
-  return 1 + currentAggregate;
 };
 
 auto getAggregatorName = [](std::string_view name) -> adaptive::Aggregation {
@@ -127,7 +106,7 @@ template <typename T> auto getAggregatorFunction(const Aggregation aggregation) 
   case Aggregation::Sum:
     return sumAggregator<T>;
   case Aggregation::Count:
-    return countAggregator<T>;
+    return sumAggregator<T>; // We perform operator on array of 1s, so use super aggregate operation
   default:
     throw std::invalid_argument("Invalid aggregator specified.");
   }
@@ -547,38 +526,50 @@ static ComplexExpression constructOutputTable(std::vector<ExpressionSpanArgument
 }
 
 template <typename K, typename... Ts>
-static ComplexExpression
-typeColumnsAndGroup(size_t index, size_t numCols, int numKeys, std::vector<Symbol>&& names,
-                    ExpressionSpanArguments&& key1, ExpressionSpanArguments&& key2,
-                    std::vector<ExpressionSpanArguments>&& untypedAggCols,
-                    std::vector<Aggregation>&& aggNames, std::vector<Span<Ts>>&&... typedAggCols,
-                    Aggregator<Ts>... aggregators) {
+static ComplexExpression typeColumnsAndGroup(
+    size_t index, int32_t dop, size_t numCols, int numKeys, std::vector<Symbol>&& names,
+    ExpressionSpanArguments&& key1, ExpressionSpanArguments&& key2,
+    std::vector<ExpressionSpanArguments>&& untypedAggCols, std::vector<Aggregation>&& aggNames,
+    std::vector<Span<Ts>>&&... typedAggCols, Aggregator<Ts>... aggregators) {
   if constexpr(sizeof...(Ts) <= MAX_AGGREGATION_ARGS) {
     if(index >= numCols) {
       auto groupedColumns = adaptive::group<K, Ts...>(
-          groupImplementation, numKeys, std::move(key1), std::move(key2),
+          groupImplementation, dop, numKeys, std::move(key1), std::move(key2),
           std::move(typedAggCols)..., std::move(aggregators)...);
       return constructOutputTable(std::move(groupedColumns), std::move(names));
     }
-    return std::visit(boss::utilities::overload(
-                          [&](auto&) -> ComplexExpression {
-                            throw std::runtime_error("Unsupported aggregation column type");
-                          },
-                          [&]<LimitedNumericType T>(Span<T>&) {
-                            ExpressionSpanArguments untypedSpans = std::move(untypedAggCols[index]);
-                            std::vector<Span<T>> typedSpans;
-                            typedSpans.reserve(untypedSpans.size());
-                            for(auto& untypedSpan : untypedSpans) {
-                              typedSpans.push_back(std::get<Span<T>>(std::move(untypedSpan)));
-                            }
-                            Aggregator<T> aggregator = getAggregatorFunction<T>(aggNames[index]);
-                            return typeColumnsAndGroup<K, Ts..., T>(
-                                index + 1, numCols, numKeys, std::move(names), std::move(key1),
-                                std::move(key2), std::move(untypedAggCols), std::move(aggNames),
-                                std::move(typedAggCols)..., std::move(typedSpans), aggregators...,
-                                aggregator);
-                          }),
-                      untypedAggCols[index].at(0));
+    return std::visit(
+        boss::utilities::overload(
+            [&](auto&) -> ComplexExpression {
+              throw std::runtime_error("Unsupported aggregation column type");
+            },
+            [&]<LimitedNumericType T>(Span<T>&) {
+              ExpressionSpanArguments untypedSpans = std::move(untypedAggCols[index]);
+              std::vector<Span<T>> typedSpans;
+              typedSpans.reserve(untypedSpans.size());
+              std::vector<T> ones;
+              if(aggNames[index] == Aggregation::Count) { // Convert into super aggregate
+                size_t maxLength = 0;
+                for(auto& untypedSpan : untypedSpans) {
+                  maxLength = std::max(maxLength, std::get<Span<T>>(untypedSpan).size());
+                }
+                ones.assign(maxLength, 1);
+                for(auto& untypedSpan : untypedSpans) {
+                  typedSpans.push_back(
+                      Span<T>(ones.data(), std::get<Span<T>>(untypedSpan).size(), []() {}));
+                }
+              } else {
+                for(auto& untypedSpan : untypedSpans) {
+                  typedSpans.push_back(std::get<Span<T>>(std::move(untypedSpan)));
+                }
+              }
+              Aggregator<T> aggregator = getAggregatorFunction<T>(aggNames[index]);
+              return typeColumnsAndGroup<K, Ts..., T>(
+                  index + 1, dop, numCols, numKeys, std::move(names), std::move(key1),
+                  std::move(key2), std::move(untypedAggCols), std::move(aggNames),
+                  std::move(typedAggCols)..., std::move(typedSpans), aggregators..., aggregator);
+            }),
+        untypedAggCols[index].at(0));
   } else {
     throw std::runtime_error("too many args");
   }
@@ -1457,16 +1448,20 @@ public:
         outputColumnNames.push_back(std::move(specifiedName));
       }
 
+      int32_t engineDOP = getEngineInstanceState().getVectorizedDOP() == -1
+                              ? nonVectorizedDOP
+                              : getEngineInstanceState().getVectorizedDOP();
+
       return std::visit(
           boss::utilities::overload(
               [&](auto&) -> ComplexExpression {
                 throw std::runtime_error("Key has unsupported column type");
               },
               [&]<LimitedIntegralType K>(const Span<K>&) mutable -> ComplexExpression {
-                return typeColumnsAndGroup<K>(0, numAggregations, static_cast<int>(numKeys),
-                                               std::move(outputColumnNames), std::move(key1),
-                                               std::move(key2), std::move(aggregationColumns),
-                                               std::move(aggFuncs));
+                return typeColumnsAndGroup<K>(
+                    0, engineDOP, numAggregations, static_cast<int>(numKeys),
+                    std::move(outputColumnNames), std::move(key1), std::move(key2),
+                    std::move(aggregationColumns), std::move(aggFuncs));
               }),
           key1Ref.at(0));
     };
