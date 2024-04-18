@@ -17,10 +17,11 @@ public:
   }
 
   template <typename Function, typename... Args> void enqueue(Function&& f, Args&&... args) {
-    {
-      std::unique_lock<std::mutex> lock(queueMutex);
-      tasks.emplace([=] { f(args...); });
-    }
+    std::lock_guard<std::mutex> lock(queueMutex);
+    tasks.emplace([func = std::forward<Function>(f),
+                   arguments = std::make_tuple(std::forward<Args>(args)...)]() mutable {
+      std::apply(std::move(func), std::move(arguments));
+    });
     task_cv.notify_one();
   }
 
@@ -71,10 +72,10 @@ private:
       }
       task();
       {
-        std::unique_lock<std::mutex> lock(pool->tasksCountMutex);
+        std::lock_guard<std::mutex> lock(pool->tasksCountMutex);
         ++(pool->tasksCompletedCount);
+        pool->wait_cv.notify_one();
       }
-      pool->wait_cv.notify_one();
     }
   }
 

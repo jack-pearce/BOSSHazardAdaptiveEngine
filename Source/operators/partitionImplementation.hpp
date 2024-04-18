@@ -1649,10 +1649,10 @@ private:
     std::vector<PartitionedArrayAlt<std::remove_cv_t<T1>>> firstPassPartitions1(firstPassDop);
     std::vector<PartitionedArrayAlt<std::remove_cv_t<T2>>> firstPassPartitions2(firstPassDop);
 
-    for(auto i = 0; i < firstPassDop; ++i) {
-      if(i < firstPassDop - 1) {
-        batchesPerThread1 = baselineBatchesPerThread1 + (i < remainingBatches1);
-        batchesPerThread2 = baselineBatchesPerThread2 + (i < remainingBatches2);
+    for(auto taskNum = 0; taskNum < firstPassDop; ++taskNum) {
+      if(taskNum < firstPassDop - 1) {
+        batchesPerThread1 = baselineBatchesPerThread1 + (taskNum < remainingBatches1);
+        batchesPerThread2 = baselineBatchesPerThread2 + (taskNum < remainingBatches2);
       } else {
         batchesPerThread1 = numBatches1 - startBatchNum1;
         batchesPerThread2 = numBatches2 - startBatchNum2;
@@ -1669,16 +1669,19 @@ private:
 
       threadPool.enqueue([this, overallOffset1, overallOffset2, startBatchNum1, endBatchNum1,
                           elementsInThread1, startBatchNum2, endBatchNum2, elementsInThread2,
-                          radixBitsOperator = radixBits.load(), &result1 = firstPassPartitions1[i],
-                          &result2 = firstPassPartitions2[i]] {
+                          radixBitsOperator = radixBits.load(), taskNum, &firstPassPartitions1,
+                          &firstPassPartitions2] {
         auto op = PartitionAdaptiveParallelFirstPass<std::remove_cv_t<T1>, std::remove_cv_t<T2>>(
             keySpans1, overallOffset1, keySpans2, overallOffset2, startBatchNum1, endBatchNum1,
             elementsInThread1, startBatchNum2, endBatchNum2, elementsInThread2, minimumRadixBits,
             radixBitsOperator, radixBits, msbToPartitionInput, maxElementsPerPartition,
             threadsStillRunning);
         auto results = op.processInput();
-        result1 = std::move(results.partitionedArrayOne);
-        result2 = std::move(results.partitionedArrayTwo);
+        {
+          std::lock_guard<std::mutex> lock(resultsMutex);
+          firstPassPartitions1[taskNum] = std::move(results.partitionedArrayOne);
+          firstPassPartitions2[taskNum] = std::move(results.partitionedArrayTwo);
+        }
       });
 
       startBatchNum1 += batchesPerThread1;
@@ -1775,30 +1778,33 @@ private:
     int partitionsComplete = 0;
     int furtherPartitioningTasks = 0;
 
-    for(size_t j = 0; j < partitions1.size(); ++j) {
-      if(partitions1[j] != prevPartitionEnd1 && partitions2[j] != prevPartitionEnd2) {
-        if((partitions1[j] - prevPartitionEnd1) > maxElementsPerPartition) {
-          threadPool.enqueue([this, n1 = partitions1[j] - prevPartitionEnd1,
+    for(size_t index = 0; index < partitions1.size(); ++index) {
+      if(partitions1[index] != prevPartitionEnd1 && partitions2[index] != prevPartitionEnd2) {
+        if((partitions1[index] - prevPartitionEnd1) > maxElementsPerPartition) {
+          threadPool.enqueue([this, n1 = partitions1[index] - prevPartitionEnd1,
                               keys1 = returnBuffer1.get() + prevPartitionEnd1,
                               indexes1 = returnIndexes1.get() + prevPartitionEnd1,
-                              prevPartitionEnd1, n2 = partitions2[j] - prevPartitionEnd2,
+                              prevPartitionEnd1, n2 = partitions2[index] - prevPartitionEnd2,
                               keys2 = returnBuffer2.get() + prevPartitionEnd2,
                               indexes2 = returnIndexes2.get() + prevPartitionEnd2,
-                              prevPartitionEnd2, &result = furtherPartitioningResults[j]] {
-            result = std::move(std::make_unique<TwoPartitionedArraysPartitionsOnly>(
-                getPartitionAdaptiveRawArrays<std::remove_cv_t<T1>, std::remove_cv_t<T2>>()
-                    .processInput(n1, keys1, indexes1, prevPartitionEnd1, n2, keys2, indexes2,
-                                  prevPartitionEnd2, minimumRadixBits, radixBits,
-                                  msbToPartitionInput, maxElementsPerPartition,
-                                  &totalOutputPartitions)));
+                              prevPartitionEnd2, &furtherPartitioningResults, index] {
+            auto op = getPartitionAdaptiveRawArrays<std::remove_cv_t<T1>, std::remove_cv_t<T2>>();
+            auto partitionsPtr = std::make_unique<TwoPartitionedArraysPartitionsOnly>(
+                op.processInput(n1, keys1, indexes1, prevPartitionEnd1, n2, keys2, indexes2,
+                                prevPartitionEnd2, minimumRadixBits, radixBits, msbToPartitionInput,
+                                maxElementsPerPartition, &totalOutputPartitions));
+            {
+              std::lock_guard<std::mutex> lock(resultsMutex);
+              furtherPartitioningResults[index] = std::move(partitionsPtr);
+            }
           });
           ++furtherPartitioningTasks;
         } else {
           ++partitionsComplete;
         }
       }
-      prevPartitionEnd1 = partitions1[j];
-      prevPartitionEnd2 = partitions2[j];
+      prevPartitionEnd1 = partitions1[index];
+      prevPartitionEnd2 = partitions2[index];
     }
 
     totalOutputPartitions.fetch_add(partitionsComplete);
@@ -2011,6 +2017,8 @@ private:
   std::atomic<int> threadsStillRunning;
   ThreadPool& threadPool;
   std::atomic<int> totalOutputPartitions;
+
+  std::mutex resultsMutex;
 };
 
 /********************************** UTILITY FUNCTIONS *********************************/

@@ -6,6 +6,7 @@
 #include <cstring>
 #include <functional>
 #include <iostream>
+#include <queue>
 #include <stdexcept>
 
 #include "hash_map/robin_map.h"
@@ -1093,21 +1094,11 @@ groupByAdaptive(int cardinality, bool secondKey, ExpressionSpanArguments&& keySp
 /************************************ MULTI-THREADED ***********************************/
 
 template <typename K, typename... As>
-void groupByAdaptiveParallelPerformMerge(std::mutex& resultsMutex, int taskNum,
-                                         std::vector<int8_t>& threadFinishedAndWaitingFlags,
-                                         std::atomic<int>& numFinishedThreads,
-                                         std::condition_variable& cv, int mergeThreadId1,
-                                         int mergeThreadId2,
-                                         std::vector<AggregatedKeysAndPayload<K, As...>>& results,
+void groupByAdaptiveParallelPerformMerge(std::mutex& resultsMutex, std::condition_variable& cv,
+                                         AggregatedKeysAndPayload<K, As...>&& mergeInput1,
+                                         AggregatedKeysAndPayload<K, As...>&& mergeInput2,
+                                         std::queue<AggregatedKeysAndPayload<K, As...>>& results,
                                          Aggregator<As>... aggregators) {
-  AggregatedKeysAndPayload<K, As...> mergeInput1;
-  AggregatedKeysAndPayload<K, As...> mergeInput2;
-  {
-    std::lock_guard<std::mutex> lock(resultsMutex);
-    mergeInput1 = std::move(results[mergeThreadId1]);
-    mergeInput2 = std::move(results[mergeThreadId2]);
-  }
-
   std::vector<K> keys1 = std::move(std::get<0>(mergeInput1));
   std::vector<K> keys2 = std::move(std::get<0>(mergeInput2));
   std::tuple<std::vector<As>...> payloads1 = std::move(std::get<2>(mergeInput1));
@@ -1191,58 +1182,42 @@ void groupByAdaptiveParallelPerformMerge(std::mutex& resultsMutex, int taskNum,
 
   {
     std::lock_guard<std::mutex> lock(resultsMutex);
-    results[taskNum] = std::make_tuple(resultKeys, resultKeys2, resultValueVectors);
-    threadFinishedAndWaitingFlags[taskNum] = 1;
+    results.push(std::make_tuple(resultKeys, resultKeys2, resultValueVectors));
+    cv.notify_one();
   }
-  numFinishedThreads++;
-  cv.notify_one();
 }
 
 template <typename K, typename... As>
 std::vector<ExpressionSpanArguments> groupByAdaptiveParallelMerge(
-    std::condition_variable& cv, std::mutex& cvMutex, std::mutex& resultsMutex,
-    std::atomic<int>& numFinishedThreads, std::vector<int8_t>& threadFinishedAndWaitingFlags,
-    int dop, bool secondKey, std::vector<AggregatedKeysAndPayload<K, As...>>& results,
-    Aggregator<As>... aggregators) {
+    std::condition_variable& cv, std::mutex& resultsMutex, int dop, bool secondKey,
+    std::queue<AggregatedKeysAndPayload<K, As...>>& results, Aggregator<As>... aggregators) {
 
   auto& threadPool = ThreadPool::getInstance();
 
-  int mergeTasks = dop - 1;
-  int mergeTasksCreated = 0;
-  std::unique_lock<std::mutex> lock(cvMutex);
-
-  while(mergeTasksCreated < mergeTasks) {
-    cv.wait(lock, [&numFinishedThreads] { return numFinishedThreads >= 2; });
-    numFinishedThreads -= 2;
-
-    int thread1Id = -1;
-    int thread2Id = -1;
-
-    for(int i = 0; i < static_cast<int>(threadFinishedAndWaitingFlags.size()); i++) {
-      if(threadFinishedAndWaitingFlags[i] == 1) {
-        threadFinishedAndWaitingFlags[i] = 0;
-        if(thread1Id < 0) {
-          thread1Id = i;
-        } else {
-          thread2Id = i;
-          break;
-        }
-      }
+  for(int i = 0; i < dop - 1; ++i) {
+    AggregatedKeysAndPayload<K, As...> mergeInput1;
+    AggregatedKeysAndPayload<K, As...> mergeInput2;
+    {
+      std::unique_lock<std::mutex> lock(resultsMutex);
+      cv.wait(lock, [&results] { return results.size() >= 2; });
+      mergeInput1 = std::move(results.front());
+      results.pop();
+      mergeInput2 = std::move(results.front());
+      results.pop();
     }
-
-    int taskNum = dop + mergeTasksCreated;
-    threadPool.enqueue([&resultsMutex, taskNum, &threadFinishedAndWaitingFlags, &numFinishedThreads,
-                        &cv, thread1Id, thread2Id, &results, aggregators...] {
-      groupByAdaptiveParallelPerformMerge<K, As...>(
-          resultsMutex, taskNum, threadFinishedAndWaitingFlags, numFinishedThreads, cv, thread1Id,
-          thread2Id, results, aggregators...);
+    threadPool.enqueue([&resultsMutex, &cv, mergeInput1 = std::move(mergeInput1),
+                        mergeInput2 = std::move(mergeInput2), &results, aggregators...]() mutable {
+      groupByAdaptiveParallelPerformMerge<K, As...>(resultsMutex, cv, std::move(mergeInput1),
+                                                    std::move(mergeInput2), results,
+                                                    aggregators...);
     });
-
-    mergeTasksCreated++;
   }
 
-  cv.wait(lock, [&numFinishedThreads] { return numFinishedThreads == 1; });
-  AggregatedKeysAndPayload<K, As...>& resultVectors = results.back();
+  std::unique_lock<std::mutex> lock(resultsMutex);
+  cv.wait(lock, [&results] { return results.size() == 1; });
+
+  AggregatedKeysAndPayload<K, As...> resultVectors = std::move(results.front());
+  results.pop();
 
   std::vector<ExpressionSpanArguments> result;
   result.reserve(sizeof...(As) + 1 + secondKey);
@@ -1286,15 +1261,9 @@ groupByAdaptiveParallel(int dop, int cardinality, bool secondKey,
   }
 
   dop = std::min(dop, n);
-  int threadTasks = (2 * dop) - 1;
   std::mutex resultsMutex;
-  std::vector<AggregatedKeysAndPayload<K, As...>> results(threadTasks);
-
-  std::atomic<int> numFinishedThreads = 0;
-  // std::vector<bool> is not guaranteed thread safe so use int8_t with 0 for False, 1 for True
-  std::vector<int8_t> threadFinishedAndWaitingFlags(threadTasks, 0);
+  std::queue<AggregatedKeysAndPayload<K, As...>> results;
   std::condition_variable cv;
-  std::mutex cvMutex;
 
   int tuplesPerThreadBaseline = n / dop;
   int remainingTuples = n % dop;
@@ -1305,10 +1274,9 @@ groupByAdaptiveParallel(int dop, int cardinality, bool secondKey,
   for(auto taskNum = 0; taskNum < dop; ++taskNum) {
     tuplesPerThread = tuplesPerThreadBaseline + (taskNum < remainingTuples);
 
-    threadPool.enqueue([&resultsMutex, &threadFinishedAndWaitingFlags, &numFinishedThreads, &cv,
-                        taskNum, &spanSizes, tuplesPerThread, outerIndex, innerIndex, cardinality,
-                        secondKey, &keySpans1, &keySpans2, &typedAggCols..., aggregators...,
-                        &results] {
+    threadPool.enqueue([&results, &resultsMutex, &cv, &spanSizes, tuplesPerThread, outerIndex,
+                        innerIndex, cardinality, secondKey, &keySpans1, &keySpans2,
+                        &typedAggCols..., aggregators...] {
       K largestKey = std::numeric_limits<K>::lowest();
       auto aggregatedKeysAndPayload = groupByAdaptive<K, As...>(
           spanSizes, tuplesPerThread, outerIndex, innerIndex, cardinality, secondKey, false,
@@ -1324,11 +1292,9 @@ groupByAdaptiveParallel(int dop, int cardinality, bool secondKey,
 
       {
         std::lock_guard<std::mutex> lock(resultsMutex);
-        results[taskNum] = std::move(aggregatedKeysAndPayload);
-        threadFinishedAndWaitingFlags[taskNum] = 1;
+        results.push(std::move(aggregatedKeysAndPayload));
+        cv.notify_one();
       }
-      numFinishedThreads++;
-      cv.notify_one();
     });
 
     // Update outer and inner indexes to the start of the next thread
@@ -1342,9 +1308,8 @@ groupByAdaptiveParallel(int dop, int cardinality, bool secondKey,
     }
   }
 
-  return groupByAdaptiveParallelMerge<K, As...>(cv, cvMutex, resultsMutex, numFinishedThreads,
-                                                threadFinishedAndWaitingFlags, dop, secondKey,
-                                                results, aggregators...);
+  return groupByAdaptiveParallelMerge<K, As...>(cv, resultsMutex, dop, secondKey, results,
+                                                aggregators...);
 }
 
 /*********************************** ENTRY FUNCTION ************************************/
