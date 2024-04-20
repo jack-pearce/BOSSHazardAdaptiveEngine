@@ -679,15 +679,21 @@ public:
     std::atomic<int32_t> positionToWrite = 0;
     std::vector<std::unique_ptr<SelectThreadArgs<T, P>>> threadArgs;
 
+    auto& threadPool = ThreadPool::getInstance();
+    auto& synchroniser = Synchroniser::getInstance();
+
     for(int32_t i = 0; i < dop; ++i) {
       threadArgs.push_back(std::make_unique<SelectThreadArgs<T, P>>(
           threadIndexes[i].first, threadIndexes[i].second, column, value, columnIsFirstArg,
           predicate, candidateIndexesPtr, candidateIndexes.begin(), &threadToMerge,
           &positionToWrite, dop, i));
-      ThreadPool::getInstance().enqueue(
-          [threadArg = threadArgs[i].get()] { selectAdaptiveParallelAux<T, P>(threadArg); });
+      threadPool.enqueue(
+          [threadArg = threadArgs[i].get(), &synchroniser] {
+            selectAdaptiveParallelAux<T, P>(threadArg);
+            synchroniser.taskComplete();
+          });
     }
-    ThreadPool::getInstance().waitUntilComplete(dop);
+    synchroniser.waitUntilComplete(dop);
 
 #ifdef PRINT_SELECTIVITY
     std::cout << positionToWrite << " values selected by predicate" << std::endl;
