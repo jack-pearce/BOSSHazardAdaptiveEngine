@@ -1,9 +1,12 @@
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <json/json.h>
 
+#include "groupQueries.hpp"
 #include "machineConstants.hpp"
+#include "machineConstantsImplementation.hpp"
 #include "utilities/systemInformation.hpp"
 
 namespace adaptive {
@@ -95,8 +98,13 @@ void MachineConstants::writeEmptyFile() {
   if(file.is_open()) {
     file << "{}";
     file.close();
+    std::filesystem::perms permissions =
+        std::filesystem::perms::owner_read | std::filesystem::perms::owner_write |
+        std::filesystem::perms::group_read | std::filesystem::perms::group_write |
+        std::filesystem::perms::others_read | std::filesystem::perms::others_write;
+    std::filesystem::permissions(machineConstantsFilePath, permissions);
   } else {
-    std::cerr << "Error opening file: " << machineConstantsFilePath << std::endl;
+    std::cerr << "Error creating file: " << machineConstantsFilePath << std::endl;
   }
 }
 
@@ -126,15 +134,29 @@ void MachineConstants::calculateMissingMachineConstants() {
       calculateSelectMachineConstants<int64_t>(dop);
     }
 
+    for(int groupQueryIdx = 1; groupQueryIdx <= 11; ++groupQueryIdx) {
+      auto names = getGroupMachineConstantNames(static_cast<GROUP_QUERIES>(groupQueryIdx), dop);
+      if(machineConstants.count(names.tlbMissRate) == 0 ||
+         machineConstants.count(names.llcMissRate) == 0) {
+        uint32_t numBytes = 4 + (4 * groupQueryIdx);
+        std::cout << "Machine constant for Group (" << std::to_string(numBytes)
+                  << "Bytes, DOP=" + dopStr +
+                         ") does not exist. Calculating now (this may take a while)."
+                  << std::endl;
+        calculateGroupMachineConstants(static_cast<GROUP_QUERIES>(groupQueryIdx),
+                                       static_cast<int>(dop));
+      }
+    }
+
     if(dop == logicalCoresCount()) {
       break;
     }
     dop = (dop * 2) <= logicalCoresCount() ? dop * 2 : logicalCoresCount();
+  }
 
-    if(machineConstants.count("Partition_minRadixBits") == 0 ||
-       machineConstants.count("Partition_startRadixBits") == 0) {
-      calculatePartitionMachineConstants();
-    }
+  if(machineConstants.count("Partition_minRadixBits") == 0 ||
+     machineConstants.count("Partition_startRadixBits") == 0) {
+    calculatePartitionMachineConstants();
   }
 
   adaptive::config::nonVectorizedDOP = nonVectorizedDOPvalue;

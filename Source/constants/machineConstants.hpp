@@ -1,34 +1,31 @@
 #ifndef BOSSHAZARDADAPTIVEENGINE_MACHINECONSTANTS_HPP
 #define BOSSHAZARDADAPTIVEENGINE_MACHINECONSTANTS_HPP
 
-#include <string>
 #include <map>
-
+#include <string>
 
 namespace adaptive {
 
 class MachineConstants {
 public:
-    static MachineConstants& getInstance();
-    MachineConstants(const MachineConstants&) = delete;
-    void operator=(const MachineConstants&) = delete;
+  static MachineConstants& getInstance();
+  MachineConstants(const MachineConstants&) = delete;
+  void operator=(const MachineConstants&) = delete;
 
-    [[nodiscard]] double getMachineConstant(const std::string &key) const;
-    void updateMachineConstant(const std::string& key, double value);
-    void calculateMissingMachineConstants();
+  [[nodiscard]] double getMachineConstant(const std::string& key) const;
+  void updateMachineConstant(const std::string& key, double value);
+  void calculateMissingMachineConstants();
 
 private:
-    MachineConstants();
-    ~MachineConstants() = default;
-    void loadMachineConstants();
-    void writeEmptyFile();
+  MachineConstants();
+  ~MachineConstants() = default;
+  void loadMachineConstants();
+  void writeEmptyFile();
 
-    std::map<std::string, double> machineConstants;
-    std::string machineConstantsFilePath;
+  std::map<std::string, double> machineConstants;
+  std::string machineConstantsFilePath;
 };
 
-}
+} // namespace adaptive
 
-#include "machineConstantsImplementation.hpp"
-
-#endif //BOSSHAZARDADAPTIVEENGINE_MACHINECONSTANTS_HPP
+#endif // BOSSHAZARDADAPTIVEENGINE_MACHINECONSTANTS_HPP

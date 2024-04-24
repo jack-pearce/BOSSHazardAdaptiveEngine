@@ -11,3 +11,8 @@ uint32_t roundDownToPowerOf2(uint32_t num) {
     return 1 << msbPos;
   }
 }
+
+void setCardinalityEnvironmentVariable(int cardinality) {
+  std::string value = std::to_string(cardinality);
+  setenv("GROUP_RESULT_CARDINALITY", value.c_str(), 1);
+}

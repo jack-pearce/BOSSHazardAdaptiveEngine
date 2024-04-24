@@ -21,14 +21,6 @@ extern uint32_t minTuplesPerThread;
 extern int32_t LOGICAL_CORE_COUNT;
 extern std::string projectFilePath;
 
-extern float percentInputToTrack_;
-extern float tuplesPerDtlbLoadMiss_;
-extern float tuplesPerLastLevelCacheMiss_;
-extern float percentInputInTransientCheck_;
-extern int tuplesInCacheMissCheck_;
-extern float percentInputBetweenHashing_;
-
-
 } // namespace config
 
 } // namespace adaptive

@@ -9,6 +9,7 @@
 #include <queue>
 #include <stdexcept>
 
+#include "constants/machineConstants.hpp"
 #include "hash_map/robin_map.h"
 #include "utilities/memory.hpp"
 #include "utilities/papiWrapper.hpp"
@@ -19,11 +20,16 @@
 
 namespace adaptive {
 
+constexpr float PERCENT_INPUT_TO_TRACK = 0.001;            // 0.1%
+constexpr float PERCENT_INPUT_IN_TRANSIENT_CHECK = 0.0001; // 0.01%
+constexpr int TUPLES_IN_CACHE_MISS_CHECK = 75 * 1000;      // 75,000
+constexpr float PERCENT_INPUT_BETWEEN_HASHING = 0.25;      // 25%
+
 constexpr int FIRST_KEY_BITS = 8; // Bits for first key when there are two keys
 constexpr int FIRST_KEY_MASK = static_cast<int>(1 << FIRST_KEY_BITS) - 1;
 constexpr int BITS_PER_GROUP_RADIX_PASS = 8;
 constexpr int DEFAULT_GROUP_RESULT_CARDINALITY = 100;
-constexpr float HASHMAP_OVERALLOCATION_FACTOR = 2.5; // TODO - test this value at 2.0
+constexpr float HASHMAP_OVERALLOCATION_FACTOR = 2.5;
 
 template <typename T> using Aggregator = std::function<T(const T, const T)>;
 
@@ -577,17 +583,11 @@ static inline PAPI_eventSet& getGroupEventSet() {
 
 class MonitorGroup {
 public:
-  explicit MonitorGroup(const long_long* dtlbLoadMisses_, const long_long* lastLevelCacheMisses_)
+  explicit MonitorGroup(const long_long* dtlbLoadMisses_, const long_long* lastLevelCacheMisses_,
+                        float tuplesPerDtlbLoadMiss_, float tuplesPerLastLevelCacheMiss_)
       : dtlbLoadMisses(dtlbLoadMisses_), lastLevelCacheMisses(lastLevelCacheMisses_),
-        tuplesPerDtlbLoadMiss(adaptive::config::tuplesPerDtlbLoadMiss_),
-        tuplesPerLastLevelCacheMiss(adaptive::config::tuplesPerLastLevelCacheMiss_) {
-    // TODO - read machine constant values, rather than hardcoded in config
-    // TODO - calculate machine constant values for GROUP
-    // TODO - machine constant values given arbitrary number of As and of arbitrary type?
-    // std::string machineConstantName = "GroupBy_" + std::to_string(sizeof(T1)) + "B_inputFilter_"
-    // +
-    //                                  std::to_string(sizeof(T2)) + "B_inputAggregate_1_dop";
-  }
+        tuplesPerDtlbLoadMiss(tuplesPerDtlbLoadMiss_),
+        tuplesPerLastLevelCacheMiss(tuplesPerLastLevelCacheMiss_) {}
 
   inline bool robustnessIncreaseRequiredBasedOnDtlbLoadMisses(int tuplesProcessed) {
 #ifdef DEBUG
@@ -845,24 +845,20 @@ groupByAdaptiveAuxSort(HA_tsl::robin_map<K, std::tuple<As...>>& map, K& largestK
 
 template <typename K, typename... As>
 AggregatedKeysAndPayload<K, As...>
-groupByAdaptive(const std::vector<int>& spanSizes, int n, int outerIndex, int innerIndex,
+groupByAdaptive(int dop, const std::vector<int>& spanSizes, int n, int outerIndex, int innerIndex,
                 int cardinality, bool secondKey, bool splitKeysInResult, K& largestKey,
                 const ExpressionSpanArguments& keySpans1, const ExpressionSpanArguments& keySpans2,
                 const std::vector<Span<As>>&... typedAggCols, Aggregator<As>... aggregators) {
 
-  float percentInputInTransientCheck = adaptive::config::percentInputInTransientCheck_;
   int tuplesInTransientCheck =
-      std::max(1, static_cast<int>(percentInputInTransientCheck * static_cast<float>(n)));
+      std::max(1, static_cast<int>(PERCENT_INPUT_IN_TRANSIENT_CHECK * static_cast<float>(n)));
 
-  int tuplesInCacheMissCheck = adaptive::config::tuplesInCacheMissCheck_;
-
-  float percentInputBetweenHashing = adaptive::config::percentInputBetweenHashing_;
   int tuplesBetweenHashing =
-      std::max(1, static_cast<int>(percentInputBetweenHashing * static_cast<float>(n)));
+      std::max(1, static_cast<int>(PERCENT_INPUT_BETWEEN_HASHING * static_cast<float>(n)));
 
 #ifdef DEBUG
   std::cout << "tuplesInTransientCheck: " << tuplesInTransientCheck << std::endl;
-  std::cout << "tuplesInCacheMissCheck: " << tuplesInCacheMissCheck << std::endl;
+  std::cout << "tuplesInCacheMissCheck: " << TUPLES_IN_CACHE_MISS_CHECK << std::endl;
   std::cout << "tuplesBetweenHashing:   " << tuplesBetweenHashing << std::endl;
 #endif
 
@@ -870,8 +866,7 @@ groupByAdaptive(const std::vector<int>& spanSizes, int n, int outerIndex, int in
       static_cast<int>(HASHMAP_OVERALLOCATION_FACTOR * static_cast<float>(cardinality)), 400000);
   HA_tsl::robin_map<K, std::tuple<As...>> map(initialSize);
 
-  float percentInputToTrack = adaptive::config::percentInputToTrack_;
-  int entriesInMapToTrack = static_cast<int>(percentInputToTrack * static_cast<float>(n));
+  int entriesInMapToTrack = static_cast<int>(PERCENT_INPUT_TO_TRACK * static_cast<float>(n));
   int mapPtrsSize = 0;
   auto mapPtrsRaii =
       std::make_unique_for_overwrite<std::pair<K, std::tuple<As...>>*[]>(entriesInMapToTrack);
@@ -879,7 +874,15 @@ groupByAdaptive(const std::vector<int>& spanSizes, int n, int outerIndex, int in
 
   auto& eventSet = getGroupEventSet();
   long_long* eventPtr = eventSet.getCounterDiffsPtr();
-  auto monitor = MonitorGroup(eventPtr, eventPtr + 1);
+
+  auto& constants = MachineConstants::getInstance();
+  constexpr int numBytes = (sizeof(K) + ... + sizeof(As));
+  std::string name1 = "Group_" + std::to_string(numBytes) + "B_" + std::to_string(dop) + "_dop_TLB";
+  std::string name2 = "Group_" + std::to_string(numBytes) + "B_" + std::to_string(dop) + "_dop_LLC";
+  auto tuplesPerDtlbLoadMiss = static_cast<float>(constants.getMachineConstant(name1));
+  auto tuplesPerLastLevelCacheMiss = static_cast<float>(constants.getMachineConstant(name2));
+  auto monitor =
+      MonitorGroup(eventPtr, eventPtr + 1, tuplesPerDtlbLoadMiss, tuplesPerLastLevelCacheMiss);
 
   std::vector<Section<K, As...>> sectionsToBeSorted;
   int elements = 0;
@@ -961,7 +964,7 @@ groupByAdaptive(const std::vector<int>& spanSizes, int n, int outerIndex, int in
     }
 
     // Cache warmup
-    tuplesToProcess = std::min(tuplesInCacheMissCheck, n - tuplesProcessed);
+    tuplesToProcess = std::min(TUPLES_IN_CACHE_MISS_CHECK, n - tuplesProcessed);
     tuplesProcessed += tuplesToProcess;
     //////////// GROUP BY HASH ON tuplesToProcess elements ////////////
     while(tuplesToProcess && (spanSizes[outerIndex] - innerIndex) <= tuplesToProcess) {
@@ -978,7 +981,7 @@ groupByAdaptive(const std::vector<int>& spanSizes, int n, int outerIndex, int in
 
     while(tuplesProcessed < n) {
 
-      tuplesToProcess = std::min(tuplesInCacheMissCheck, n - tuplesProcessed);
+      tuplesToProcess = std::min(TUPLES_IN_CACHE_MISS_CHECK, n - tuplesProcessed);
       tuplesInCheck = tuplesToProcess;
       tuplesProcessed += tuplesToProcess;
       eventSet.readCounters();
@@ -1075,7 +1078,7 @@ groupByAdaptive(int cardinality, bool secondKey, ExpressionSpanArguments&& keySp
   }
 
   auto resultVectors =
-      groupByAdaptive<K, As...>(spanSizes, n, 0, 0, cardinality, secondKey, true, largestKey,
+      groupByAdaptive<K, As...>(1, spanSizes, n, 0, 0, cardinality, secondKey, true, largestKey,
                                 keySpans1, keySpans2, typedAggCols..., aggregators...);
 
   std::vector<ExpressionSpanArguments> result;
@@ -1274,12 +1277,12 @@ groupByAdaptiveParallel(int dop, int cardinality, bool secondKey,
   for(auto taskNum = 0; taskNum < dop; ++taskNum) {
     tuplesPerThread = tuplesPerThreadBaseline + (taskNum < remainingTuples);
 
-    threadPool.enqueue([&results, &resultsMutex, &cv, &spanSizes, tuplesPerThread, outerIndex,
+    threadPool.enqueue([dop, &results, &resultsMutex, &cv, &spanSizes, tuplesPerThread, outerIndex,
                         innerIndex, cardinality, secondKey, &keySpans1, &keySpans2,
                         &typedAggCols..., aggregators...] {
       K largestKey = std::numeric_limits<K>::lowest();
       auto aggregatedKeysAndPayload = groupByAdaptive<K, As...>(
-          spanSizes, tuplesPerThread, outerIndex, innerIndex, cardinality, secondKey, false,
+          dop, spanSizes, tuplesPerThread, outerIndex, innerIndex, cardinality, secondKey, false,
           largestKey, keySpans1, keySpans2, typedAggCols..., aggregators...);
 
       if(largestKey > 0) { // We only used hash-based Group, so need to sort result

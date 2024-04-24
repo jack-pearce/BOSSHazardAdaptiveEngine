@@ -1682,8 +1682,8 @@ private:
 
 #ifdef DEBUG
     std::cout << "Before updating: "
-              << "RadixBits: " << radixBits << ", msbToPartitionInput: " << msbToPartitionInput
-              << std::endl;
+              << "GlobalRadixBits: " << globalRadixBits
+              << ", msbToPartitionInput: " << msbToPartitionInput << std::endl;
 #endif
 
     msbToPartitionInput -= globalRadixBits;
@@ -1691,8 +1691,8 @@ private:
 
 #ifdef DEBUG
     std::cout << "After updating: "
-              << "RadixBits: " << radixBits << ", msbToPartitionInput: " << msbToPartitionInput
-              << std::endl;
+              << "GlobalRadixBits: " << globalRadixBits
+              << ", msbToPartitionInput: " << msbToPartitionInput << std::endl;
 #endif
 
     std::vector<int> partitions1, partitions2;
