@@ -8,6 +8,7 @@
 #include <iostream>
 #include <queue>
 #include <stdexcept>
+#include <chrono>
 
 #include "constants/machineConstants.hpp"
 #include "hash_map/robin_map.h"
@@ -323,8 +324,8 @@ void groupBySortFinalPassAndAgg(
     std::tuple<std::vector<std::remove_cv_t<As>>...>& resultValueVectors, bool secondKey,
     bool splitKeysInResult, int msbPosition, Aggregator<As>... aggregators) {
 
-  static bool bucketEntryPresent[1 << BITS_PER_GROUP_RADIX_PASS];
-  static std::tuple<As...> payloadAggs[1 << BITS_PER_GROUP_RADIX_PASS];
+  thread_local static bool bucketEntryPresent[1 << BITS_PER_GROUP_RADIX_PASS];
+  thread_local static std::tuple<As...> payloadAggs[1 << BITS_PER_GROUP_RADIX_PASS];
   std::fill(std::begin(bucketEntryPresent), std::end(bucketEntryPresent), false);
 
   auto addKeys = [&resultKeys, &resultKeys2, secondKey, splitKeysInResult](auto key) mutable {
