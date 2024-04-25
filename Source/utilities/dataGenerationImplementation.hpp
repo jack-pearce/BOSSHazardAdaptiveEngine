@@ -103,20 +103,20 @@ std::vector<T> generateUniformDistributionWithSetCardinality(int n, int upperBou
 template<typename T>
 ExpressionSpanArguments loadVectorIntoSpans(std::vector<T> vector) {
   ExpressionSpanArguments spans;
-  spans.emplace_back(boss::Span<T>(std::vector(vector)));
+  spans.emplace_back(Span<T>(std::vector(vector)));
   return spans;
 }
 
 template<typename T>
 ExpressionSpanArgument loadVectorIntoSpan(std::vector<T> vector) {
-  return boss::Span<T>(std::vector(vector));
+  return Span<T>(std::vector(vector));
 }
 
 template<typename T>
-std::vector<boss::Span<T>> shallowCopySpan(ExpressionSpanArgument& untypedSpan) {
-  std::vector<boss::Span<T>> spans;
-  auto& typedSpan = get<boss::Span<T>>(untypedSpan);
-  spans.emplace_back(boss::Span<T>(typedSpan.begin(), typedSpan.size(), [](){}));
+std::vector<Span<T>> shallowCopySpan(ExpressionSpanArgument& untypedSpan) {
+  std::vector<Span<T>> spans;
+  auto& typedSpan = get<Span<T>>(untypedSpan);
+  spans.emplace_back(Span<T>(typedSpan.begin(), typedSpan.size(), [](){}));
   return spans;
 }
 

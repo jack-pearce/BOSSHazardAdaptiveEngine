@@ -284,7 +284,7 @@ PerfCounterResults groupByHash(int cardinality, int n, const K* keys, const As*.
       static_cast<int>(HASHMAP_OVERALLOCATION_FACTOR * static_cast<float>(cardinality)), 400000);
 
   HA_tsl::robin_map<K, std::tuple<As...>> map(initialSize);
-  auto eventSet = PAPI_eventSet({"DTLB-LOAD-MISSES", "PERF_COUNT_HW_CACHE_MISSES"});
+  auto& eventSet = getGroupEventSet();
 
   int tuplesInTransientCheck = static_cast<int>(static_cast<float>(n) * PERCENT_INPUT_IN_TLB_CHECK);
 
@@ -323,6 +323,7 @@ PerfCounterResults runGroupFunctionMeasureHazards(int cardinality, int dop,
                                                   std::vector<Span<As>>&&... typedAggCols,
                                                   Aggregator<As>... aggregators) {
   auto& threadPool = ThreadPool::getInstance();
+  auto& synchroniser = Synchroniser::getInstance();
   auto& keySpan = std::get<Span<K>>(keySpans.at(0));
   int n = keySpan.size();
   if(dop == 1) {
@@ -334,22 +335,24 @@ PerfCounterResults runGroupFunctionMeasureHazards(int cardinality, int dop,
     int tuplesPerThread;
     int start = 0;
 
-    std::atomic<double> totalTlbMissRate;
-    std::atomic<double> totalLlcMissRate;
+    std::atomic<double> totalTlbMissRate = 0;
+    std::atomic<double> totalLlcMissRate = 0;
 
     for(auto taskNum = 0; taskNum < dop; ++taskNum) {
       tuplesPerThread = tuplesPerThreadBaseline + (taskNum < remainingTuples);
 
-      threadPool.enqueue([&totalTlbMissRate, &totalLlcMissRate, cardinality, start, tuplesPerThread,
-                          &keySpan, &typedAggCols..., aggregators...] {
+      threadPool.enqueue([&synchroniser, &totalTlbMissRate, &totalLlcMissRate, cardinality, start,
+                          tuplesPerThread, &keySpan, &typedAggCols..., aggregators...] {
         auto measurements = groupByHash<K, As...>(cardinality, tuplesPerThread, &(keySpan[start]),
                                                   &(typedAggCols[0][start])..., aggregators...);
         totalTlbMissRate += measurements.tlbMissRate;
         totalLlcMissRate += measurements.llcMissRate;
+        synchroniser.taskComplete();
       });
 
       start += tuplesPerThread;
     }
+    synchroniser.waitUntilComplete(dop);
 
     return {0, totalTlbMissRate / static_cast<double>(dop),
             totalLlcMissRate / static_cast<double>(dop)};
@@ -565,6 +568,10 @@ void calculateGroupMachineConstants(GROUP_QUERIES groupQuery, int dop) {
   int crossoverCardinality = static_cast<int>(crossoverPoints[NUMBER_OF_TESTS / 2]);
   std::cout << " Complete" << std::endl;
 
+  // Reset the worker threads, this is necessary for PAPI which fails to work when the same eventSet
+  // is shared by functions in this TU and the operators TU
+  ThreadPool::getInstance().changeNumThreads(adaptive::logicalCoresCount());
+
   std::cout << " - Running tests for dtlb load misses and last level cache misses";
   std::vector<double> tuplesPerDtlbLoadMiss;
   std::vector<double> tuplesPerLastLevelCacheMiss;
@@ -586,6 +593,10 @@ void calculateGroupMachineConstants(GROUP_QUERIES groupQuery, int dop) {
   constants.updateMachineConstant(names.llcMissRate,
                                   (1.0 - GROUP_VARIABILITY_MARGIN) *
                                       tuplesPerLastLevelCacheMiss[NUMBER_OF_TESTS / 2]);
+
+  // Reset the worker threads, this is necessary for PAPI which fails to work when the same eventSet
+  // is shared by functions in this TU and the operators TU
+  ThreadPool::getInstance().changeNumThreads(adaptive::logicalCoresCount());
 }
 
 } // namespace adaptive
