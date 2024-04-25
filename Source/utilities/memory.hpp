@@ -25,6 +25,23 @@ public:
     cv.notify_one();
   }
 
+  void changeNumThreads(uint32_t numThreads) {
+    stop = true;
+    cv.notify_all();
+    for(auto& thread : threads) {
+      pthread_join(thread, nullptr);
+    }
+    stop = false;
+
+    threads.resize(numThreads);
+    for(std::size_t i = 0; i < numThreads; ++i) {
+      pthread_create(&threads[i], nullptr, workerThread, this);
+    }
+#ifdef MEMORY_INFO
+    std::cout << "Number of threads in thread pool updated to " << numThreads << "\n";
+#endif
+  }
+
 private:
   explicit ThreadPool(size_t numThreads) : stop(false) {
 #ifdef MEMORY_INFO

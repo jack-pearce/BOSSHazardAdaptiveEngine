@@ -109,10 +109,11 @@ void MachineConstants::writeEmptyFile() {
 }
 
 void MachineConstants::calculateMissingMachineConstants() {
-  // Temporarily change nonVectorizedDOP to the maximum value so that AdaptiveParallel can
-  // be used to calculate any missing machine constants
+  // Temporarily change number of threads in thread pool to the maximum value so that
+  // AdaptiveParallel can be used to calculate any missing machine constants
   auto nonVectorizedDOPvalue = adaptive::config::nonVectorizedDOP;
   adaptive::config::nonVectorizedDOP = static_cast<int32_t>(adaptive::logicalCoresCount());
+  ThreadPool::getInstance().changeNumThreads(adaptive::logicalCoresCount());
 
   uint32_t dop = 1;
   while(dop <= logicalCoresCount()) {
@@ -159,7 +160,9 @@ void MachineConstants::calculateMissingMachineConstants() {
     calculatePartitionMachineConstants();
   }
 
+  // Revert number of threads in thread pool to that set in the config
   adaptive::config::nonVectorizedDOP = nonVectorizedDOPvalue;
+  ThreadPool::getInstance().changeNumThreads(adaptive::config::nonVectorizedDOP);
 }
 
 } // namespace adaptive
