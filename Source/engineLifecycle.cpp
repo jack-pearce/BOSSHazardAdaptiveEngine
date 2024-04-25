@@ -1,6 +1,4 @@
 #include "utilities/papiWrapper.hpp"
-#include "constants/machineConstants.hpp"
-#include <iostream>
 
 // #define DEBUG
 
@@ -9,8 +7,6 @@ void cleanup() __attribute__((destructor));
 
 void init() {
   adaptive::initialisePapi();
-  adaptive::MachineConstants::getInstance();
-  adaptive::MachineConstants::getInstance().calculateMissingMachineConstants();
 #ifdef DEBUG
   std::cout << "BOSSHazardAdaptiveEngine library initialized" << std::endl;
 #endif

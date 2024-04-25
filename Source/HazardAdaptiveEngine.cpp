@@ -12,15 +12,11 @@
 #include <algorithm>
 #include <any>
 #include <cassert>
-#include <chrono>
-#include <condition_variable>
-#include <iomanip>
 #include <iostream>
 #include <iterator>
 #include <list>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <numeric>
 #include <optional>
 #include <stdexcept>
@@ -31,6 +27,8 @@
 
 // #define DEBUG_MODE
 #define DEFER_TO_OTHER_ENGINE
+
+bool CONSTANTS_INITIALISED = false;
 
 constexpr int MAX_AGGREGATION_ARGS = 5;
 
@@ -1487,7 +1485,18 @@ static Expression evaluateInternal(Expression&& e) {
   return std::move(e);
 }
 
+/* PAPI deadlocks if this is called from __attribute__(constructor), therefore we use a global
+ * boolean instead
+ * */
+static void initialiseLibraryConstants() {
+  if(!CONSTANTS_INITIALISED) {
+    adaptive::MachineConstants::getInstance().calculateMissingMachineConstants();
+    CONSTANTS_INITIALISED = true;
+  }
+}
+
 static boss::Expression evaluate(boss::Expression&& expr) {
+  initialiseLibraryConstants();
   try {
 #ifdef DEBUG_MODE
     std::cout << "Input expression: "
