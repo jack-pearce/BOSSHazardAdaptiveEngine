@@ -551,22 +551,6 @@ int calculateGroupByCrossoverCardinality(GROUP_QUERIES groupQuery, int dop) {
 
 void calculateGroupMachineConstants(GROUP_QUERIES groupQuery, int dop) {
 
-  int n_ = 1000;
-  int cardinality = 100;
-  auto masterPayload_32 = loadVectorIntoSpan(generateUniformDistribution<int32_t>(n_, 1, 100000));
-  auto payload_32 = shallowCopySpan<int32_t>(masterPayload_32);
-  auto keySpans = loadVectorIntoSpans(
-      generateUniformDistributionWithSetCardinality<int32_t>(n_, n_, cardinality));
-
-  ExpressionSpanArguments keySpans2;
-
-  group<int32_t, int32_t>(Group::GroupAdaptiveParallel, 2, 1, std::move(keySpans),
-        std::move(keySpans2), std::move(payload_32), maxAggregator<int32_t>);
-
-  std::cout << "Complete" << std::endl;
-
-
-
   auto names = getGroupMachineConstantNames(groupQuery, dop);
   auto name = names.tlbMissRate.substr(0, names.tlbMissRate.size() - 4);
   std::cout << "Calculating machine constants for " << name << std::endl;

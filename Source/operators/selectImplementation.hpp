@@ -465,8 +465,8 @@ private:
   int32_t* threadSelection;
   PAPI_eventSet
       eventSet; // Should be the eventSet from getBranchMissesEventSet() to prevent a new eventSet
-                // being created for each process call, however when doing this the PAPI API hangs
-                // when calculating missing machine constants. I am not sure why...
+                // being created for each funcction call, however when doing this the PAPI API
+                // deadlocks when calculating missing machine constants. This appears to be a bug.
   MonitorSelectParallel<T, P> monitor;
 
   size_t consecutivePredications;

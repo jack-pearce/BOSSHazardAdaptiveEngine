@@ -23,7 +23,7 @@ template<typename T>
 ExpressionSpanArgument loadVectorIntoSpan(std::vector<T> vector);
 
 template<typename T>
-std::vector<Span<T>> shallowCopySpan(ExpressionSpanArgument& span);
+std::vector<boss::Span<T>> shallowCopySpan(ExpressionSpanArgument& span);
 
 } // namespace adaptive
 

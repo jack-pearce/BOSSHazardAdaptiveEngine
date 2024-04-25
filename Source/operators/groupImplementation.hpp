@@ -872,7 +872,15 @@ groupByAdaptive(int dop, const std::vector<int>& spanSizes, int n, int outerInde
       std::make_unique_for_overwrite<std::pair<K, std::tuple<As...>>*[]>(entriesInMapToTrack);
   auto* mapPtrs = mapPtrsRaii.get();
 
-  auto& eventSet = getGroupEventSet();
+  // Should always be the eventSet from getGroupEventSet() to prevent a new eventSet
+  // being created for each function call, however when doing this the PAPI API
+  // deadlocks when calculating missing machine constants. This appears to be a bug.
+  auto multiThreadEventSet = std::optional<PAPI_eventSet>(std::nullopt);
+  if (dop > 1) {
+    std::vector<std::string> counterNames{"DTLB-LOAD-MISSES", "PERF_COUNT_HW_CACHE_MISSES"};
+    multiThreadEventSet.emplace(counterNames);
+  }
+  auto& eventSet = dop == 1 ? getGroupEventSet() : multiThreadEventSet.value();
   long_long* eventPtr = eventSet.getCounterDiffsPtr();
 
   auto& constants = MachineConstants::getInstance();

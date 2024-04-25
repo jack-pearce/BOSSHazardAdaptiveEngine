@@ -113,9 +113,9 @@ ExpressionSpanArgument loadVectorIntoSpan(std::vector<T> vector) {
 }
 
 template<typename T>
-std::vector<Span<T>> shallowCopySpan(ExpressionSpanArgument& untypedSpan) {
-  std::vector<Span<T>> spans;
-  auto& typedSpan = get<Span<T>>(untypedSpan);
+std::vector<boss::Span<T>> shallowCopySpan(ExpressionSpanArgument& untypedSpan) {
+  std::vector<boss::Span<T>> spans;
+  auto& typedSpan = get<boss::Span<T>>(untypedSpan);
   spans.emplace_back(boss::Span<T>(typedSpan.begin(), typedSpan.size(), [](){}));
   return spans;
 }
