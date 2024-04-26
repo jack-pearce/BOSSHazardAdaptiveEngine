@@ -29,7 +29,6 @@
 #include <vector>
 
 // #define DEBUG_MODE
-#define DEFER_TO_OTHER_ENGINE
 
 bool CONSTANTS_INITIALISED = false;
 
@@ -48,6 +47,7 @@ using adaptive::Aggregation;
 using adaptive::EngineInstanceState;
 using adaptive::SelectOperatorState;
 using adaptive::SelectOperatorStates;
+using adaptive::config::DEFER_GATHER_PHASE_OF_SELECT_TO_OTHER_ENGINES;
 using adaptive::config::groupImplementation;
 using adaptive::config::nonVectorizedDOP;
 using adaptive::config::partitionImplementation;
@@ -1138,85 +1138,89 @@ public:
       auto predWrapper = get<PredWrapper>(std::move(*++it));
       auto& predFunc = predWrapper.getPred();
       auto columns = std::move(relation).getDynamicArguments();
-#ifdef DEFER_TO_OTHER_ENGINE
-      ExpressionSpanArguments indexesArg;
-      while(auto predicate = predFunc(columns, nullptr)) {
-        assert(std::holds_alternative<Span<int32_t>>(*predicate));
-        auto& indexes = std::get<Span<int32_t>>(*predicate);
-        indexesArg.emplace_back(std::move(indexes));
-      }
-      auto tableExpression = ComplexExpression("Table"_, std::move(columns));
-      ExpressionArguments tableArg;
-      tableArg.emplace_back(std::move(tableExpression));
-      return ComplexExpression("Gather"_, {}, std::move(tableArg), std::move(indexesArg));
-#else
-      ExpressionSpanArguments indexesArg;
-      while(auto predicate = predFunc(columns, nullptr)) {
-        assert(std::holds_alternative<Span<int32_t>>(*predicate));
-        auto& indexes = std::get<Span<int32_t>>(*predicate);
-        indexesArg.emplace_back(std::move(indexes));
-      }
-      for(auto& columnRef : columns) {
-        auto column = get<ComplexExpression>(std::move(columnRef));
-        auto [head, unused_, dynamics, spans] = std::move(column).decompose();
-        auto list = get<ComplexExpression>(std::move(dynamics.at(0)));
-        auto [listHead, listUnused_, listDynamics, listSpans] = std::move(list).decompose();
-        for(size_t spanNum = 0; spanNum < listSpans.size(); ++spanNum) {
-          const auto& indexes = std::get<Span<int32_t>>(indexesArg.at(spanNum));
-          listSpans.at(spanNum) = std::visit(
-              [&indexes]<typename T>(Span<T>&& typedSpan) -> ExpressionSpanArgument {
-                if constexpr(std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t> ||
-                             std::is_same_v<T, double_t> || std::is_same_v<T, std::string> ||
-                             std::is_same_v<T, int32_t const> || std::is_same_v<T, int64_t const> ||
-                             std::is_same_v<T, double_t const> ||
-                             std::is_same_v<T, std::string const>) {
-                  auto unfilteredColumn = std::move(typedSpan);
-                  auto* filteredColumn = new std::remove_cv_t<T>[indexes.size()];
-                  if(nonVectorizedDOP == 1 ||
-                     indexes.size() <= (2 * adaptive::config::minTuplesPerThread)) {
-                    for(size_t i = 0; i < indexes.size(); ++i) {
-                      filteredColumn[i] = unfilteredColumn[indexes[i]];
-                    }
-                  } else {
-                    const auto numThreads =
-                        std::min(nonVectorizedDOP,
-                                 static_cast<int32_t>(indexes.size() /
-                                                      adaptive::config::minTuplesPerThread));
-                    assert(numThreads >= 2);
-                    const auto indexesPerThread = indexes.size() / numThreads;
-                    int32_t startIndex = 0;
-                    for(int32_t threadNum = 0; threadNum < numThreads; ++threadNum) {
-                      int32_t indexesToProcess =
-                          threadNum + 1 < numThreads
-                              ? static_cast<int32_t>(indexesPerThread)
-                              : static_cast<int32_t>(indexes.size()) - startIndex;
-                      ThreadPool::getInstance().enqueue(
-                          [startIndex, endIndex = startIndex + indexesToProcess,
-                           indexesPtr = &*indexes.begin(), filteredPtr = filteredColumn,
-                           unfilteredPtr = &*unfilteredColumn.begin()]() {
-                            for(int32_t i = startIndex; i < endIndex; ++i) {
-                              filteredPtr[i] = unfilteredPtr[indexesPtr[i]];
-                            }
-                          });
-                      startIndex += indexesToProcess;
-                    }
-                    ThreadPool::getInstance().waitUntilComplete(numThreads);
-                  }
-                  return Span<T>(filteredColumn, indexes.size(),
-                                 [filteredColumn]() { delete[] filteredColumn; });
-                } else {
-                  throw std::runtime_error("unsupported column type in select: " +
-                                           std::string(typeid(T).name()));
-                }
-              },
-              std::move(listSpans.at(spanNum)));
+
+      if(DEFER_GATHER_PHASE_OF_SELECT_TO_OTHER_ENGINES) {
+        ExpressionSpanArguments indexesArg;
+        while(auto predicate = predFunc(columns, nullptr)) {
+          assert(std::holds_alternative<Span<int32_t>>(*predicate));
+          auto& indexes = std::get<Span<int32_t>>(*predicate);
+          indexesArg.emplace_back(std::move(indexes));
         }
-        dynamics.at(0) = ComplexExpression(std::move(listHead), {}, std::move(listDynamics),
-                                           std::move(listSpans));
-        columnRef = ComplexExpression(std::move(head), {}, std::move(dynamics), std::move(spans));
+        auto tableExpression = ComplexExpression("Table"_, std::move(columns));
+        ExpressionArguments tableArg;
+        tableArg.emplace_back(std::move(tableExpression));
+        return ComplexExpression("Gather"_, {}, std::move(tableArg), std::move(indexesArg));
+      } else { // COMPLETE FULL SELECT OPERATION (INCLUDING GATHER PHASE)
+        ExpressionSpanArguments indexesArg;
+        while(auto predicate = predFunc(columns, nullptr)) {
+          assert(std::holds_alternative<Span<int32_t>>(*predicate));
+          auto& indexes = std::get<Span<int32_t>>(*predicate);
+          indexesArg.emplace_back(std::move(indexes));
+        }
+        for(auto& columnRef : columns) {
+          auto column = get<ComplexExpression>(std::move(columnRef));
+          auto [head, unused_, dynamics, spans] = std::move(column).decompose();
+          auto list = get<ComplexExpression>(std::move(dynamics.at(0)));
+          auto [listHead, listUnused_, listDynamics, listSpans] = std::move(list).decompose();
+          for(size_t spanNum = 0; spanNum < listSpans.size(); ++spanNum) {
+            const auto& indexes = std::get<Span<int32_t>>(indexesArg.at(spanNum));
+            listSpans.at(spanNum) = std::visit(
+                [&indexes]<typename T>(Span<T>&& typedSpan) -> ExpressionSpanArgument {
+                  if constexpr(std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t> ||
+                               std::is_same_v<T, double_t> || std::is_same_v<T, std::string> ||
+                               std::is_same_v<T, int32_t const> ||
+                               std::is_same_v<T, int64_t const> ||
+                               std::is_same_v<T, double_t const> ||
+                               std::is_same_v<T, std::string const>) {
+                    auto unfilteredColumn = std::move(typedSpan);
+                    auto* filteredColumn = new std::remove_cv_t<T>[indexes.size()];
+                    if(nonVectorizedDOP == 1 ||
+                       indexes.size() <= (2 * adaptive::config::minTuplesPerThread)) {
+                      for(size_t i = 0; i < indexes.size(); ++i) {
+                        filteredColumn[i] = unfilteredColumn[indexes[i]];
+                      }
+                    } else {
+                      const auto numThreads =
+                          std::min(nonVectorizedDOP,
+                                   static_cast<int32_t>(indexes.size() /
+                                                        adaptive::config::minTuplesPerThread));
+                      assert(numThreads >= 2);
+                      const auto indexesPerThread = indexes.size() / numThreads;
+                      int32_t startIndex = 0;
+                      auto& synchroniser = Synchroniser::getInstance();
+                      for(int32_t threadNum = 0; threadNum < numThreads; ++threadNum) {
+                        int32_t indexesToProcess =
+                            threadNum + 1 < numThreads
+                                ? static_cast<int32_t>(indexesPerThread)
+                                : static_cast<int32_t>(indexes.size()) - startIndex;
+                        ThreadPool::getInstance().enqueue(
+                            [&synchroniser, startIndex, endIndex = startIndex + indexesToProcess,
+                             indexesPtr = &*indexes.begin(), filteredPtr = filteredColumn,
+                             unfilteredPtr = &*unfilteredColumn.begin()]() {
+                              for(int32_t i = startIndex; i < endIndex; ++i) {
+                                filteredPtr[i] = unfilteredPtr[indexesPtr[i]];
+                              }
+                              synchroniser.taskComplete();
+                            });
+                        startIndex += indexesToProcess;
+                      }
+                      synchroniser.waitUntilComplete(numThreads);
+                    }
+                    return Span<T>(filteredColumn, indexes.size(),
+                                   [filteredColumn]() { delete[] filteredColumn; });
+                  } else {
+                    throw std::runtime_error("unsupported column type in select: " +
+                                             std::string(typeid(T).name()));
+                  }
+                },
+                std::move(listSpans.at(spanNum)));
+          }
+          dynamics.at(0) = ComplexExpression(std::move(listHead), {}, std::move(listDynamics),
+                                             std::move(listSpans));
+          columnRef = ComplexExpression(std::move(head), {}, std::move(dynamics), std::move(spans));
+        }
+        return ComplexExpression("Table"_, std::move(columns));
       }
-      return ComplexExpression("Table"_, std::move(columns));
-#endif
     };
 
     /** Currently only partitions each table on a single 'key' column
