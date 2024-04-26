@@ -13,15 +13,15 @@
 #include "utilities/papiWrapper.hpp"
 #include "utilities/utilities.hpp"
 
-#define DEBUG_MACHINE_CONSTANTS
+// #define DEBUG_MACHINE_CONSTANTS
 
 /**************************************** CONFIG **************************************/
 
-constexpr int SELECT_NUMBER_OF_TESTS = 1;
+constexpr int SELECT_NUMBER_OF_TESTS = 9; // Can be reduced down to 1 to speed up calibration
 constexpr size_t SELECT_DATA_SIZE = 100 * 1000 * 1000;
 constexpr int SELECT_ITERATIONS = 12;
 
-constexpr int GROUP_NUMBER_OF_TESTS = 1;
+constexpr int GROUP_NUMBER_OF_TESTS = 9; // Can be reduced down to 1 to speed up calibration
 constexpr size_t GROUP_DATA_SIZE = 20 * 1000 * 1000;
 constexpr int GROUP_ITERATIONS = 12;
 constexpr double GROUP_VARIABILITY_MARGIN = 0.2; // 20%

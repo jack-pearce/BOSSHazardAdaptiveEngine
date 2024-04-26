@@ -4,7 +4,7 @@
 
 #include "papiWrapper.hpp"
 
-#define DEBUG
+// #define DEBUG
 
 namespace adaptive {
 
