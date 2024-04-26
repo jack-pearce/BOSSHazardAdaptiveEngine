@@ -61,8 +61,7 @@ void MachineConstants::updateMachineConstant(const std::string& key, double valu
   } else {
     std::cerr << "Error opening file: " << machineConstantsFilePath << std::endl;
   }
-
-  jsonRoot[key] = value;
+  jsonRoot[key] = Json::Value(value);
 
   std::ofstream outputFile(machineConstantsFilePath);
   if(outputFile.is_open()) {

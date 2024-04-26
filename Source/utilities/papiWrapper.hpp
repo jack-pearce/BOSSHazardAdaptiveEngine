@@ -27,6 +27,17 @@ private:
   std::vector<long_long> counterValuesDiff;
 };
 
+PAPI_eventSet& getThreadEventSet();
+
+// Must match the actual ThreadEventSet in papiWrapper.cpp
+enum EVENT {
+  PERF_COUNT_HW_CPU_CYCLES,
+  PERF_COUNT_HW_BRANCH_MISSES,
+  DTLB_STORE_MISSES,
+  DTLB_LOAD_MISSES,
+  PERF_COUNT_HW_CACHE_MISSES
+};
+
 } // namespace adaptive
 
 #endif // BOSSHAZARDADAPTIVEENGINE_PAPIWRAPPER_HPP

@@ -117,12 +117,6 @@ template <typename T, typename P> static SelectPredication<T, P>& getSelectPredi
 
 /****************************** SINGLE-THREADED ******************************/
 
-static inline PAPI_eventSet& getBranchMissesEventSet() {
-  thread_local static PAPI_eventSet eventSet(
-      {"PERF_COUNT_HW_BRANCH_MISSES", "PERF_COUNT_HW_CPU_CYCLES"}); // Cycles used for calibration
-  return eventSet;
-}
-
 template <typename T, typename P> class MonitorSelect;
 
 template <typename T, typename P> class SelectAdaptive {
@@ -242,8 +236,9 @@ template <typename T, typename P>
 SelectAdaptive<T, P>::SelectAdaptive()
     : tuplesPerHazardCheck(50000), maxConsecutivePredications(10), tuplesInBranchBurst(1000),
       consecutivePredications(maxConsecutivePredications),
-      activeOperator(SelectImplementation::Predication_), eventSet(getBranchMissesEventSet()),
-      monitor(MonitorSelect<T, P>(this, eventSet.getCounterDiffsPtr())),
+      activeOperator(SelectImplementation::Predication_), eventSet(getThreadEventSet()),
+      monitor(MonitorSelect<T, P>(
+          this, (eventSet.getCounterDiffsPtr() + EVENT::PERF_COUNT_HW_BRANCH_MISSES))),
       branchOperator(SelectBranch<T, P>()), predicationOperator(SelectPredication<T, P>()) {
 #ifdef CONSTRUCT_DEBUG
   std::cout << "Constructing Select Adaptive operator object" << std::endl;
@@ -528,8 +523,9 @@ SelectAdaptiveParallelAux<T, P>::SelectAdaptiveParallelAux(SelectThreadArgs<T, P
       positionToWrite(args->positionToWrite), dop(args->dop), threadNum(args->threadNum),
       tuplesPerHazardCheck(50000), maxConsecutivePredications(10), tuplesInBranchBurst(1000),
       activeOperator(SelectImplementation::Predication_), branchOperator(SelectBranch<T, P>()),
-      predicationOperator(SelectPredication<T, P>()), eventSet(getBranchMissesEventSet()),
-      monitor(MonitorSelectParallel<T, P>(this, dop, eventSet.getCounterDiffsPtr())),
+      predicationOperator(SelectPredication<T, P>()), eventSet(getThreadEventSet()),
+      monitor(MonitorSelectParallel<T, P>(
+          this, dop, (eventSet.getCounterDiffsPtr() + EVENT::PERF_COUNT_HW_BRANCH_MISSES))),
       consecutivePredications(maxConsecutivePredications), threadSelected(0) {
 
   if(threadNum == 0) {

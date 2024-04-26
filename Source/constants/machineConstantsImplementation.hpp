@@ -69,7 +69,8 @@ template <typename T> double calculateSelectLowerMachineConstant(uint32_t dop) {
 
   auto predicate = std::greater();
 
-  auto& eventSet = getBranchMissesEventSet();
+  auto& eventSet = getThreadEventSet();
+  long_long* cycles = eventSet.getCounterDiffsPtr() + EVENT::PERF_COUNT_HW_CPU_CYCLES;
   long_long branchCycles, predicationCycles;
   double upperSelectivity = 0.5;
   double lowerSelectivity = 0;
@@ -94,7 +95,7 @@ template <typename T> double calculateSelectLowerMachineConstant(uint32_t dop) {
         select(Select::Branch, columnSpan1, 1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity),
                false, predicate, {});
         eventSet.readCountersAndUpdateDiff();
-        branchCycles = *(eventSet.getCounterDiffsPtr() + 1);
+        branchCycles = *cycles;
       } else {
         MachineConstants::getInstance().updateMachineConstant(machineConstantLowerName, 1);
         MachineConstants::getInstance().updateMachineConstant(machineConstantUpperName, 0);
@@ -115,7 +116,7 @@ template <typename T> double calculateSelectLowerMachineConstant(uint32_t dop) {
         select(Select::Predication, columnSpan2,
                1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity), false, predicate, {});
         eventSet.readCountersAndUpdateDiff();
-        predicationCycles = *(eventSet.getCounterDiffsPtr() + 1);
+        predicationCycles = *cycles;
       } else {
         MachineConstants::getInstance().updateMachineConstant(machineConstantLowerName, 0);
         MachineConstants::getInstance().updateMachineConstant(machineConstantUpperName, 1);
@@ -150,7 +151,8 @@ template <typename T> double calculateSelectUpperMachineConstant(uint32_t dop) {
 
   auto predicate = std::greater();
 
-  auto& eventSet = getBranchMissesEventSet();
+  auto& eventSet = getThreadEventSet();
+  long_long* cycles = eventSet.getCounterDiffsPtr() + EVENT::PERF_COUNT_HW_CPU_CYCLES;
   long_long branchCycles, predicationCycles;
   double upperSelectivity = 1.0;
   double lowerSelectivity = 0.5;
@@ -175,7 +177,7 @@ template <typename T> double calculateSelectUpperMachineConstant(uint32_t dop) {
         select(Select::Branch, columnSpan1, 1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity),
                false, predicate, {});
         eventSet.readCountersAndUpdateDiff();
-        branchCycles = *(eventSet.getCounterDiffsPtr() + 1);
+        branchCycles = *cycles;
       } else {
         MachineConstants::getInstance().updateMachineConstant(machineConstantLowerName, 1);
         MachineConstants::getInstance().updateMachineConstant(machineConstantUpperName, 0);
@@ -196,7 +198,7 @@ template <typename T> double calculateSelectUpperMachineConstant(uint32_t dop) {
         select(Select::Predication, columnSpan2,
                1 + getThreshold<T>(SELECT_DATA_SIZE, midSelectivity), false, predicate, {});
         eventSet.readCountersAndUpdateDiff();
-        predicationCycles = *(eventSet.getCounterDiffsPtr() + 1);
+        predicationCycles = *cycles;
       } else {
         MachineConstants::getInstance().updateMachineConstant(machineConstantLowerName, 0);
         MachineConstants::getInstance().updateMachineConstant(machineConstantUpperName, 1);
@@ -238,10 +240,6 @@ template <typename T> void calculateSelectMachineConstants(uint32_t dop) {
   std::sort(lowerCrossoverPoints.begin(), lowerCrossoverPoints.end());
   std::cout << " Complete" << std::endl;
 
-  // Reset the worker threads, this is necessary for PAPI which fails to work when the same eventSet
-  // is shared by functions in this TU and the operators TU
-  ThreadPool::getInstance().changeNumThreads(adaptive::logicalCoresCount());
-
   std::cout << " - Running tests for upper crossover point";
   std::vector<double> upperCrossoverPoints;
   for(auto i = 0; i < SELECT_NUMBER_OF_TESTS; ++i) {
@@ -260,10 +258,6 @@ template <typename T> void calculateSelectMachineConstants(uint32_t dop) {
                                   lowerCrossoverPoints[SELECT_NUMBER_OF_TESTS / 2]);
   constants.updateMachineConstant(machineConstantUpperName,
                                   upperCrossoverPoints[SELECT_NUMBER_OF_TESTS / 2]);
-
-  // Reset the worker threads, this is necessary for PAPI which fails to work when the same eventSet
-  // is shared by functions in this TU and the operators TU
-  ThreadPool::getInstance().changeNumThreads(adaptive::logicalCoresCount());
 }
 
 /**************************************** GROUP **************************************/
@@ -293,14 +287,15 @@ PerfCounterResults groupByHash(int cardinality, int n, const K* keys, const As*.
       static_cast<int>(HASHMAP_OVERALLOCATION_FACTOR * static_cast<float>(cardinality)), 400000);
 
   HA_tsl::robin_map<K, std::tuple<As...>> map(initialSize);
-  auto& eventSet = getGroupEventSet();
+  auto& eventSet = getThreadEventSet();
 
   int tuplesInTransientCheck = static_cast<int>(static_cast<float>(n) * PERCENT_INPUT_IN_TLB_CHECK);
 
   long_long tlbMisses;
   long_long lastLevelCacheMisses;
-  long_long* tlbMissesPtr = eventSet.getCounterDiffsPtr();
-  long_long* lastLevelCacheMissesPtr = tlbMissesPtr + 1;
+  long_long* tlbMissesPtr = eventSet.getCounterDiffsPtr() + EVENT::DTLB_LOAD_MISSES;
+  long_long* lastLevelCacheMissesPtr =
+      eventSet.getCounterDiffsPtr() + EVENT::PERF_COUNT_HW_CACHE_MISSES;
 
   eventSet.readCounters();
   groupByHashAux<K, As...>(map, 0, tuplesInTransientCheck, keys, aggregates..., aggregators...);
@@ -377,12 +372,13 @@ PerfCounterResults runGroupFunctionMeasureCycles(Group implementation, uint32_t 
   ExpressionSpanArguments keySpans2;
   if(dop == 1) {
     assert(implementation == Group::Hash || implementation == Group::Sort);
-    auto& eventSet = getGroupEventSet();
+    auto& eventSet = getThreadEventSet();
+    long_long* cyclesPtr = eventSet.getCounterDiffsPtr() + EVENT::PERF_COUNT_HW_CPU_CYCLES;
     eventSet.readCounters();
     group<K, As...>(implementation, dop, 1, std::move(keySpans), std::move(keySpans2),
                     std::move(typedAggCols)..., aggregators...);
     eventSet.readCountersAndUpdateDiff();
-    cycles = *(eventSet.getCounterDiffsPtr() + 2);
+    cycles = *cyclesPtr;
   } else {
     assert(implementation == Group::GroupAdaptiveParallel);
     cycles = PAPI_get_real_usec();
@@ -579,10 +575,6 @@ void calculateGroupMachineConstants(GROUP_QUERIES groupQuery, int dop) {
   int crossoverCardinality = static_cast<int>(crossoverPoints[GROUP_NUMBER_OF_TESTS / 2]);
   std::cout << " Complete" << std::endl;
 
-  // Reset the worker threads, this is necessary for PAPI which fails to work when the same eventSet
-  // is shared by functions in this TU and the operators TU
-  ThreadPool::getInstance().changeNumThreads(adaptive::logicalCoresCount());
-
   std::cout << " - Running tests for dtlb load misses and last level cache misses";
   std::vector<double> tuplesPerDtlbLoadMiss;
   std::vector<double> tuplesPerLastLevelCacheMiss;
@@ -604,10 +596,6 @@ void calculateGroupMachineConstants(GROUP_QUERIES groupQuery, int dop) {
   constants.updateMachineConstant(names.llcMissRate,
                                   (1.0 - GROUP_VARIABILITY_MARGIN) *
                                       tuplesPerLastLevelCacheMiss[GROUP_NUMBER_OF_TESTS / 2]);
-
-  // Reset the worker threads, this is necessary for PAPI which fails to work when the same eventSet
-  // is shared by functions in this TU and the operators TU
-  ThreadPool::getInstance().changeNumThreads(adaptive::logicalCoresCount());
 }
 
 } // namespace adaptive

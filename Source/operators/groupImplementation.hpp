@@ -577,12 +577,6 @@ groupBySort(int cardinality, bool secondKey, ExpressionSpanArguments&& keySpans1
 
 /************************************ SINGLE-THREADED **********************************/
 
-static inline PAPI_eventSet& getGroupEventSet() {
-  thread_local static PAPI_eventSet eventSet({"DTLB-LOAD-MISSES", "PERF_COUNT_HW_CACHE_MISSES",
-                                              "PERF_COUNT_HW_CPU_CYCLES"}); // Used for calibration
-  return eventSet;
-}
-
 class MonitorGroup {
 public:
   explicit MonitorGroup(const long_long* dtlbLoadMisses_, const long_long* lastLevelCacheMisses_,
@@ -874,8 +868,8 @@ groupByAdaptive(int dop, const std::vector<int>& spanSizes, int n, int outerInde
       std::make_unique_for_overwrite<std::pair<K, std::tuple<As...>>*[]>(entriesInMapToTrack);
   auto* mapPtrs = mapPtrsRaii.get();
 
-  auto& eventSet = getGroupEventSet();
-  long_long* eventPtr = eventSet.getCounterDiffsPtr();
+  auto& eventSet = getThreadEventSet();
+  long_long* baseEventPtr = eventSet.getCounterDiffsPtr();
 
   auto& constants = MachineConstants::getInstance();
   constexpr int numBytes = (sizeof(K) + ... + sizeof(As));
@@ -883,8 +877,9 @@ groupByAdaptive(int dop, const std::vector<int>& spanSizes, int n, int outerInde
   std::string name2 = "Group_" + std::to_string(numBytes) + "B_" + std::to_string(dop) + "_dop_LLC";
   auto tuplesPerDtlbLoadMiss = static_cast<float>(constants.getMachineConstant(name1));
   auto tuplesPerLastLevelCacheMiss = static_cast<float>(constants.getMachineConstant(name2));
-  auto monitor =
-      MonitorGroup(eventPtr, eventPtr + 1, tuplesPerDtlbLoadMiss, tuplesPerLastLevelCacheMiss);
+  auto monitor = MonitorGroup(baseEventPtr + EVENT::DTLB_LOAD_MISSES,
+                              baseEventPtr + EVENT::PERF_COUNT_HW_CACHE_MISSES,
+                              tuplesPerDtlbLoadMiss, tuplesPerLastLevelCacheMiss);
 
   std::vector<Section<K, As...>> sectionsToBeSorted;
   int elements = 0;

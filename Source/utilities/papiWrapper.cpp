@@ -97,4 +97,11 @@ void PAPI_eventSet::readCountersAndUpdateDiff() {
   }
 }
 
+PAPI_eventSet& getThreadEventSet() {
+  thread_local static PAPI_eventSet eventSet({"PERF_COUNT_HW_CPU_CYCLES",
+                                              "PERF_COUNT_HW_BRANCH_MISSES", "DTLB-STORE-MISSES",
+                                              "DTLB-LOAD-MISSES", "PERF_COUNT_HW_CACHE_MISSES"});
+  return eventSet;
+}
+
 } // namespace adaptive
