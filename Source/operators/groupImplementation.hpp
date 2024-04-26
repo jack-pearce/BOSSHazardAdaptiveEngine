@@ -2,13 +2,13 @@
 #define BOSSHAZARDADAPTIVEENGINE_GROUPIMPLEMENTATION_HPP
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <iostream>
 #include <queue>
 #include <stdexcept>
-#include <chrono>
 
 #include "constants/machineConstants.hpp"
 #include "hash_map/robin_map.h"
@@ -578,7 +578,8 @@ groupBySort(int cardinality, bool secondKey, ExpressionSpanArguments&& keySpans1
 /************************************ SINGLE-THREADED **********************************/
 
 static inline PAPI_eventSet& getGroupEventSet() {
-  thread_local static PAPI_eventSet eventSet({"DTLB-LOAD-MISSES", "PERF_COUNT_HW_CACHE_MISSES"});
+  thread_local static PAPI_eventSet eventSet({"DTLB-LOAD-MISSES", "PERF_COUNT_HW_CACHE_MISSES",
+                                              "PERF_COUNT_HW_CPU_CYCLES"}); // Used for calibration
   return eventSet;
 }
 

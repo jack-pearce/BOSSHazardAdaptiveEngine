@@ -118,7 +118,8 @@ template <typename T, typename P> static SelectPredication<T, P>& getSelectPredi
 /****************************** SINGLE-THREADED ******************************/
 
 static inline PAPI_eventSet& getBranchMissesEventSet() {
-  thread_local static PAPI_eventSet eventSet({"PERF_COUNT_HW_BRANCH_MISSES"});
+  thread_local static PAPI_eventSet eventSet(
+      {"PERF_COUNT_HW_BRANCH_MISSES", "PERF_COUNT_HW_CPU_CYCLES"}); // Cycles used for calibration
   return eventSet;
 }
 
@@ -684,11 +685,10 @@ public:
           threadIndexes[i].first, threadIndexes[i].second, column, value, columnIsFirstArg,
           predicate, candidateIndexesPtr, candidateIndexes.begin(), &threadToMerge,
           &positionToWrite, dop, i));
-      threadPool.enqueue(
-          [threadArg = threadArgs[i].get(), &synchroniser] {
-            selectAdaptiveParallelAux<T, P>(threadArg);
-            synchroniser.taskComplete();
-          });
+      threadPool.enqueue([threadArg = threadArgs[i].get(), &synchroniser] {
+        selectAdaptiveParallelAux<T, P>(threadArg);
+        synchroniser.taskComplete();
+      });
     }
     synchroniser.waitUntilComplete(dop);
 
