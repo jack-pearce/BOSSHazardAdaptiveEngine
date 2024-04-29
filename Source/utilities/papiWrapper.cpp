@@ -97,11 +97,23 @@ void PAPI_eventSet::readCountersAndUpdateDiff() {
   }
 }
 
-PAPI_eventSet& getThreadEventSet() {
-  thread_local static PAPI_eventSet eventSet({"PERF_COUNT_HW_CPU_CYCLES",
-                                              "PERF_COUNT_HW_BRANCH_MISSES", "DTLB-STORE-MISSES",
-                                              "DTLB-LOAD-MISSES", "PERF_COUNT_HW_CACHE_MISSES"});
+/********************************** PRESET EVENTSETS **********************************/
+
+// We split eventSets into persistent and non-persistent eventSets. This split is such that
+// the number of performance counters per thread does not exceed 4 (2 persistent eventSets
+// and 2 non-persistent eventSets (e.g. when running a Group operation). This limit of 4
+// performance counters per thread (i.e. core) is due to the typical number of performance
+// counter registers per core on modern hardware
+
+PAPI_eventSet& getThreadPersistentEventSet() {
+  thread_local static PAPI_eventSet eventSet({"PERF_COUNT_HW_CPU_CYCLES", "DTLB-STORE-MISSES"});
   return eventSet;
+}
+
+PAPI_eventSet getSelectEventSet() { return PAPI_eventSet({"PERF_COUNT_HW_BRANCH_MISSES"}); }
+
+PAPI_eventSet getGroupEventSet() {
+  return PAPI_eventSet({"DTLB-LOAD-MISSES", "PERF_COUNT_HW_CACHE_MISSES"});
 }
 
 } // namespace adaptive

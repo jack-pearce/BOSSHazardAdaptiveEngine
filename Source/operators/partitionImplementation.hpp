@@ -382,8 +382,8 @@ public:
   PartitionAdaptive(const ExpressionSpanArguments& keySpans1_,
                     const ExpressionSpanArguments& keySpans2_)
       : nInput1(0), keySpans1(keySpans1_), nInput2(0), keySpans2(keySpans2_),
-        eventSet(getThreadEventSet()),
-        monitor(MonitorPartition(eventSet.getCounterDiffsPtr() + EVENT::DTLB_STORE_MISSES)),
+        eventSet(getThreadPersistentEventSet()),
+        monitor(MonitorPartition(eventSet.getCounterDiffsPtr() + THREAD_EVENTS::DTLB_STORE_MISSES)),
         tuplesPerHazardCheck(TUPLES_PER_HAZARD_CHECK) {
     std::string startName = "Partition_startRadixBits";
     radixBitsOperator =
@@ -719,7 +719,7 @@ private:
       std::cout << "RadixBits reduced to " << radixBits << " due to reading of ";
       std::cout << (static_cast<float>(tuplesPerHazardCheck) /
                     static_cast<float>(
-                        *(eventSet.getCounterDiffsPtr() + EVENT::DTLB_STORE_MISSES)));
+                        *(eventSet.getCounterDiffsPtr() + THREAD_EVENTS::DTLB_STORE_MISSES)));
       std::cout << " tuples per TLB store miss" << std::endl;
 #endif
 
@@ -794,7 +794,7 @@ private:
                 << " due to reading of ";
       std::cout << (static_cast<float>(microBatchSize) /
                     static_cast<float>(
-                        *(eventSet.getCounterDiffsPtr() + EVENT::DTLB_STORE_MISSES)));
+                        *(eventSet.getCounterDiffsPtr() + THREAD_EVENTS::DTLB_STORE_MISSES)));
       std::cout << " tuples per TLB store miss" << std::endl;
 #endif
 
@@ -907,8 +907,8 @@ template <typename T1, typename T2> struct TwoPartitionedArraysAlt {
 template <typename T1, typename T2> class PartitionAdaptiveRawArrays {
 public:
   PartitionAdaptiveRawArrays()
-      : eventSet(getThreadEventSet()),
-        monitor(MonitorPartition(eventSet.getCounterDiffsPtr() + EVENT::DTLB_STORE_MISSES)),
+      : eventSet(getThreadPersistentEventSet()),
+        monitor(MonitorPartition(eventSet.getCounterDiffsPtr() + THREAD_EVENTS::DTLB_STORE_MISSES)),
         tuplesPerHazardCheck(TUPLES_PER_HAZARD_CHECK) {
 
     size_t initialSize = 2 * l2cacheSize() / 4;
@@ -1120,7 +1120,7 @@ private:
                 << " due to reading of ";
       std::cout << (static_cast<float>(microBatchSize) /
                     static_cast<float>(
-                        *(eventSet.getCounterDiffsPtr() + EVENT::DTLB_STORE_MISSES)));
+                        *(eventSet.getCounterDiffsPtr() + THREAD_EVENTS::DTLB_STORE_MISSES)));
       std::cout << " tuples per TLB store miss" << std::endl;
 #endif
 
@@ -1219,8 +1219,8 @@ public:
         minimumRadixBits(minimumRadixBits_), radixBits(startingRadixBits),
         globalRadixBits(globalRadixBits_), msbToPartitionInput(msbToPartitionInput_),
         maxElementsPerPartition(maxElementsPerPartition_),
-        threadsStillRunning(threadsStillRunning_), eventSet(getThreadEventSet()),
-        monitor(MonitorPartition(eventSet.getCounterDiffsPtr() + EVENT::DTLB_STORE_MISSES)),
+        threadsStillRunning(threadsStillRunning_), eventSet(getThreadPersistentEventSet()),
+        monitor(MonitorPartition(eventSet.getCounterDiffsPtr() + THREAD_EVENTS::DTLB_STORE_MISSES)),
         tuplesPerHazardCheck(TUPLES_PER_HAZARD_CHECK) {
 
     buckets1 = std::vector<int>(1 + (1 << radixBits), 0);
@@ -1427,7 +1427,7 @@ private:
         std::cout << "Global radixBits reduced to " << tmpGlobalRadixBits << " due to reading of ";
         std::cout << (static_cast<float>(tuplesPerHazardCheck) /
                       static_cast<float>(
-                          *(eventSet.getCounterDiffsPtr() + EVENT::DTLB_STORE_MISSES)));
+                          *(eventSet.getCounterDiffsPtr() + THREAD_EVENTS::DTLB_STORE_MISSES)));
         std::cout << " tuples per TLB store miss" << std::endl;
 #endif
       } else {

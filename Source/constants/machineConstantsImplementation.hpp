@@ -69,8 +69,8 @@ template <typename T> double calculateSelectLowerMachineConstant(uint32_t dop) {
 
   auto predicate = std::greater();
 
-  auto& eventSet = getThreadEventSet();
-  long_long* cycles = eventSet.getCounterDiffsPtr() + EVENT::PERF_COUNT_HW_CPU_CYCLES;
+  auto& eventSet = getThreadPersistentEventSet();
+  long_long* cycles = eventSet.getCounterDiffsPtr() + THREAD_EVENTS::PERF_COUNT_HW_CPU_CYCLES;
   long_long branchCycles, predicationCycles;
   double upperSelectivity = 0.5;
   double lowerSelectivity = 0;
@@ -151,8 +151,8 @@ template <typename T> double calculateSelectUpperMachineConstant(uint32_t dop) {
 
   auto predicate = std::greater();
 
-  auto& eventSet = getThreadEventSet();
-  long_long* cycles = eventSet.getCounterDiffsPtr() + EVENT::PERF_COUNT_HW_CPU_CYCLES;
+  auto& eventSet = getThreadPersistentEventSet();
+  long_long* cycles = eventSet.getCounterDiffsPtr() + THREAD_EVENTS::PERF_COUNT_HW_CPU_CYCLES;
   long_long branchCycles, predicationCycles;
   double upperSelectivity = 1.0;
   double lowerSelectivity = 0.5;
@@ -287,15 +287,15 @@ PerfCounterResults groupByHash(int cardinality, int n, const K* keys, const As*.
       static_cast<int>(HASHMAP_OVERALLOCATION_FACTOR * static_cast<float>(cardinality)), 400000);
 
   HA_tsl::robin_map<K, std::tuple<As...>> map(initialSize);
-  auto& eventSet = getThreadEventSet();
+  auto eventSet = getGroupEventSet();
 
   int tuplesInTransientCheck = static_cast<int>(static_cast<float>(n) * PERCENT_INPUT_IN_TLB_CHECK);
 
   long_long tlbMisses;
   long_long lastLevelCacheMisses;
-  long_long* tlbMissesPtr = eventSet.getCounterDiffsPtr() + EVENT::DTLB_LOAD_MISSES;
+  long_long* tlbMissesPtr = eventSet.getCounterDiffsPtr() + GROUP_EVENTS::DTLB_LOAD_MISSES;
   long_long* lastLevelCacheMissesPtr =
-      eventSet.getCounterDiffsPtr() + EVENT::PERF_COUNT_HW_CACHE_MISSES;
+      eventSet.getCounterDiffsPtr() + GROUP_EVENTS::PERF_COUNT_HW_CACHE_MISSES;
 
   eventSet.readCounters();
   groupByHashAux<K, As...>(map, 0, tuplesInTransientCheck, keys, aggregates..., aggregators...);
@@ -372,8 +372,8 @@ PerfCounterResults runGroupFunctionMeasureCycles(Group implementation, uint32_t 
   ExpressionSpanArguments keySpans2;
   if(dop == 1) {
     assert(implementation == Group::Hash || implementation == Group::Sort);
-    auto& eventSet = getThreadEventSet();
-    long_long* cyclesPtr = eventSet.getCounterDiffsPtr() + EVENT::PERF_COUNT_HW_CPU_CYCLES;
+    auto& eventSet = getThreadPersistentEventSet();
+    long_long* cyclesPtr = eventSet.getCounterDiffsPtr() + THREAD_EVENTS::PERF_COUNT_HW_CPU_CYCLES;
     eventSet.readCounters();
     group<K, As...>(implementation, dop, 1, std::move(keySpans), std::move(keySpans2),
                     std::move(typedAggCols)..., aggregators...);

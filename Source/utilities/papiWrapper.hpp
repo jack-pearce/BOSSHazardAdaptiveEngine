@@ -27,16 +27,14 @@ private:
   std::vector<long_long> counterValuesDiff;
 };
 
-PAPI_eventSet& getThreadEventSet();
+PAPI_eventSet& getThreadPersistentEventSet();
+PAPI_eventSet getSelectEventSet();
+PAPI_eventSet getGroupEventSet();
 
-// Must match the actual ThreadEventSet in papiWrapper.cpp
-enum EVENT {
-  PERF_COUNT_HW_CPU_CYCLES,
-  PERF_COUNT_HW_BRANCH_MISSES,
-  DTLB_STORE_MISSES,
-  DTLB_LOAD_MISSES,
-  PERF_COUNT_HW_CACHE_MISSES
-};
+// Must match the actual eventsets in 'papiWrapper.cpp'
+enum THREAD_EVENTS { PERF_COUNT_HW_CPU_CYCLES, DTLB_STORE_MISSES };
+enum SELECT_EVENTS { PERF_COUNT_HW_BRANCH_MISSES };
+enum GROUP_EVENTS { DTLB_LOAD_MISSES, PERF_COUNT_HW_CACHE_MISSES };
 
 } // namespace adaptive
 
