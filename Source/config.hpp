@@ -7,7 +7,12 @@
 namespace adaptive {
 
 enum Select { Branch, Predication, Adaptive, AdaptiveParallel };
-enum PartitionOperators { RadixBitsFixed, RadixBitsAdaptive, RadixBitsAdaptiveParallel };
+enum PartitionOperators {
+  RadixBitsFixedMin,
+  RadixBitsFixedMax,
+  RadixBitsAdaptive,
+  RadixBitsAdaptiveParallel
+};
 enum Group { Hash, Sort, GroupAdaptive, GroupAdaptiveParallel };
 
 namespace config {

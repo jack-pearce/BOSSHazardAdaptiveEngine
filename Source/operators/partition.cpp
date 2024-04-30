@@ -3,17 +3,24 @@
 
 #include <iostream>
 
+#include "constants/machineConstants.hpp"
 #include "partition.hpp"
 
 namespace adaptive {
 
 std::string getPartitionName(PartitionOperators partitionImplementation) {
-  switch(partitionImplementation) {
-  case PartitionOperators::RadixBitsFixed:
-    return "RadixPartition_Static";
-  case PartitionOperators::RadixBitsAdaptive:
+  if(partitionImplementation == PartitionOperators::RadixBitsFixedMin) {
+    std::string name = "Partition_minRadixBits";
+    auto radixBitsMin = static_cast<int>(MachineConstants::getInstance().getMachineConstant(name));
+    return "RadixPartition_Fixed_" + std::to_string(radixBitsMin) + "Bits";
+  } else if(partitionImplementation == PartitionOperators::RadixBitsFixedMax) {
+    std::string name = "Partition_startRadixBits";
+    auto radixBitsMax = static_cast<int>(MachineConstants::getInstance().getMachineConstant(name));
+    return "RadixPartition_Fixed_" + std::to_string(radixBitsMax) + "Bits";
+  } else if(partitionImplementation == PartitionOperators::RadixBitsAdaptive ||
+            partitionImplementation == PartitionOperators::RadixBitsAdaptiveParallel) {
     return "RadixPartition_Adaptive";
-  default:
+  } else {
     throw std::runtime_error("Invalid selection of 'Partition' implementation!");
   }
 }

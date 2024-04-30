@@ -2,7 +2,7 @@
 
 namespace adaptive::config {
 
-int32_t nonVectorizedDOP = 4;
+int32_t nonVectorizedDOP = 1;
 auto selectImplementation = adaptive::Select::Adaptive;
 auto partitionImplementation = adaptive::PartitionOperators::RadixBitsAdaptiveParallel;
 auto groupImplementation = adaptive::Group::GroupAdaptiveParallel;

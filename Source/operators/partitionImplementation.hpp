@@ -2194,8 +2194,15 @@ PartitionedJoinArguments partitionJoinExpr(PartitionOperators partitionImplement
           return partitionOperator.processInput();
         }
         assert(dop == 1);
-        if(partitionImplementation == PartitionOperators::RadixBitsFixed) {
-          auto partitionOperator = Partition<T1, T2>(tableOneKeys, tableTwoKeys);
+        if(partitionImplementation == PartitionOperators::RadixBitsFixedMin) {
+          std::string name = "Partition_minRadixBits";
+          auto radixBitsMin = static_cast<int>(MachineConstants::getInstance().getMachineConstant(name));
+          auto partitionOperator = Partition<T1, T2>(tableOneKeys, tableTwoKeys, radixBitsMin);
+          return partitionOperator.processInput();
+        } else if(partitionImplementation == PartitionOperators::RadixBitsFixedMax) {
+          std::string name = "Partition_startRadixBits";
+          auto radixBitsMax = static_cast<int>(MachineConstants::getInstance().getMachineConstant(name));
+          auto partitionOperator = Partition<T1, T2>(tableOneKeys, tableTwoKeys, radixBitsMax);
           return partitionOperator.processInput();
         } else if(partitionImplementation == PartitionOperators::RadixBitsAdaptive) {
           auto partitionOperator = PartitionAdaptive<T1, T2>(tableOneKeys, tableTwoKeys);
