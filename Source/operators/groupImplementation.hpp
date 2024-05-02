@@ -868,7 +868,7 @@ groupByAdaptive(int dop, const std::vector<int>& spanSizes, int n, int outerInde
       std::make_unique_for_overwrite<std::pair<K, std::tuple<As...>>*[]>(entriesInMapToTrack);
   auto* mapPtrs = mapPtrsRaii.get();
 
-  auto eventSet = getGroupEventSet();
+  auto& eventSet = getThreadEventSet();
   long_long* baseEventPtr = eventSet.getCounterDiffsPtr();
 
   auto& constants = MachineConstants::getInstance();
@@ -877,8 +877,8 @@ groupByAdaptive(int dop, const std::vector<int>& spanSizes, int n, int outerInde
   std::string name2 = "Group_" + std::to_string(numBytes) + "B_" + std::to_string(dop) + "_dop_LLC";
   auto tuplesPerDtlbLoadMiss = static_cast<float>(constants.getMachineConstant(name1));
   auto tuplesPerLastLevelCacheMiss = static_cast<float>(constants.getMachineConstant(name2));
-  auto monitor = MonitorGroup(baseEventPtr + GROUP_EVENTS::DTLB_LOAD_MISSES,
-                              baseEventPtr + GROUP_EVENTS::PERF_COUNT_HW_CACHE_MISSES,
+  auto monitor = MonitorGroup(baseEventPtr + EVENT::DTLB_LOAD_MISSES,
+                              baseEventPtr + EVENT::PERF_COUNT_HW_CACHE_MISSES,
                               tuplesPerDtlbLoadMiss, tuplesPerLastLevelCacheMiss);
 
   std::vector<Section<K, As...>> sectionsToBeSorted;

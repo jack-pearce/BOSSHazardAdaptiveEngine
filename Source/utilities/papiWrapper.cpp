@@ -206,10 +206,4 @@ PAPI_eventSet& getThreadEventSet() {
   return eventSet;
 }
 
-PAPI_eventSet getSelectEventSet() { return PAPI_eventSet({"PERF_COUNT_HW_BRANCH_MISSES"}); }
-
-PAPI_eventSet getGroupEventSet() {
-  return PAPI_eventSet({"DTLB-LOAD-MISSES", "PERF_COUNT_HW_CACHE_MISSES"});
-}
-
 } // namespace adaptive

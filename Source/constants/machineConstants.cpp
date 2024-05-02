@@ -119,10 +119,8 @@ void MachineConstants::calculateMissingMachineConstants() {
   auto& synchroniser = Synchroniser::getInstance();
   for(uint32_t threadNum = 0; threadNum < adaptive::logicalCoresCount(); ++threadNum) {
     threadPool.enqueue([&synchroniser] {
-      std::cout << "Thread started" << std::endl;
       auto& eventSet = getThreadEventSet();
       switchEventSetToCycles(eventSet);
-      std::cout << "Thread complete" << std::endl;
       synchroniser.taskComplete();
     });
   }
