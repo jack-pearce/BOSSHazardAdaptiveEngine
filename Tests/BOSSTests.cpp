@@ -2371,7 +2371,7 @@ TEST_CASE("TPC-H Q6", "[hazard-adaptive-engine]") {
                                       "Greater"_("DateObject"_("1995-01-01"), "L_SHIPDATE"_),
                                       "Greater"_("L_SHIPDATE"_, "DateObject"_("1993-12-31"))))),
             "As"_("revenue"_, "Times"_("L_EXTENDEDPRICE"_, "L_DISCOUNT"_))),
-        "Sum"_("revenue"_)));
+        "As"_("revenue"_,"Sum"_("revenue"_))));
 #ifdef DEFERRED_TO_OTHER_ENGINE
     CHECK(output ==
           "Group"_("Project"_(
@@ -2383,7 +2383,7 @@ TEST_CASE("TPC-H Q6", "[hazard-adaptive-engine]") {
                                  ,
                                  1, 3),
                        "As"_("revenue"_, "Times"_("L_EXTENDEDPRICE"_, "L_DISCOUNT"_))),
-                   "Sum"_("revenue"_)));
+                   "As"_("revenue"_,"Sum"_("revenue"_))));
 #else
     CHECK(output == "Table"_("revenue"_("List"_(34850.16 * 0.05 + 25284.00 * 0.06)))); // NOLINT
 #endif
