@@ -114,6 +114,20 @@ void MachineConstants::calculateMissingMachineConstants() {
   adaptive::config::nonVectorizedDOP = static_cast<int32_t>(adaptive::logicalCoresCount());
   ThreadPool::getInstance().changeNumThreads(adaptive::logicalCoresCount());
 
+  // Update eventSets to include CPU cycles counters
+  auto& threadPool = ThreadPool::getInstance();
+  auto& synchroniser = Synchroniser::getInstance();
+  for(uint32_t threadNum = 0; threadNum < adaptive::logicalCoresCount(); ++threadNum) {
+    threadPool.enqueue([&synchroniser] {
+      std::cout << "Thread started" << std::endl;
+      auto& eventSet = getThreadEventSet();
+      switchEventSetToCycles(eventSet);
+      std::cout << "Thread complete" << std::endl;
+      synchroniser.taskComplete();
+    });
+  }
+  synchroniser.waitUntilComplete(static_cast<int>(adaptive::logicalCoresCount()));
+
   uint32_t dop = 1;
   while(dop <= logicalCoresCount()) {
     std::string dopStr = std::to_string(dop);

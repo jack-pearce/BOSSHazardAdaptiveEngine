@@ -312,9 +312,11 @@ PerfCounterResults groupByHash(int cardinality, int n, const K* keys, const As*.
 
 #ifdef DEBUG_MACHINE_CONSTANTS
   std::cout << "Tuples per dTLB load miss: "
-            << static_cast<double>(tuplesInTransientCheck) / static_cast<double>(tlbMisses) << '\n';
+            << static_cast<double>(tuplesInTransientCheck) / static_cast<double>(tlbMisses) << "("
+            << tlbMisses << " tlbMisses)" << '\n';
   std::cout << "Tuples per last level cache miss: "
-            << static_cast<double>(n) / static_cast<double>(lastLevelCacheMisses) << std::endl;
+            << static_cast<double>(n) / static_cast<double>(lastLevelCacheMisses) << "("
+            << lastLevelCacheMisses << " last level cache misses)" << std::endl;
 #endif
 
   return {0, static_cast<double>(tuplesInTransientCheck) / static_cast<double>(tlbMisses),

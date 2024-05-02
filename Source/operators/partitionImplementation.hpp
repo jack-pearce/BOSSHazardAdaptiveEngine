@@ -2179,6 +2179,18 @@ PartitionedJoinArguments partitionJoinExpr(PartitionOperators partitionImplement
   static_assert(std::is_integral<T1>::value, "PartitionOperators column must be an integer type");
   static_assert(std::is_integral<T2>::value, "PartitionOperators column must be an integer type");
 
+  // Update eventSets to include Partition counters
+  auto& threadPool = ThreadPool::getInstance();
+  auto& synchroniser = Synchroniser::getInstance();
+  for(int threadNum = 0; threadNum < config::nonVectorizedDOP; ++threadNum) {
+    threadPool.enqueue([&synchroniser] {
+      auto& eventSet = getThreadEventSet();
+      switchEventSetToPartition(eventSet);
+      synchroniser.taskComplete();
+    });
+    synchroniser.waitUntilComplete(config::nonVectorizedDOP);
+  }
+
   TwoPartitionedArrays<std::remove_cv_t<T1>, std::remove_cv_t<T2>> partitionedTables =
       [partitionImplementation, &tableOneKeys, &tableTwoKeys, dop]() {
 #ifdef USE_ADAPTIVE_OVER_ADAPTIVE_PARALLEL_FOR_DOP_1
@@ -2196,12 +2208,14 @@ PartitionedJoinArguments partitionJoinExpr(PartitionOperators partitionImplement
         assert(dop == 1);
         if(partitionImplementation == PartitionOperators::RadixBitsFixedMin) {
           std::string name = "Partition_minRadixBits";
-          auto radixBitsMin = static_cast<int>(MachineConstants::getInstance().getMachineConstant(name));
+          auto radixBitsMin =
+              static_cast<int>(MachineConstants::getInstance().getMachineConstant(name));
           auto partitionOperator = Partition<T1, T2>(tableOneKeys, tableTwoKeys, radixBitsMin);
           return partitionOperator.processInput();
         } else if(partitionImplementation == PartitionOperators::RadixBitsFixedMax) {
           std::string name = "Partition_startRadixBits";
-          auto radixBitsMax = static_cast<int>(MachineConstants::getInstance().getMachineConstant(name));
+          auto radixBitsMax =
+              static_cast<int>(MachineConstants::getInstance().getMachineConstant(name));
           auto partitionOperator = Partition<T1, T2>(tableOneKeys, tableTwoKeys, radixBitsMax);
           return partitionOperator.processInput();
         } else if(partitionImplementation == PartitionOperators::RadixBitsAdaptive) {
@@ -2232,7 +2246,6 @@ PartitionedJoinArguments partitionJoinExpr(PartitionOperators partitionImplement
     tableTwoPartitionsOfKeySpans = std::move(tableTwoPartitionsOfKeySpansTmp);
     tableTwoPartitionsOfIndexSpans = std::move(tableTwoPartitionsOfIndexSpansTmp);
   } else {
-    auto& synchroniser = Synchroniser::getInstance();
     ThreadPool::getInstance().enqueue([&tableOneKeys, &partitionedTables,
                                        &tableOnePartitionsOfKeySpans,
                                        &tableOnePartitionsOfIndexSpans, &synchroniser] {
