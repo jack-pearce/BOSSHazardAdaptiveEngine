@@ -31,7 +31,6 @@ private:
 
 PAPI_eventSet& getThreadEventSet();
 void switchEventSetToCycles(PAPI_eventSet& eventSet);
-void switchEventSetToPartition(PAPI_eventSet& eventSet);
 
 // Must match the actual ThreadEventSet in papiWrapper.cpp
 enum EVENT {

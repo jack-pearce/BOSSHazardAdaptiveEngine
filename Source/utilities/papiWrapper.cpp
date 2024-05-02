@@ -196,10 +196,6 @@ void switchEventSetToCycles(PAPI_eventSet& eventSet) {
   replaceCounterInEventSet("PERF_COUNT_HW_CPU_CYCLES", "DTLB-STORE-MISSES", eventSet);
 }
 
-void switchEventSetToPartition(PAPI_eventSet& eventSet) {
-  replaceCounterInEventSet("DTLB-STORE-MISSES", "PERF_COUNT_HW_CPU_CYCLES", eventSet);
-}
-
 PAPI_eventSet& getThreadEventSet() {
   thread_local static PAPI_eventSet eventSet({"PERF_COUNT_HW_BRANCH_MISSES", "DTLB-LOAD-MISSES",
                                               "PERF_COUNT_HW_CACHE_MISSES", "DTLB-STORE-MISSES"});

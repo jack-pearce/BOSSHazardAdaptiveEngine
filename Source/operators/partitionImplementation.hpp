@@ -2179,18 +2179,6 @@ PartitionedJoinArguments partitionJoinExpr(PartitionOperators partitionImplement
   static_assert(std::is_integral<T1>::value, "PartitionOperators column must be an integer type");
   static_assert(std::is_integral<T2>::value, "PartitionOperators column must be an integer type");
 
-  // Update eventSets to include Partition counters
-  auto& threadPool = ThreadPool::getInstance();
-  auto& synchroniser = Synchroniser::getInstance();
-  for(int threadNum = 0; threadNum < config::nonVectorizedDOP; ++threadNum) {
-    threadPool.enqueue([&synchroniser] {
-      auto& eventSet = getThreadEventSet();
-      switchEventSetToPartition(eventSet);
-      synchroniser.taskComplete();
-    });
-    synchroniser.waitUntilComplete(config::nonVectorizedDOP);
-  }
-
   TwoPartitionedArrays<std::remove_cv_t<T1>, std::remove_cv_t<T2>> partitionedTables =
       [partitionImplementation, &tableOneKeys, &tableTwoKeys, dop]() {
 #ifdef USE_ADAPTIVE_OVER_ADAPTIVE_PARALLEL_FOR_DOP_1
