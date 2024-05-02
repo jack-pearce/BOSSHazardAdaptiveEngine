@@ -2234,6 +2234,7 @@ PartitionedJoinArguments partitionJoinExpr(PartitionOperators partitionImplement
     tableTwoPartitionsOfKeySpans = std::move(tableTwoPartitionsOfKeySpansTmp);
     tableTwoPartitionsOfIndexSpans = std::move(tableTwoPartitionsOfIndexSpansTmp);
   } else {
+    auto& synchroniser = Synchroniser::getInstance();
     ThreadPool::getInstance().enqueue([&tableOneKeys, &partitionedTables,
                                        &tableOnePartitionsOfKeySpans,
                                        &tableOnePartitionsOfIndexSpans, &synchroniser] {
