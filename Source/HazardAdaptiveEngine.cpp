@@ -660,6 +660,9 @@ private:
                          std::declval<Type1>(), std::declval<Type2>()));
 
                      if constexpr(std::is_same_v<OutputType, bool>) {
+                       if(indexes.size() == 0) {
+                         return;
+                       }
                        assert(typedSpan1.size() == 1 || typedSpan2.size() == 1);
                        if(typedSpan2.size() == 1) {
                          indexes = adaptive::select(selectImplementation, typedSpan1,
@@ -764,9 +767,6 @@ private:
           [&span, &preds, &columns](auto&& candidateIndexes) {
             if constexpr(std::is_same_v<std::decay_t<decltype(candidateIndexes)>, Span<int32_t>>) {
               for(auto it = std::next(preds.begin()); it != preds.end(); ++it) {
-                if(candidateIndexes.size() == 0) {
-                  break;
-                }
                 (*it)(columns, &candidateIndexes);
               }
               span = Span<int32_t>(std::move(candidateIndexes));
