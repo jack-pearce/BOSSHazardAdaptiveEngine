@@ -114,7 +114,11 @@ void MachineConstants::calculateMissingMachineConstants() {
   adaptive::config::nonVectorizedDOP = static_cast<int32_t>(adaptive::logicalCoresCount());
   ThreadPool::getInstance().changeNumThreads(adaptive::logicalCoresCount());
 
-  // Update eventSets to include CPU cycles counters
+  // Update eventSet in main thread to include CPU cycles counters
+  auto& eventSet = getThreadEventSet();
+  switchEventSetToCycles(eventSet);
+
+  // Update eventSets in worker threads to include CPU cycles counters
   auto& threadPool = ThreadPool::getInstance();
   auto& synchroniser = Synchroniser::getInstance();
   for(uint32_t threadNum = 0; threadNum < adaptive::logicalCoresCount(); ++threadNum) {
@@ -171,7 +175,11 @@ void MachineConstants::calculateMissingMachineConstants() {
     calculatePartitionMachineConstants();
   }
 
+  // Revert eventSet in main thread to the default
+  switchEventSetToPartition(eventSet);
+
   // Revert number of threads in thread pool to that set in the config
+  // Additionally, by recreating all the worker threads, we revert the eventSets to the default
   adaptive::config::nonVectorizedDOP = nonVectorizedDOPvalue;
   ThreadPool::getInstance().changeNumThreads(adaptive::config::nonVectorizedDOP);
 }
