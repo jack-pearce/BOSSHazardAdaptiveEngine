@@ -29,7 +29,7 @@ constexpr double GROUP_VARIABILITY_MARGIN_PAGE_FAULTS = 0.0; // 20% // TODO
 constexpr double GROUP_VARIABILITY_MARGIN_LLC = 0.2;         // 20%
 
 constexpr float HASHMAP_OVERALLOCATION_FACTOR = 2.5;
-constexpr float PERCENT_INPUT_IN_PAGE_FAULTS_CHECK = 0.0002;
+constexpr float PERCENT_INPUT_IN_PAGE_FAULTS_CHECK = 0.00005; // 0.005%
 
 /**************************************** UTILITIES **************************************/
 
@@ -291,7 +291,8 @@ PerfCounterResults groupByHash(int cardinality, int n, const K* keys, const As*.
   HA_tsl::robin_map<K, std::tuple<As...>> map(initialSize);
   auto& eventSet = getThreadEventSet();
 
-  int tuplesInTransientCheck = static_cast<int>(static_cast<float>(n) * PERCENT_INPUT_IN_PAGE_FAULTS_CHECK);
+  int tuplesInTransientCheck =
+      static_cast<int>(static_cast<float>(n) * PERCENT_INPUT_IN_PAGE_FAULTS_CHECK);
   int tuplesPerTransientCheckReading = static_cast<int>(std::ceil(tuplesInTransientCheck / 10.0));
   std::vector<int> tuplesPerReading;
   tuplesPerReading.reserve(10);
@@ -303,12 +304,14 @@ PerfCounterResults groupByHash(int cardinality, int n, const K* keys, const As*.
   pageFaults.reserve(10);
   long_long lastLevelCacheMisses = 0;
   long_long* pageFaultsPtr = eventSet.getCounterDiffsPtr() + EVENT::PAGE_FAULTS;
-  long_long* lastLevelCacheMissesPtr = eventSet.getCounterDiffsPtr() + EVENT::LAST_LEVEL_CACHE_MISSES;
+  long_long* lastLevelCacheMissesPtr =
+      eventSet.getCounterDiffsPtr() + EVENT::LAST_LEVEL_CACHE_MISSES;
   int tuplesProcessed = 0;
 
   for(int i = 0; i < 10; i++) {
     eventSet.readCounters();
-    groupByHashAux<K, As...>(map, tuplesProcessed, tuplesPerTransientCheckReading, keys, aggregates..., aggregators...);
+    groupByHashAux<K, As...>(map, tuplesProcessed, tuplesPerTransientCheckReading, keys,
+                             aggregates..., aggregators...);
     eventSet.readCountersAndUpdateDiff();
     pageFaults.push_back(*pageFaultsPtr);
     std::cout << "pageFaults: " << pageFaults.back() << std::endl;
@@ -321,9 +324,11 @@ PerfCounterResults groupByHash(int cardinality, int n, const K* keys, const As*.
   groupByHashAux<K, As...>(map, tuplesProcessed, remaining, keys, aggregates..., aggregators...);
   eventSet.readCountersAndUpdateDiff();
   lastLevelCacheMisses += *lastLevelCacheMissesPtr;
-  
-  double pageFaultDecreaseRatePerTuple = std::abs(linearRegressionSlope(tuplesPerReading, pageFaults));
-  double lastLevelCacheMissRate = static_cast<double>(n) / static_cast<double>(lastLevelCacheMisses);
+
+  double pageFaultDecreaseRatePerTuple =
+      std::abs(linearRegressionSlope(tuplesPerReading, pageFaults));
+  double lastLevelCacheMissRate =
+      static_cast<double>(n) / static_cast<double>(lastLevelCacheMisses);
 
 #ifdef DEBUG_MACHINE_CONSTANTS
   std::cout << "pageFaultDecreaseRatePerTuple: " << pageFaultDecreaseRatePerTuple << '\n';
@@ -357,8 +362,9 @@ PerfCounterResults runGroupFunctionMeasureHazards(int cardinality, int dop,
     for(auto taskNum = 0; taskNum < dop; ++taskNum) {
       tuplesPerThread = tuplesPerThreadBaseline + (taskNum < remainingTuples);
 
-      threadPool.enqueue([&synchroniser, &totalPageFaultDecreaseRate, &totalLlcMissRate, cardinality, start,
-                          tuplesPerThread, &keySpan, &typedAggCols..., aggregators...] {
+      threadPool.enqueue([&synchroniser, &totalPageFaultDecreaseRate, &totalLlcMissRate,
+                          cardinality, start, tuplesPerThread, &keySpan, &typedAggCols...,
+                          aggregators...] {
         auto measurements = groupByHash<K, As...>(cardinality, tuplesPerThread, &(keySpan[start]),
                                                   &(typedAggCols[0][start])..., aggregators...);
         totalPageFaultDecreaseRate += measurements.pageFaultDecreaseRatePerTuple;
@@ -584,7 +590,8 @@ void calculateGroupMachineConstants(GROUP_QUERIES groupQuery, int dop) {
     crossoverPoints.push_back(calculateGroupByCrossoverCardinality(groupQuery, dop));
   }
   std::sort(crossoverPoints.begin(), crossoverPoints.end());
-  int crossoverCardinality = static_cast<int>(crossoverPoints[GROUP_NUMBER_OF_CARDINALITY_TESTS / 2]);
+  int crossoverCardinality =
+      static_cast<int>(crossoverPoints[GROUP_NUMBER_OF_CARDINALITY_TESTS / 2]);
   std::cout << " Complete" << std::endl;
 
   std::cout << " - Running tests for page fault decrease rate and last level cache misses";
@@ -592,8 +599,8 @@ void calculateGroupMachineConstants(GROUP_QUERIES groupQuery, int dop) {
   std::vector<double> tuplesPerLastLevelCacheMiss;
   int n = static_cast<int>(GROUP_DATA_SIZE);
   for(int i = 0; i < GROUP_NUMBER_OF_CONSTANTS_TESTS; ++i) {
-    auto [_, pageFaultDecreaseRate, llcMissRate] = runGroupFunction(Measurement::HAZARDS, Group::Hash,
-                                                          groupQuery, dop, n, crossoverCardinality);
+    auto [_, pageFaultDecreaseRate, llcMissRate] = runGroupFunction(
+        Measurement::HAZARDS, Group::Hash, groupQuery, dop, n, crossoverCardinality);
     pageFaultDecreaseRatePerTuple.push_back(pageFaultDecreaseRate);
     tuplesPerLastLevelCacheMiss.push_back(llcMissRate);
   }
@@ -602,12 +609,13 @@ void calculateGroupMachineConstants(GROUP_QUERIES groupQuery, int dop) {
   std::cout << " Complete" << std::endl;
 
   auto& constants = MachineConstants::getInstance();
-  constants.updateMachineConstant(names.pageFaultDecreaseRate,
-                                  (1.0 - GROUP_VARIABILITY_MARGIN_PAGE_FAULTS) *
-                                      pageFaultDecreaseRatePerTuple[GROUP_NUMBER_OF_CONSTANTS_TESTS / 2]);
-  constants.updateMachineConstant(names.llcMissRate,
-                                  (1.0 - GROUP_VARIABILITY_MARGIN_LLC) *
-                                      tuplesPerLastLevelCacheMiss[GROUP_NUMBER_OF_CONSTANTS_TESTS / 2]);
+  constants.updateMachineConstant(
+      names.pageFaultDecreaseRate,
+      (1.0 - GROUP_VARIABILITY_MARGIN_PAGE_FAULTS) *
+          pageFaultDecreaseRatePerTuple[GROUP_NUMBER_OF_CONSTANTS_TESTS / 2]);
+  constants.updateMachineConstant(
+      names.llcMissRate, (1.0 - GROUP_VARIABILITY_MARGIN_LLC) *
+                             tuplesPerLastLevelCacheMiss[GROUP_NUMBER_OF_CONSTANTS_TESTS / 2]);
 }
 
 } // namespace adaptive

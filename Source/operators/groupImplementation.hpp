@@ -22,10 +22,10 @@
 
 namespace adaptive {
 
-constexpr float PERCENT_INPUT_TO_TRACK = 0.001;            // 0.1%
-constexpr float PERCENT_INPUT_IN_TRANSIENT_CHECK = 0.0002; // 0.02%
-constexpr int TUPLES_IN_CACHE_MISS_CHECK = 75 * 1000;      // 75,000
-constexpr float PERCENT_INPUT_BETWEEN_HASHING = 0.25;      // 25%
+constexpr float PERCENT_INPUT_TO_TRACK = 0.001;             // 0.1%
+constexpr float PERCENT_INPUT_IN_TRANSIENT_CHECK = 0.00005; // 0.005%
+constexpr int TUPLES_IN_CACHE_MISS_CHECK = 75 * 1000;       // 75,000
+constexpr float PERCENT_INPUT_BETWEEN_HASHING = 0.25;       // 25%
 
 constexpr int FIRST_KEY_BITS = 8; // Bits for first key when there are two keys
 constexpr int FIRST_KEY_MASK = static_cast<int>(1 << FIRST_KEY_BITS) - 1;
