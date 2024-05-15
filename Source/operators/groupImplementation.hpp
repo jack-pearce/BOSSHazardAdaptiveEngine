@@ -17,7 +17,7 @@
 #include "utilities/utilities.hpp"
 
 #define ADAPTIVITY_OUTPUT
-#define DEBUG
+// #define DEBUG
 #define USE_ADAPTIVE_OVER_ADAPTIVE_PARALLEL_FOR_DOP_1
 
 namespace adaptive {
@@ -659,8 +659,9 @@ public:
   robustnessIncreaseRequiredBasedOnPageFaults(double pageFaultsPerTuple,
                                               double measuredPageFaultDecreaseRatePerTuple) const {
     // High rate of page faults which is not decreasing, indicating a large working set size
-    return pageFaultsPerTuple > 1 && (measuredPageFaultDecreaseRatePerTuple > 0 ||
-           std::abs(measuredPageFaultDecreaseRatePerTuple) < pageFaultDecreaseRatePerTuple);
+    return pageFaultsPerTuple > 1 &&
+           (measuredPageFaultDecreaseRatePerTuple > 0 ||
+            std::abs(measuredPageFaultDecreaseRatePerTuple) < pageFaultDecreaseRatePerTuple);
   }
 
   inline bool robustnessIncreaseRequiredBasedOnCacheMisses(int tuplesProcessed) {

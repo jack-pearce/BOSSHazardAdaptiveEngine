@@ -13,7 +13,7 @@
 #include "utilities/papiWrapper.hpp"
 #include "utilities/utilities.hpp"
 
-#define DEBUG_MACHINE_CONSTANTS
+// #define DEBUG_MACHINE_CONSTANTS
 
 /**************************************** CONFIG **************************************/
 
