@@ -24,9 +24,9 @@ constexpr int SELECT_ITERATIONS = 12;
 constexpr int GROUP_NUMBER_OF_CARDINALITY_TESTS = 1;
 constexpr int GROUP_NUMBER_OF_CONSTANTS_TESTS = 1;
 constexpr size_t GROUP_DATA_SIZE = 200 * 1000 * 1000;
-constexpr int GROUP_ITERATIONS = 15;
-constexpr double GROUP_VARIABILITY_MARGIN_PAGE_FAULTS = 0.0; // 20% // TODO
-constexpr double GROUP_VARIABILITY_MARGIN_LLC = 0.2;         // 20%
+constexpr int GROUP_ITERATIONS = 12;
+constexpr double GROUP_VARIABILITY_MARGIN_PAGE_FAULTS = 0.0; // 0%
+constexpr double GROUP_VARIABILITY_MARGIN_LLC = 0.3;         // 30%
 
 constexpr float HASHMAP_OVERALLOCATION_FACTOR = 2.5;
 constexpr float PERCENT_INPUT_IN_PAGE_FAULTS_CHECK = 0.00005; // 0.005%

@@ -589,8 +589,8 @@ public:
   robustnessIncreaseRequiredBasedOnPageFaults(double pageFaultsPerTuple,
                                               double measuredPageFaultDecreaseRatePerTuple) const {
     // High rate of page faults which is not decreasing, indicating a large working set size
-    return pageFaultsPerTuple > 1 &&
-           measuredPageFaultDecreaseRatePerTuple < pageFaultDecreaseRatePerTuple;
+    return pageFaultsPerTuple > 1 && (measuredPageFaultDecreaseRatePerTuple > 0 ||
+           std::abs(measuredPageFaultDecreaseRatePerTuple) < pageFaultDecreaseRatePerTuple);
   }
 
   inline bool robustnessIncreaseRequiredBasedOnCacheMisses(int tuplesProcessed) {
@@ -954,7 +954,7 @@ groupByAdaptive(int dop, const std::vector<int>& spanSizes, int n, int outerInde
       }
       pageFaultsPerTuple =
           static_cast<double>(pageFaults.back()) / static_cast<double>(tuplesPerReading[0]);
-      pageFaultDecreaseRatePerTuple = std::abs(linearRegressionSlope(tuplesPerReading, pageFaults));
+      pageFaultDecreaseRatePerTuple = linearRegressionSlope(tuplesPerReading, pageFaults);
 #ifdef DEBUG
       std::cout << "pageFaultsPerTuple: " << pageFaultsPerTuple << std::endl;
       std::cout << "pageFaultDecreaseRatePerTuple: " << pageFaultDecreaseRatePerTuple << std::endl;
