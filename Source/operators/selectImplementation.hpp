@@ -238,7 +238,7 @@ SelectAdaptive<T, P>::SelectAdaptive()
       consecutivePredications(maxConsecutivePredications),
       activeOperator(SelectImplementation::Predication_), eventSet(getThreadEventSet()),
       monitor(MonitorSelect<T, P>(
-          this, (eventSet.getCounterDiffsPtr() + EVENT::PERF_COUNT_HW_BRANCH_MISSES))),
+          this, (eventSet.getCounterDiffsPtr() + EVENT::BRANCH_MISPREDICTIONS))),
       branchOperator(SelectBranch<T, P>()), predicationOperator(SelectPredication<T, P>()) {
 #ifdef CONSTRUCT_DEBUG
   std::cout << "Constructing Select Adaptive operator object" << std::endl;
@@ -525,7 +525,7 @@ SelectAdaptiveParallelAux<T, P>::SelectAdaptiveParallelAux(SelectThreadArgs<T, P
       activeOperator(SelectImplementation::Predication_), branchOperator(SelectBranch<T, P>()),
       predicationOperator(SelectPredication<T, P>()), eventSet(getThreadEventSet()),
       monitor(MonitorSelectParallel<T, P>(
-          this, dop, (eventSet.getCounterDiffsPtr() + EVENT::PERF_COUNT_HW_BRANCH_MISSES))),
+          this, dop, (eventSet.getCounterDiffsPtr() + EVENT::BRANCH_MISPREDICTIONS))),
       consecutivePredications(maxConsecutivePredications), threadSelected(0) {
 
   if(threadNum == 0) {

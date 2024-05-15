@@ -20,14 +20,14 @@ enum GROUP_QUERIES {
 };
 
 struct GroupConstants {
-  std::string tlbMissRate;
+  std::string pageFaultDecreaseRate;
   std::string llcMissRate;
 };
 
 GroupConstants getGroupMachineConstantNames(GROUP_QUERIES groupQuery, uint32_t dop) {
   int groupQueryIndex = static_cast<int>(groupQuery);
   uint32_t numBytes = 4 + (4 * groupQueryIndex);
-  std::string name1 = "Group_" + std::to_string(numBytes) + "B_" + std::to_string(dop) + "_dop_TLB";
+  std::string name1 = "Group_" + std::to_string(numBytes) + "B_" + std::to_string(dop) + "_dop_PageFaults";
   std::string name2 = "Group_" + std::to_string(numBytes) + "B_" + std::to_string(dop) + "_dop_LLC";
   return {name1, name2};
 }

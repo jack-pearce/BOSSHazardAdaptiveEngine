@@ -13,7 +13,7 @@
 #include "utilities/papiWrapper.hpp"
 #include "utilities/utilities.hpp"
 
-// #define DEBUG_MACHINE_CONSTANTS
+#define DEBUG_MACHINE_CONSTANTS
 
 /**************************************** CONFIG **************************************/
 
@@ -21,14 +21,15 @@ constexpr int SELECT_NUMBER_OF_TESTS = 9; // Can be reduced down to 1 to speed u
 constexpr size_t SELECT_DATA_SIZE = 100 * 1000 * 1000;
 constexpr int SELECT_ITERATIONS = 12;
 
-constexpr int GROUP_NUMBER_OF_TESTS = 1; // Can be reduced down to 1 to speed up calibration
+constexpr int GROUP_NUMBER_OF_CARDINALITY_TESTS = 1;
+constexpr int GROUP_NUMBER_OF_CONSTANTS_TESTS = 1;
 constexpr size_t GROUP_DATA_SIZE = 200 * 1000 * 1000;
-constexpr int GROUP_ITERATIONS = 12;
-constexpr double GROUP_VARIABILITY_MARGIN_TLB = 0.2; // 20%
-constexpr double GROUP_VARIABILITY_MARGIN_LLC = 0.3; // 20%
+constexpr int GROUP_ITERATIONS = 15;
+constexpr double GROUP_VARIABILITY_MARGIN_PAGE_FAULTS = 0.0; // 20% // TODO
+constexpr double GROUP_VARIABILITY_MARGIN_LLC = 0.2;         // 20%
 
 constexpr float HASHMAP_OVERALLOCATION_FACTOR = 2.5;
-constexpr float PERCENT_INPUT_IN_TLB_CHECK = 0.0001;
+constexpr float PERCENT_INPUT_IN_PAGE_FAULTS_CHECK = 0.0002;
 
 /**************************************** UTILITIES **************************************/
 
@@ -53,7 +54,7 @@ Aggregator<T> sumAggregator = [](const T currentAggregate, const T numberToInclu
 
 struct PerfCounterResults {
   long_long cycles;
-  double tlbMissRate;
+  double pageFaultDecreaseRatePerTuple;
   double llcMissRate;
 };
 
@@ -71,7 +72,7 @@ template <typename T> double calculateSelectLowerMachineConstant(uint32_t dop) {
   auto predicate = std::greater();
 
   auto& eventSet = getThreadEventSet();
-  long_long* cycles = eventSet.getCounterDiffsPtr() + EVENT::PERF_COUNT_HW_CPU_CYCLES;
+  long_long* cycles = eventSet.getCounterDiffsPtr() + EVENT::CPU_CYCLES;
   long_long branchCycles, predicationCycles;
   double upperSelectivity = 0.5;
   double lowerSelectivity = 0;
@@ -153,7 +154,7 @@ template <typename T> double calculateSelectUpperMachineConstant(uint32_t dop) {
   auto predicate = std::greater();
 
   auto& eventSet = getThreadEventSet();
-  long_long* cycles = eventSet.getCounterDiffsPtr() + EVENT::PERF_COUNT_HW_CPU_CYCLES;
+  long_long* cycles = eventSet.getCounterDiffsPtr() + EVENT::CPU_CYCLES;
   long_long branchCycles, predicationCycles;
   double upperSelectivity = 1.0;
   double lowerSelectivity = 0.5;
@@ -290,38 +291,46 @@ PerfCounterResults groupByHash(int cardinality, int n, const K* keys, const As*.
   HA_tsl::robin_map<K, std::tuple<As...>> map(initialSize);
   auto& eventSet = getThreadEventSet();
 
-  int tuplesInTransientCheck = static_cast<int>(static_cast<float>(n) * PERCENT_INPUT_IN_TLB_CHECK);
+  int tuplesInTransientCheck = static_cast<int>(static_cast<float>(n) * PERCENT_INPUT_IN_PAGE_FAULTS_CHECK);
+  int tuplesPerTransientCheckReading = static_cast<int>(std::ceil(tuplesInTransientCheck / 10.0));
+  std::vector<int> tuplesPerReading;
+  tuplesPerReading.reserve(10);
+  for(int i = 1; i < 11; i++) {
+    tuplesPerReading.push_back(tuplesPerTransientCheckReading * i);
+  }
 
-  long_long tlbMisses;
-  long_long lastLevelCacheMisses;
-  long_long* tlbMissesPtr = eventSet.getCounterDiffsPtr() + EVENT::DTLB_LOAD_MISSES;
-  long_long* lastLevelCacheMissesPtr =
-      eventSet.getCounterDiffsPtr() + EVENT::PERF_COUNT_HW_CACHE_MISSES;
+  std::vector<long_long> pageFaults;
+  pageFaults.reserve(10);
+  long_long lastLevelCacheMisses = 0;
+  long_long* pageFaultsPtr = eventSet.getCounterDiffsPtr() + EVENT::PAGE_FAULTS;
+  long_long* lastLevelCacheMissesPtr = eventSet.getCounterDiffsPtr() + EVENT::LAST_LEVEL_CACHE_MISSES;
+  int tuplesProcessed = 0;
 
+  for(int i = 0; i < 10; i++) {
+    eventSet.readCounters();
+    groupByHashAux<K, As...>(map, tuplesProcessed, tuplesPerTransientCheckReading, keys, aggregates..., aggregators...);
+    eventSet.readCountersAndUpdateDiff();
+    pageFaults.push_back(*pageFaultsPtr);
+    std::cout << "pageFaults: " << pageFaults.back() << std::endl;
+    lastLevelCacheMisses += *lastLevelCacheMissesPtr;
+    tuplesProcessed += tuplesPerTransientCheckReading;
+  }
+
+  size_t remaining = n - tuplesProcessed;
   eventSet.readCounters();
-  groupByHashAux<K, As...>(map, 0, tuplesInTransientCheck, keys, aggregates..., aggregators...);
-  eventSet.readCountersAndUpdateDiff();
-  tlbMisses = *tlbMissesPtr;
-  lastLevelCacheMisses = *lastLevelCacheMissesPtr;
-
-  size_t remaining = n - tuplesInTransientCheck;
-  eventSet.readCounters();
-  groupByHashAux<K, As...>(map, tuplesInTransientCheck, remaining, keys, aggregates...,
-                           aggregators...);
+  groupByHashAux<K, As...>(map, tuplesProcessed, remaining, keys, aggregates..., aggregators...);
   eventSet.readCountersAndUpdateDiff();
   lastLevelCacheMisses += *lastLevelCacheMissesPtr;
+  
+  double pageFaultDecreaseRatePerTuple = std::abs(linearRegressionSlope(tuplesPerReading, pageFaults));
+  double lastLevelCacheMissRate = static_cast<double>(n) / static_cast<double>(lastLevelCacheMisses);
 
 #ifdef DEBUG_MACHINE_CONSTANTS
-  std::cout << "Tuples per dTLB load miss: "
-            << static_cast<double>(tuplesInTransientCheck) / static_cast<double>(tlbMisses) << "("
-            << tlbMisses << " tlbMisses)" << '\n';
-  std::cout << "Tuples per last level cache miss: "
-            << static_cast<double>(n) / static_cast<double>(lastLevelCacheMisses) << "("
-            << lastLevelCacheMisses << " last level cache misses)" << std::endl;
+  std::cout << "pageFaultDecreaseRatePerTuple: " << pageFaultDecreaseRatePerTuple << '\n';
+  std::cout << "lastLevelCacheMissRate: " << lastLevelCacheMissRate << std::endl;
 #endif
 
-  return {0, static_cast<double>(tuplesInTransientCheck) / static_cast<double>(tlbMisses),
-          static_cast<double>(n) / static_cast<double>(lastLevelCacheMisses)};
+  return {0, pageFaultDecreaseRatePerTuple, lastLevelCacheMissRate};
 }
 
 template <typename K, typename... As>
@@ -342,17 +351,17 @@ PerfCounterResults runGroupFunctionMeasureHazards(int cardinality, int dop,
     int tuplesPerThread;
     int start = 0;
 
-    std::atomic<double> totalTlbMissRate = 0;
+    std::atomic<double> totalPageFaultDecreaseRate = 0;
     std::atomic<double> totalLlcMissRate = 0;
 
     for(auto taskNum = 0; taskNum < dop; ++taskNum) {
       tuplesPerThread = tuplesPerThreadBaseline + (taskNum < remainingTuples);
 
-      threadPool.enqueue([&synchroniser, &totalTlbMissRate, &totalLlcMissRate, cardinality, start,
+      threadPool.enqueue([&synchroniser, &totalPageFaultDecreaseRate, &totalLlcMissRate, cardinality, start,
                           tuplesPerThread, &keySpan, &typedAggCols..., aggregators...] {
         auto measurements = groupByHash<K, As...>(cardinality, tuplesPerThread, &(keySpan[start]),
                                                   &(typedAggCols[0][start])..., aggregators...);
-        totalTlbMissRate += measurements.tlbMissRate;
+        totalPageFaultDecreaseRate += measurements.pageFaultDecreaseRatePerTuple;
         totalLlcMissRate += measurements.llcMissRate;
         synchroniser.taskComplete();
       });
@@ -361,7 +370,7 @@ PerfCounterResults runGroupFunctionMeasureHazards(int cardinality, int dop,
     }
     synchroniser.waitUntilComplete(dop);
 
-    return {0, totalTlbMissRate / static_cast<double>(dop),
+    return {0, totalPageFaultDecreaseRate / static_cast<double>(dop),
             totalLlcMissRate / static_cast<double>(dop)};
   }
 }
@@ -376,7 +385,7 @@ PerfCounterResults runGroupFunctionMeasureCycles(Group implementation, uint32_t 
   if(dop == 1) {
     assert(implementation == Group::Hash || implementation == Group::Sort);
     auto& eventSet = getThreadEventSet();
-    long_long* cyclesPtr = eventSet.getCounterDiffsPtr() + EVENT::PERF_COUNT_HW_CPU_CYCLES;
+    long_long* cyclesPtr = eventSet.getCounterDiffsPtr() + EVENT::CPU_CYCLES;
     eventSet.readCounters();
     group<K, As...>(implementation, dop, 1, std::move(keySpans), std::move(keySpans2),
                     std::move(typedAggCols)..., aggregators...);
@@ -525,7 +534,7 @@ int calculateGroupByCrossoverCardinality(GROUP_QUERIES groupQuery, int dop) {
           runGroupFunction(Measurement::CYCLES, Group::Hash, groupQuery, dop, n, midCardinality);
       hashCycles = results.cycles;
     } else {
-      constants.updateMachineConstant(names.tlbMissRate, 0);
+      constants.updateMachineConstant(names.pageFaultDecreaseRate, 0);
       constants.updateMachineConstant(names.llcMissRate, 0);
       auto results = runGroupFunction(Measurement::CYCLES, Group::GroupAdaptiveParallel, groupQuery,
                                       dop, n, midCardinality);
@@ -537,7 +546,7 @@ int calculateGroupByCrossoverCardinality(GROUP_QUERIES groupQuery, int dop) {
           runGroupFunction(Measurement::CYCLES, Group::Sort, groupQuery, dop, n, midCardinality);
       sortCycles = results.cycles;
     } else {
-      constants.updateMachineConstant(names.tlbMissRate, 1000000);
+      constants.updateMachineConstant(names.pageFaultDecreaseRate, 1000000);
       constants.updateMachineConstant(names.llcMissRate, 1000000);
       auto results = runGroupFunction(Measurement::CYCLES, Group::GroupAdaptiveParallel, groupQuery,
                                       dop, n, midCardinality);
@@ -565,40 +574,40 @@ int calculateGroupByCrossoverCardinality(GROUP_QUERIES groupQuery, int dop) {
 void calculateGroupMachineConstants(GROUP_QUERIES groupQuery, int dop) {
 
   auto names = getGroupMachineConstantNames(groupQuery, dop);
-  auto name = names.tlbMissRate.substr(0, names.tlbMissRate.size() - 4);
+  auto name = names.llcMissRate.substr(0, names.llcMissRate.size() - 4);
   std::cout << "Calculating machine constants for " << name << std::endl;
   std::cout << " - Running tests for crossover point";
   std::cout.flush();
 
   std::vector<double> crossoverPoints;
-  for(int i = 0; i < GROUP_NUMBER_OF_TESTS; ++i) {
+  for(int i = 0; i < GROUP_NUMBER_OF_CARDINALITY_TESTS; ++i) {
     crossoverPoints.push_back(calculateGroupByCrossoverCardinality(groupQuery, dop));
   }
   std::sort(crossoverPoints.begin(), crossoverPoints.end());
-  int crossoverCardinality = static_cast<int>(crossoverPoints[GROUP_NUMBER_OF_TESTS / 2]);
+  int crossoverCardinality = static_cast<int>(crossoverPoints[GROUP_NUMBER_OF_CARDINALITY_TESTS / 2]);
   std::cout << " Complete" << std::endl;
 
-  std::cout << " - Running tests for dtlb load misses and last level cache misses";
-  std::vector<double> tuplesPerDtlbLoadMiss;
+  std::cout << " - Running tests for page fault decrease rate and last level cache misses";
+  std::vector<double> pageFaultDecreaseRatePerTuple;
   std::vector<double> tuplesPerLastLevelCacheMiss;
   int n = static_cast<int>(GROUP_DATA_SIZE);
-  for(int i = 0; i < GROUP_NUMBER_OF_TESTS; ++i) {
-    auto [_, tlbMissRate, llcMissRate] = runGroupFunction(Measurement::HAZARDS, Group::Hash,
+  for(int i = 0; i < GROUP_NUMBER_OF_CONSTANTS_TESTS; ++i) {
+    auto [_, pageFaultDecreaseRate, llcMissRate] = runGroupFunction(Measurement::HAZARDS, Group::Hash,
                                                           groupQuery, dop, n, crossoverCardinality);
-    tuplesPerDtlbLoadMiss.push_back(tlbMissRate);
+    pageFaultDecreaseRatePerTuple.push_back(pageFaultDecreaseRate);
     tuplesPerLastLevelCacheMiss.push_back(llcMissRate);
   }
-  std::sort(tuplesPerDtlbLoadMiss.begin(), tuplesPerDtlbLoadMiss.end());
+  std::sort(pageFaultDecreaseRatePerTuple.begin(), pageFaultDecreaseRatePerTuple.end());
   std::sort(tuplesPerLastLevelCacheMiss.begin(), tuplesPerLastLevelCacheMiss.end());
   std::cout << " Complete" << std::endl;
 
   auto& constants = MachineConstants::getInstance();
-  constants.updateMachineConstant(names.tlbMissRate,
-                                  (1.0 - GROUP_VARIABILITY_MARGIN_TLB) *
-                                      tuplesPerDtlbLoadMiss[GROUP_NUMBER_OF_TESTS / 2]);
+  constants.updateMachineConstant(names.pageFaultDecreaseRate,
+                                  (1.0 - GROUP_VARIABILITY_MARGIN_PAGE_FAULTS) *
+                                      pageFaultDecreaseRatePerTuple[GROUP_NUMBER_OF_CONSTANTS_TESTS / 2]);
   constants.updateMachineConstant(names.llcMissRate,
                                   (1.0 - GROUP_VARIABILITY_MARGIN_LLC) *
-                                      tuplesPerLastLevelCacheMiss[GROUP_NUMBER_OF_TESTS / 2]);
+                                      tuplesPerLastLevelCacheMiss[GROUP_NUMBER_OF_CONSTANTS_TESTS / 2]);
 }
 
 } // namespace adaptive

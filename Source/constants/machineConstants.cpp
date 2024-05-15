@@ -152,7 +152,7 @@ void MachineConstants::calculateMissingMachineConstants() {
 
     for(int groupQueryIdx = 1; groupQueryIdx <= 11; ++groupQueryIdx) {
       auto names = getGroupMachineConstantNames(static_cast<GROUP_QUERIES>(groupQueryIdx), dop);
-      if(machineConstants.count(names.tlbMissRate) == 0 ||
+      if(machineConstants.count(names.pageFaultDecreaseRate) == 0 ||
          machineConstants.count(names.llcMissRate) == 0) {
         uint32_t numBytes = 4 + (4 * groupQueryIdx);
         std::cout << "Machine constant for Group (" << std::to_string(numBytes)

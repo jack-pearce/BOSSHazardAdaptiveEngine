@@ -35,11 +35,11 @@ void switchEventSetToPartition(PAPI_eventSet& eventSet);
 
 // Must match the actual ThreadEventSet in papiWrapper.cpp
 enum EVENT {
-  PERF_COUNT_HW_BRANCH_MISSES = 0,
-  DTLB_LOAD_MISSES = 1,
-  PERF_COUNT_HW_CACHE_MISSES = 2,
+  BRANCH_MISPREDICTIONS = 0,
+  PAGE_FAULTS = 1,
+  LAST_LEVEL_CACHE_MISSES = 2,
   DTLB_STORE_MISSES = 3,
-  PERF_COUNT_HW_CPU_CYCLES = 3
+  CPU_CYCLES = 3
 };
 
 } // namespace adaptive

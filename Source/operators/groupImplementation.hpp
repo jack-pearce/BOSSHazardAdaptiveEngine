@@ -579,15 +579,18 @@ groupBySort(int cardinality, bool secondKey, ExpressionSpanArguments&& keySpans1
 
 class MonitorGroup {
 public:
-  explicit MonitorGroup(const long_long* lastLevelCacheMisses_, float tuplesPerDtlbLoadMiss_,
-                        float tuplesPerLastLevelCacheMiss_)
-      : lastLevelCacheMisses(lastLevelCacheMisses_), tuplesPerDtlbLoadMiss(tuplesPerDtlbLoadMiss_),
+  explicit MonitorGroup(const long_long* lastLevelCacheMisses_,
+                        float pageFaultDecreaseRatePerTuple_, float tuplesPerLastLevelCacheMiss_)
+      : lastLevelCacheMisses(lastLevelCacheMisses_),
+        pageFaultDecreaseRatePerTuple(pageFaultDecreaseRatePerTuple_),
         tuplesPerLastLevelCacheMiss(tuplesPerLastLevelCacheMiss_) {}
 
   [[nodiscard]] inline bool
-  robustnessIncreaseRequiredBasedOnDtlbLoadMisses(double pageFaultsPerTuple,
-                                                  double pageFaultDecreaseRatePerTuple) const {
-    return pageFaultsPerTuple > 1 && pageFaultDecreaseRatePerTuple < tuplesPerDtlbLoadMiss;
+  robustnessIncreaseRequiredBasedOnPageFaults(double pageFaultsPerTuple,
+                                              double measuredPageFaultDecreaseRatePerTuple) const {
+    // High rate of page faults which is not decreasing, indicating a large working set size
+    return pageFaultsPerTuple > 1 &&
+           measuredPageFaultDecreaseRatePerTuple < pageFaultDecreaseRatePerTuple;
   }
 
   inline bool robustnessIncreaseRequiredBasedOnCacheMisses(int tuplesProcessed) {
@@ -609,7 +612,7 @@ public:
 
 private:
   const long_long* lastLevelCacheMisses;
-  float tuplesPerDtlbLoadMiss;
+  float pageFaultDecreaseRatePerTuple;
   float tuplesPerLastLevelCacheMiss;
 };
 
@@ -873,12 +876,14 @@ groupByAdaptive(int dop, const std::vector<int>& spanSizes, int n, int outerInde
 
   auto& constants = MachineConstants::getInstance();
   constexpr int numBytes = (sizeof(K) + ... + sizeof(As));
-  std::string name1 = "Group_" + std::to_string(numBytes) + "B_" + std::to_string(dop) + "_dop_TLB";
+  std::string name1 =
+      "Group_" + std::to_string(numBytes) + "B_" + std::to_string(dop) + "_dop_PageFaults";
   std::string name2 = "Group_" + std::to_string(numBytes) + "B_" + std::to_string(dop) + "_dop_LLC";
-  auto tuplesPerDtlbLoadMiss = static_cast<float>(constants.getMachineConstant(name1));
+  auto pageFaultDecreaseRatePerTupleThreshold =
+      static_cast<float>(constants.getMachineConstant(name1));
   auto tuplesPerLastLevelCacheMiss = static_cast<float>(constants.getMachineConstant(name2));
-  auto monitor = MonitorGroup(baseEventPtr + EVENT::PERF_COUNT_HW_CACHE_MISSES,
-                              tuplesPerDtlbLoadMiss, tuplesPerLastLevelCacheMiss);
+  auto monitor = MonitorGroup(baseEventPtr + EVENT::LAST_LEVEL_CACHE_MISSES,
+                              pageFaultDecreaseRatePerTupleThreshold, tuplesPerLastLevelCacheMiss);
 
   std::vector<Section<K, As...>> sectionsToBeSorted;
   int elements = 0;
@@ -919,7 +924,8 @@ groupByAdaptive(int dop, const std::vector<int>& spanSizes, int n, int outerInde
 
   while(tuplesProcessed < n) {
 
-    bool performTransientCheck = tuplesInTransientCheck > 0 && n - tuplesProcessed > tuplesInTransientCheck;
+    bool performTransientCheck =
+        tuplesInTransientCheck > 0 && n - tuplesProcessed > tuplesInTransientCheck;
     if(performTransientCheck) {
       tuplesInCheck = tuplesInTransientCheck;
       tuplesProcessed += tuplesInTransientCheck;
@@ -941,7 +947,7 @@ groupByAdaptive(int dop, const std::vector<int>& spanSizes, int n, int outerInde
         }
         ///////////////////////////////////////////////////////////////////
         eventSet.readCountersAndUpdateDiff();
-        pageFaults.push_back(*(baseEventPtr + EVENT::DTLB_LOAD_MISSES));
+        pageFaults.push_back(*(baseEventPtr + EVENT::PAGE_FAULTS));
 #ifdef DEBUG
         std::cout << "pageFaults: " << pageFaults.back() << std::endl;
 #endif
@@ -955,8 +961,8 @@ groupByAdaptive(int dop, const std::vector<int>& spanSizes, int n, int outerInde
 #endif
     }
 
-    if(performTransientCheck && monitor.robustnessIncreaseRequiredBasedOnDtlbLoadMisses(
-                                     pageFaultsPerTuple, pageFaultDecreaseRatePerTuple)) {
+    if(performTransientCheck && monitor.robustnessIncreaseRequiredBasedOnPageFaults(
+                                    pageFaultsPerTuple, pageFaultDecreaseRatePerTuple)) {
 #ifdef ADAPTIVITY_OUTPUT
       std::cout << "Switched to sort after processing " << tuplesProcessed << " tuples"
                 << std::endl;
