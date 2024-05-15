@@ -319,14 +319,14 @@ void groupBySortAggPassOnly(size_t n, K* keys, std::tuple<As...>* payloads,
 }
 
 template <typename K, typename... As>
-void groupBySortFinalPassAndAgg(
+inline void groupBySortFinalPassAndAggSingleThread(
     size_t n, K* keys, std::tuple<As...>* payloads, std::vector<std::remove_cv_t<K>>& resultKeys,
     std::vector<std::remove_cv_t<K>>& resultKeys2,
     std::tuple<std::vector<std::remove_cv_t<As>>...>& resultValueVectors, bool secondKey,
     bool splitKeysInResult, int msbPosition, Aggregator<As>... aggregators) {
 
-  thread_local static bool bucketEntryPresent[1 << BITS_PER_GROUP_RADIX_PASS];
-  thread_local static std::tuple<As...> payloadAggs[1 << BITS_PER_GROUP_RADIX_PASS];
+  static bool bucketEntryPresent[1 << BITS_PER_GROUP_RADIX_PASS];
+  static std::tuple<As...> payloadAggs[1 << BITS_PER_GROUP_RADIX_PASS];
   std::fill(std::begin(bucketEntryPresent), std::end(bucketEntryPresent), false);
 
   auto addKeys = [&resultKeys, &resultKeys2, secondKey, splitKeysInResult](auto key) mutable {
@@ -369,8 +369,77 @@ void groupBySortFinalPassAndAgg(
 }
 
 template <typename K, typename... As>
-void groupBySortAux(size_t n, std::vector<int>& buckets, K* keys, std::tuple<As...>* payloads,
-                    K* keysBuffer, std::tuple<As...>* payloadsBuffer,
+inline void groupBySortFinalPassAndAggMultiThread(
+    size_t n, K* keys, std::tuple<As...>* payloads, std::vector<std::remove_cv_t<K>>& resultKeys,
+    std::vector<std::remove_cv_t<K>>& resultKeys2,
+    std::tuple<std::vector<std::remove_cv_t<As>>...>& resultValueVectors, bool secondKey,
+    bool splitKeysInResult, int msbPosition, Aggregator<As>... aggregators) {
+
+  static bool bucketEntryPresent[1 << BITS_PER_GROUP_RADIX_PASS];
+  static std::tuple<As...> payloadAggs[1 << BITS_PER_GROUP_RADIX_PASS];
+  std::fill(std::begin(bucketEntryPresent), std::end(bucketEntryPresent), false);
+
+  auto addKeys = [&resultKeys, &resultKeys2, secondKey, splitKeysInResult](auto key) mutable {
+    if(secondKey && splitKeysInResult) {
+      resultKeys.push_back(key & FIRST_KEY_MASK);
+      resultKeys2.push_back(key >> FIRST_KEY_BITS);
+    } else {
+      resultKeys.push_back(key);
+    }
+  };
+
+  size_t i;
+  int radixBits = msbPosition;
+  size_t numBuckets = 1 << radixBits;
+  int mask = static_cast<int>(numBuckets) - 1;
+
+  for(i = 0; i < n; i++) {
+    auto keyLowerBits = keys[i] & mask;
+    payloadAggs[keyLowerBits] = [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
+      if(bucketEntryPresent[keyLowerBits]) {
+        return std::make_tuple(
+            aggregators(std::get<Is>(payloadAggs[keyLowerBits]), std::get<Is>(payloads[i]))...);
+      } else {
+        return std::make_tuple(std::get<Is>(payloads[i])...);
+      }
+    }(std::make_index_sequence<sizeof...(As)>());
+    bucketEntryPresent[keyLowerBits] = true;
+  }
+
+  int valuePrefix = keys[0] & ~mask;
+
+  for(i = 0; i < numBuckets; i++) {
+    if(bucketEntryPresent[i]) {
+      addKeys(valuePrefix | i);
+      [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
+        ((std::get<Is>(resultValueVectors).push_back(std::get<Is>(payloadAggs[i]))), ...);
+      }(std::make_index_sequence<sizeof...(As)>());
+    }
+  }
+}
+
+// This are the prior two functions is only to remove the thread_local keyword when single-threaded
+// since this was observed to have an overhead when profiled
+template <typename K, typename... As>
+void groupBySortFinalPassAndAgg(
+    int dop, size_t n, K* keys, std::tuple<As...>* payloads,
+    std::vector<std::remove_cv_t<K>>& resultKeys, std::vector<std::remove_cv_t<K>>& resultKeys2,
+    std::tuple<std::vector<std::remove_cv_t<As>>...>& resultValueVectors, bool secondKey,
+    bool splitKeysInResult, int msbPosition, Aggregator<As>... aggregators) {
+  if(dop == 1) {
+    groupBySortFinalPassAndAggSingleThread(n, keys, payloads, resultKeys, resultKeys2,
+                                           resultValueVectors, secondKey, splitKeysInResult,
+                                           msbPosition, aggregators...);
+  } else {
+    groupBySortFinalPassAndAggMultiThread(n, keys, payloads, resultKeys, resultKeys2,
+                                          resultValueVectors, secondKey, splitKeysInResult,
+                                          msbPosition, aggregators...);
+  }
+}
+
+template <typename K, typename... As>
+void groupBySortAux(int dop, size_t n, std::vector<int>& buckets, K* keys,
+                    std::tuple<As...>* payloads, K* keysBuffer, std::tuple<As...>* payloadsBuffer,
                     std::vector<std::remove_cv_t<K>>& resultKeys,
                     std::vector<std::remove_cv_t<K>>& resultKeys2,
                     std::tuple<std::vector<std::remove_cv_t<As>>...>& resultValueVectors,
@@ -407,7 +476,7 @@ void groupBySortAux(size_t n, std::vector<int>& buckets, K* keys, std::tuple<As.
     for(i = 0; i < numBuckets; i++) {
       if(partitions[i] != prevPartitionEnd) {
         groupBySortFinalPassAndAgg<K, As...>(
-            partitions[i] - prevPartitionEnd, prevPartitionEnd + keysBuffer,
+            dop, partitions[i] - prevPartitionEnd, prevPartitionEnd + keysBuffer,
             prevPartitionEnd + payloadsBuffer, resultKeys, resultKeys2, resultValueVectors,
             secondKey, splitKeysInResult, msbPosition, aggregators...);
       }
@@ -417,7 +486,7 @@ void groupBySortAux(size_t n, std::vector<int>& buckets, K* keys, std::tuple<As.
     int prevPartitionEnd = 0;
     for(i = 0; i < numBuckets; i++) {
       if(partitions[i] != prevPartitionEnd) {
-        groupBySortAux<K, As...>(partitions[i] - prevPartitionEnd, buckets,
+        groupBySortAux<K, As...>(dop, partitions[i] - prevPartitionEnd, buckets,
                                  prevPartitionEnd + keysBuffer, prevPartitionEnd + payloadsBuffer,
                                  prevPartitionEnd + keys, prevPartitionEnd + payloads, resultKeys,
                                  resultKeys2, resultValueVectors, secondKey, splitKeysInResult,
@@ -430,7 +499,7 @@ void groupBySortAux(size_t n, std::vector<int>& buckets, K* keys, std::tuple<As.
 
 template <typename K, typename... As>
 std::vector<ExpressionSpanArguments>
-groupBySort(int cardinality, bool secondKey, ExpressionSpanArguments&& keySpans1,
+groupBySort(int dop, int cardinality, bool secondKey, ExpressionSpanArguments&& keySpans1,
             ExpressionSpanArguments&& keySpans2, std::vector<Span<As>>&&... typedAggCols,
             Aggregator<As>... aggregators) {
 
@@ -543,7 +612,7 @@ groupBySort(int cardinality, bool secondKey, ExpressionSpanArguments&& keySpans1
     int prevPartitionEnd = 0;
     for(i = 0; i < numBuckets; i++) {
       if(partitions[i] != prevPartitionEnd) {
-        groupBySortFinalPassAndAgg<K, As...>(partitions[i] - prevPartitionEnd,
+        groupBySortFinalPassAndAgg<K, As...>(dop, partitions[i] - prevPartitionEnd,
                                              prevPartitionEnd + keys, prevPartitionEnd + payloads,
                                              resultKeys, resultKeys2, resultValueVectors, secondKey,
                                              true, msbPosition, aggregators...);
@@ -555,10 +624,11 @@ groupBySort(int cardinality, bool secondKey, ExpressionSpanArguments&& keySpans1
     int prevPartitionEnd = 0;
     for(i = 0; i < numBuckets; i++) {
       if(partitions[i] != prevPartitionEnd) {
-        groupBySortAux<K, As...>(partitions[i] - prevPartitionEnd, buckets, prevPartitionEnd + keys,
-                                 prevPartitionEnd + payloads, prevPartitionEnd + keysBuffer,
-                                 prevPartitionEnd + payloadsBuffer, resultKeys, resultKeys2,
-                                 resultValueVectors, secondKey, true, msbPosition, aggregators...);
+        groupBySortAux<K, As...>(dop, partitions[i] - prevPartitionEnd, buckets,
+                                 prevPartitionEnd + keys, prevPartitionEnd + payloads,
+                                 prevPartitionEnd + keysBuffer, prevPartitionEnd + payloadsBuffer,
+                                 resultKeys, resultKeys2, resultValueVectors, secondKey, true,
+                                 msbPosition, aggregators...);
       }
       prevPartitionEnd = partitions[i];
     }
@@ -665,7 +735,7 @@ inline void groupByAdaptiveAuxHash(HA_tsl::robin_map<K, std::tuple<As...>>& map,
 
 template <typename K, typename... As>
 AggregatedKeysAndPayload<K, As...>
-groupByAdaptiveAuxSort(HA_tsl::robin_map<K, std::tuple<As...>>& map, K& largestKey,
+groupByAdaptiveAuxSort(int dop, HA_tsl::robin_map<K, std::tuple<As...>>& map, K& largestKey,
                        std::pair<K, std::tuple<As...>>** mapPtrs, const int entriesInMapToTrack,
                        size_t n, int cardinality, std::vector<Section<K, As...>>& sections,
                        bool secondKey, bool splitKeysInResult, Aggregator<As>... aggregators) {
@@ -806,7 +876,7 @@ groupByAdaptiveAuxSort(HA_tsl::robin_map<K, std::tuple<As...>>& map, K& largestK
     int prevPartitionEnd = 0;
     for(i = 0; i < numBuckets; i++) {
       if(partitions[i] != prevPartitionEnd) {
-        groupBySortFinalPassAndAgg<K, As...>(partitions[i] - prevPartitionEnd,
+        groupBySortFinalPassAndAgg<K, As...>(dop, partitions[i] - prevPartitionEnd,
                                              prevPartitionEnd + keys, prevPartitionEnd + payloads,
                                              resultKeys, resultKeys2, resultValueVectors, secondKey,
                                              splitKeysInResult, msbPosition, aggregators...);
@@ -818,11 +888,11 @@ groupByAdaptiveAuxSort(HA_tsl::robin_map<K, std::tuple<As...>>& map, K& largestK
     int prevPartitionEnd = 0;
     for(i = 0; i < numBuckets; i++) {
       if(partitions[i] != prevPartitionEnd) {
-        groupBySortAux<K, As...>(partitions[i] - prevPartitionEnd, buckets, prevPartitionEnd + keys,
-                                 prevPartitionEnd + payloads, prevPartitionEnd + keysBuffer,
-                                 prevPartitionEnd + payloadsBuffer, resultKeys, resultKeys2,
-                                 resultValueVectors, secondKey, splitKeysInResult, msbPosition,
-                                 aggregators...);
+        groupBySortAux<K, As...>(dop, partitions[i] - prevPartitionEnd, buckets,
+                                 prevPartitionEnd + keys, prevPartitionEnd + payloads,
+                                 prevPartitionEnd + keysBuffer, prevPartitionEnd + payloadsBuffer,
+                                 resultKeys, resultKeys2, resultValueVectors, secondKey,
+                                 splitKeysInResult, msbPosition, aggregators...);
       }
       prevPartitionEnd = partitions[i];
     }
@@ -1079,8 +1149,8 @@ groupByAdaptive(int dop, const std::vector<int>& spanSizes, int n, int outerInde
   }
 
   elements += map.size();
-  return groupByAdaptiveAuxSort<K, As...>(map, largestKey, mapPtrs, entriesInMapToTrack, elements,
-                                          cardinality, sectionsToBeSorted, secondKey,
+  return groupByAdaptiveAuxSort<K, As...>(dop, map, largestKey, mapPtrs, entriesInMapToTrack,
+                                          elements, cardinality, sectionsToBeSorted, secondKey,
                                           splitKeysInResult, aggregators...);
 }
 
@@ -1363,7 +1433,7 @@ group(Group implementation, int dop, int numKeys, ExpressionSpanArguments&& keyS
                                  std::move(keySpans2), std::move(typedAggCols)..., aggregators...);
   case Group::Sort:
     assert(dop == 1);
-    return groupBySort<K, As...>(cardinality, numKeys == 2, std::move(keySpans1),
+    return groupBySort<K, As...>(1, cardinality, numKeys == 2, std::move(keySpans1),
                                  std::move(keySpans2), std::move(typedAggCols)..., aggregators...);
   case Group::GroupAdaptive:
     assert(dop == 1);
