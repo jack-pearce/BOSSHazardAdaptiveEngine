@@ -24,11 +24,7 @@
 // #define CHANGE_PARTITION_TO_SORT_FOR_TESTING
 
 #ifndef CREATE_SPANS_ALIGNED_TO_BATCHES
-// #define INCLUDE_MIN_PARTITION_SIZE // Toggle, requires not creating spans aligned to batches
-#endif
-
-#ifdef INCLUDE_MIN_PARTITION_SIZE
-constexpr int MIN_PARTITION_SIZE = 1;
+#define INCLUDE_MIN_PARTITION_SIZE // Toggle, requires not creating spans aligned to batches
 #endif
 
 constexpr int TUPLES_PER_HAZARD_CHECK = 10 * 1000;
@@ -2051,7 +2047,7 @@ createPartitionsWithMinimumSize(const TwoPartitionedArrays<T1, T2>& partitionedT
     int partitionSize2 = partitions2[partitionNum].second;
     ++partitionNum;
 
-    while(partitionSize1 < MIN_PARTITION_SIZE && partitionNum < partitions1.size()) {
+    while(partitionSize1 < config::minPartitionSize && partitionNum < partitions1.size()) {
       partitionSize1 =
           (partitions1[partitionNum].first - partitionStart1) + partitions1[partitionNum].second;
       partitionSize2 =

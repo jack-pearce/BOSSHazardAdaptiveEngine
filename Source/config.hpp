@@ -22,6 +22,7 @@ extern adaptive::Select selectImplementation;
 extern adaptive::PartitionOperators partitionImplementation;
 extern adaptive::Group groupImplementation;
 extern uint32_t minTuplesPerThread;
+extern int minPartitionSize;
 
 extern bool DEFER_GATHER_PHASE_OF_SELECT_TO_OTHER_ENGINES;
 

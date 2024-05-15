@@ -915,6 +915,68 @@ private:
 
 public:
   OperatorMap() {
+    (*this)["Set"_] =
+        [](ComplexExpressionWithStaticArguments<Symbol>&& input) -> Expression {
+      auto const& key = get<0>(input.getStaticArguments());
+      if(key == "RadixJoinMinPartitionSize"_) {
+        adaptive::config::minPartitionSize = 
+            std::holds_alternative<int32_t>(input.getDynamicArguments()[0])
+                ? std::get<int32_t>(input.getDynamicArguments()[0])
+                : std::get<int64_t>(input.getDynamicArguments()[0]);
+        return true;
+      }
+      if(key == "DeferGatherPhase"_) {
+	adaptive::config::DEFER_GATHER_PHASE_OF_SELECT_TO_OTHER_ENGINES
+				= std::get<bool>(input.getDynamicArguments()[0]);
+	return true;
+      }
+      if(key == "SelectMode"_) {
+        auto const& value = std::get<boss::Symbol>(input.getDynamicArguments()[0]);
+	if(value.getName() == "Branch") {
+          adaptive::config::selectImplementation = adaptive::Select::Branch;
+        } else if(value.getName() == "Predication") {
+          adaptive::config::selectImplementation = adaptive::Select::Predication;
+        } else if(value.getName() == "Adaptive") {
+          adaptive::config::selectImplementation = adaptive::Select::Adaptive;
+        } else if(value.getName() == "AdaptiveParallel") {
+          adaptive::config::selectImplementation = adaptive::Select::AdaptiveParallel;
+        } else {
+          throw std::runtime_error("unknown select mode: " + value.getName());
+        }
+        return true;
+      }
+      if(key == "PartitionMode"_) {
+        auto const& value = std::get<boss::Symbol>(input.getDynamicArguments()[0]);
+        if(value.getName() == "RadixBitsFixedMin") {
+          adaptive::config::partitionImplementation = adaptive::PartitionOperators::RadixBitsFixedMin;
+        } else if(value.getName() == "RadixBitsFixedMax") {
+          adaptive::config::partitionImplementation = adaptive::PartitionOperators::RadixBitsFixedMax;
+        } else if(value.getName() == "RadixBitsAdaptive") {
+          adaptive::config::partitionImplementation = adaptive::PartitionOperators::RadixBitsAdaptive;
+        } else if(value.getName() == "RadixBitsAdaptiveParallel") {
+          adaptive::config::partitionImplementation = adaptive::PartitionOperators::RadixBitsAdaptiveParallel;
+        } else {
+          throw std::runtime_error("unknown partition mode: " + value.getName());
+        }
+        return true;
+      }
+      if(key == "GroupMode"_) {
+        auto const& value = std::get<boss::Symbol>(input.getDynamicArguments()[0]);
+        if(value.getName() == "Hash") {
+          adaptive::config::groupImplementation = adaptive::Group::Hash;
+        } else if(value.getName() == "Sort") {
+          adaptive::config::groupImplementation = adaptive::Group::Sort;
+        } else if(value.getName() == "GroupAdaptive") {
+          adaptive::config::groupImplementation = adaptive::Group::GroupAdaptive;
+        } else if(value.getName() == "GroupAdaptiveParallel") {
+          adaptive::config::groupImplementation = adaptive::Group::GroupAdaptiveParallel;
+        } else {
+          throw std::runtime_error("unknown group mode: " + value.getName());
+        }
+        return true;
+      }
+      return std::move(input);
+    };
     (*this)["Plus"_] =
         []<NumericType FirstArgument>(
             ComplexExpressionWithStaticArguments<FirstArgument>&& input) -> Expression {

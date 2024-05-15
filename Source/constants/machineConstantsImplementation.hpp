@@ -21,10 +21,11 @@ constexpr int SELECT_NUMBER_OF_TESTS = 9; // Can be reduced down to 1 to speed u
 constexpr size_t SELECT_DATA_SIZE = 100 * 1000 * 1000;
 constexpr int SELECT_ITERATIONS = 12;
 
-constexpr int GROUP_NUMBER_OF_TESTS = 9; // Can be reduced down to 1 to speed up calibration
-constexpr size_t GROUP_DATA_SIZE = 20 * 1000 * 1000;
+constexpr int GROUP_NUMBER_OF_TESTS = 1; // Can be reduced down to 1 to speed up calibration
+constexpr size_t GROUP_DATA_SIZE = 200 * 1000 * 1000;
 constexpr int GROUP_ITERATIONS = 12;
-constexpr double GROUP_VARIABILITY_MARGIN = 0.2; // 20%
+constexpr double GROUP_VARIABILITY_MARGIN_TLB = 0.2; // 20%
+constexpr double GROUP_VARIABILITY_MARGIN_LLC = 0.3; // 20%
 
 constexpr float HASHMAP_OVERALLOCATION_FACTOR = 2.5;
 constexpr float PERCENT_INPUT_IN_TLB_CHECK = 0.0001;
@@ -593,10 +594,10 @@ void calculateGroupMachineConstants(GROUP_QUERIES groupQuery, int dop) {
 
   auto& constants = MachineConstants::getInstance();
   constants.updateMachineConstant(names.tlbMissRate,
-                                  (1.0 - GROUP_VARIABILITY_MARGIN) *
+                                  (1.0 - GROUP_VARIABILITY_MARGIN_TLB) *
                                       tuplesPerDtlbLoadMiss[GROUP_NUMBER_OF_TESTS / 2]);
   constants.updateMachineConstant(names.llcMissRate,
-                                  (1.0 - GROUP_VARIABILITY_MARGIN) *
+                                  (1.0 - GROUP_VARIABILITY_MARGIN_LLC) *
                                       tuplesPerLastLevelCacheMiss[GROUP_NUMBER_OF_TESTS / 2]);
 }
 
