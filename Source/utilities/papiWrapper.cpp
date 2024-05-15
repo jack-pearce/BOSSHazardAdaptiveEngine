@@ -201,7 +201,7 @@ void switchEventSetToPartition(PAPI_eventSet& eventSet) {
 }
 
 PAPI_eventSet& getThreadEventSet() {
-  thread_local static PAPI_eventSet eventSet({"PERF_COUNT_HW_BRANCH_MISSES", "DTLB-LOAD-MISSES",
+  thread_local static PAPI_eventSet eventSet({"PERF_COUNT_HW_BRANCH_MISSES", "PERF_COUNT_SW_PAGE_FAULTS",
                                               "PERF_COUNT_HW_CACHE_MISSES", "DTLB-STORE-MISSES"});
   return eventSet;
 }

@@ -14,15 +14,16 @@
 #include "hash_map/robin_map.h"
 #include "utilities/memory.hpp"
 #include "utilities/papiWrapper.hpp"
+#include "utilities/utilities.hpp"
 
 #define ADAPTIVITY_OUTPUT
-// #define DEBUG
+#define DEBUG
 #define USE_ADAPTIVE_OVER_ADAPTIVE_PARALLEL_FOR_DOP_1
 
 namespace adaptive {
 
 constexpr float PERCENT_INPUT_TO_TRACK = 0.001;            // 0.1%
-constexpr float PERCENT_INPUT_IN_TRANSIENT_CHECK = 0.0001; // 0.01%
+constexpr float PERCENT_INPUT_IN_TRANSIENT_CHECK = 0.0002; // 0.02%
 constexpr int TUPLES_IN_CACHE_MISS_CHECK = 75 * 1000;      // 75,000
 constexpr float PERCENT_INPUT_BETWEEN_HASHING = 0.25;      // 25%
 
@@ -447,7 +448,6 @@ groupBySort(int cardinality, bool secondKey, ExpressionSpanArguments&& keySpans1
   size_t n = 0;
   int msbPosition = 0;
   K largest = std::numeric_limits<K>::lowest();
-  ;
 
   if(secondKey) {
     for(auto& untypedSpan : keySpans2) {
@@ -579,25 +579,15 @@ groupBySort(int cardinality, bool secondKey, ExpressionSpanArguments&& keySpans1
 
 class MonitorGroup {
 public:
-  explicit MonitorGroup(const long_long* dtlbLoadMisses_, const long_long* lastLevelCacheMisses_,
-                        float tuplesPerDtlbLoadMiss_, float tuplesPerLastLevelCacheMiss_)
-      : dtlbLoadMisses(dtlbLoadMisses_), lastLevelCacheMisses(lastLevelCacheMisses_),
-        tuplesPerDtlbLoadMiss(tuplesPerDtlbLoadMiss_),
+  explicit MonitorGroup(const long_long* lastLevelCacheMisses_, float tuplesPerDtlbLoadMiss_,
+                        float tuplesPerLastLevelCacheMiss_)
+      : lastLevelCacheMisses(lastLevelCacheMisses_), tuplesPerDtlbLoadMiss(tuplesPerDtlbLoadMiss_),
         tuplesPerLastLevelCacheMiss(tuplesPerLastLevelCacheMiss_) {}
 
-  inline bool robustnessIncreaseRequiredBasedOnDtlbLoadMisses(int tuplesProcessed) {
-#ifdef DEBUG
-    bool result = (static_cast<float>(tuplesProcessed) / static_cast<float>(*dtlbLoadMisses)) <
-                  tuplesPerDtlbLoadMiss;
-    std::cout << "DTLB load misses (" << tuplesProcessed << " tuples / " << *dtlbLoadMisses
-              << " DTLB load misses): "
-              << (static_cast<float>(tuplesProcessed) / static_cast<float>(*dtlbLoadMisses))
-              << std::endl;
-    return result;
-#else
-    return (static_cast<float>(tuplesProcessed) / static_cast<float>(*dtlbLoadMisses)) <
-           tuplesPerDtlbLoadMiss;
-#endif
+  [[nodiscard]] inline bool
+  robustnessIncreaseRequiredBasedOnDtlbLoadMisses(double pageFaultsPerTuple,
+                                                  double pageFaultDecreaseRatePerTuple) const {
+    return pageFaultsPerTuple > 1 && pageFaultDecreaseRatePerTuple < tuplesPerDtlbLoadMiss;
   }
 
   inline bool robustnessIncreaseRequiredBasedOnCacheMisses(int tuplesProcessed) {
@@ -618,7 +608,6 @@ public:
   }
 
 private:
-  const long_long* dtlbLoadMisses;
   const long_long* lastLevelCacheMisses;
   float tuplesPerDtlbLoadMiss;
   float tuplesPerLastLevelCacheMiss;
@@ -847,7 +836,18 @@ groupByAdaptive(int dop, const std::vector<int>& spanSizes, int n, int outerInde
                 const std::vector<Span<As>>&... typedAggCols, Aggregator<As>... aggregators) {
 
   int tuplesInTransientCheck =
-      std::max(1, static_cast<int>(PERCENT_INPUT_IN_TRANSIENT_CHECK * static_cast<float>(n)));
+      static_cast<int>(PERCENT_INPUT_IN_TRANSIENT_CHECK * static_cast<float>(n));
+  int tuplesPerTransientCheckReading = static_cast<int>(std::ceil(tuplesInTransientCheck / 10.0));
+  tuplesInTransientCheck = tuplesPerTransientCheckReading * 10;
+  std::vector<int> tuplesPerReading;
+  if(tuplesInTransientCheck < 1000 || tuplesInTransientCheck > n) {
+    tuplesInTransientCheck = 0;
+  } else {
+    tuplesPerReading.reserve(10);
+    for(int i = 1; i < 11; i++) {
+      tuplesPerReading.push_back(tuplesPerTransientCheckReading * i);
+    }
+  }
 
   int tuplesBetweenHashing =
       std::max(1, static_cast<int>(PERCENT_INPUT_BETWEEN_HASHING * static_cast<float>(n)));
@@ -877,13 +877,13 @@ groupByAdaptive(int dop, const std::vector<int>& spanSizes, int n, int outerInde
   std::string name2 = "Group_" + std::to_string(numBytes) + "B_" + std::to_string(dop) + "_dop_LLC";
   auto tuplesPerDtlbLoadMiss = static_cast<float>(constants.getMachineConstant(name1));
   auto tuplesPerLastLevelCacheMiss = static_cast<float>(constants.getMachineConstant(name2));
-  auto monitor = MonitorGroup(baseEventPtr + EVENT::DTLB_LOAD_MISSES,
-                              baseEventPtr + EVENT::PERF_COUNT_HW_CACHE_MISSES,
+  auto monitor = MonitorGroup(baseEventPtr + EVENT::PERF_COUNT_HW_CACHE_MISSES,
                               tuplesPerDtlbLoadMiss, tuplesPerLastLevelCacheMiss);
 
   std::vector<Section<K, As...>> sectionsToBeSorted;
   int elements = 0;
   int tuplesToProcess, tuplesInCheck;
+  double pageFaultDecreaseRatePerTuple, pageFaultsPerTuple;
 
   int tuplesProcessed = 0;
 
@@ -919,25 +919,44 @@ groupByAdaptive(int dop, const std::vector<int>& spanSizes, int n, int outerInde
 
   while(tuplesProcessed < n) {
 
-    tuplesToProcess = std::min(tuplesInTransientCheck, n - tuplesProcessed);
-    tuplesInCheck = tuplesToProcess;
-    tuplesProcessed += tuplesToProcess;
-    eventSet.readCounters();
-    //////////// GROUP BY HASH ON tuplesToProcess elements ////////////
-    while(tuplesToProcess && (spanSizes[outerIndex] - innerIndex) <= tuplesToProcess) {
-      runGroupByHashOnSection(spanSizes[outerIndex] - innerIndex);
-      tuplesToProcess -= (spanSizes[outerIndex] - innerIndex);
-      ++outerIndex;
-      innerIndex = 0;
+    bool performTransientCheck = tuplesInTransientCheck > 0 && n - tuplesProcessed > tuplesInTransientCheck;
+    if(performTransientCheck) {
+      tuplesInCheck = tuplesInTransientCheck;
+      tuplesProcessed += tuplesInTransientCheck;
+      std::vector<long_long> pageFaults;
+      pageFaults.reserve(10);
+      for(int i = 0; i < 10; i++) {
+        tuplesToProcess = tuplesInTransientCheck / 10;
+        eventSet.readCounters();
+        //////////// GROUP BY HASH ON tuplesToProcess elements ////////////
+        while(tuplesToProcess && (spanSizes[outerIndex] - innerIndex) <= tuplesToProcess) {
+          runGroupByHashOnSection(spanSizes[outerIndex] - innerIndex);
+          tuplesToProcess -= (spanSizes[outerIndex] - innerIndex);
+          ++outerIndex;
+          innerIndex = 0;
+        }
+        if(tuplesToProcess > 0) {
+          runGroupByHashOnSection(tuplesToProcess);
+          innerIndex += tuplesToProcess;
+        }
+        ///////////////////////////////////////////////////////////////////
+        eventSet.readCountersAndUpdateDiff();
+        pageFaults.push_back(*(baseEventPtr + EVENT::DTLB_LOAD_MISSES));
+#ifdef DEBUG
+        std::cout << "pageFaults: " << pageFaults.back() << std::endl;
+#endif
+      }
+      pageFaultsPerTuple =
+          static_cast<double>(pageFaults.back()) / static_cast<double>(tuplesPerReading[0]);
+      pageFaultDecreaseRatePerTuple = std::abs(linearRegressionSlope(tuplesPerReading, pageFaults));
+#ifdef DEBUG
+      std::cout << "pageFaultsPerTuple: " << pageFaultsPerTuple << std::endl;
+      std::cout << "pageFaultDecreaseRatePerTuple: " << pageFaultDecreaseRatePerTuple << std::endl;
+#endif
     }
-    if(tuplesToProcess > 0) {
-      runGroupByHashOnSection(tuplesToProcess);
-      innerIndex += tuplesToProcess;
-    }
-    ///////////////////////////////////////////////////////////////////
-    eventSet.readCountersAndUpdateDiff();
 
-    if(monitor.robustnessIncreaseRequiredBasedOnDtlbLoadMisses(tuplesInCheck)) {
+    if(performTransientCheck && monitor.robustnessIncreaseRequiredBasedOnDtlbLoadMisses(
+                                     pageFaultsPerTuple, pageFaultDecreaseRatePerTuple)) {
 #ifdef ADAPTIVITY_OUTPUT
       std::cout << "Switched to sort after processing " << tuplesProcessed << " tuples"
                 << std::endl;
