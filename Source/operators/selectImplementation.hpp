@@ -40,13 +40,13 @@ public:
       if(columnIsFirstArg) {
         for(auto i = startCandidates; i < (startCandidates + numCandidates); ++i) {
           if(predicate(column[i], value)) {
-            selectedIndexes[numSelected++] = i;
+            selectedIndexes[numSelected++] = static_cast<int32_t>(i);
           }
         }
       } else {
         for(auto i = startCandidates; i < (startCandidates + numCandidates); ++i) {
           if(predicate(value, column[i])) {
-            selectedIndexes[numSelected++] = i;
+            selectedIndexes[numSelected++] = static_cast<int32_t>(i);
           }
         }
       }
@@ -79,23 +79,30 @@ public:
     if(!candidateIndexes) {
       if(columnIsFirstArg) {
         for(auto i = startCandidates; i < (startCandidates + numCandidates); ++i) {
-          selectedIndexes[numSelected] = i;
+          selectedIndexes[numSelected] = static_cast<int32_t>(i);
           numSelected += predicate(column[i], value);
         }
       } else {
         for(auto i = startCandidates; i < (startCandidates + numCandidates); ++i) {
-          selectedIndexes[numSelected] = i;
+          selectedIndexes[numSelected] = static_cast<int32_t>(i);
           numSelected += predicate(value, column[i]);
         }
       }
     } else {
+      /* For Predication the compiler does not automatically prefetch as it does for
+       * Branch. Therefore, we explicitly prefetch. Prefetching 100 values ahead was
+       * found to be optimal. The first '0' parameter means the prefetch will be
+       * read only, and the second '0' parameter means the data does not need to be
+       * kept in the cache after the access (i.e. low temporal locality). */
       if(columnIsFirstArg) {
         for(auto i = startCandidates; i < (startCandidates + numCandidates); ++i) {
+          __builtin_prefetch(&column[(*candidateIndexes)[i + 100]], 0, 0);
           selectedIndexes[numSelected] = (*candidateIndexes)[i];
           numSelected += predicate(column[(*candidateIndexes)[i]], value);
         }
       } else {
         for(auto i = startCandidates; i < (startCandidates + numCandidates); ++i) {
+          __builtin_prefetch(&column[(*candidateIndexes)[i + 100]], 0, 0);
           selectedIndexes[numSelected] = (*candidateIndexes)[i];
           numSelected += predicate(value, column[(*candidateIndexes)[i]]);
         }
