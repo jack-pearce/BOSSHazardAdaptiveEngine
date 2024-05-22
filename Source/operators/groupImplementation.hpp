@@ -946,7 +946,7 @@ groupByAdaptive(int dop, const std::vector<int>& spanSizes, int n, int outerInde
   long_long* baseEventPtr = eventSet.getCounterDiffsPtr();
 
   auto& constants = MachineConstants::getInstance();
-  constexpr int numBytes = (sizeof(K) + ... + sizeof(As));
+  constexpr int numBytes = static_cast<int>(std::min((sizeof(K) + ... + sizeof(As)), 48UL));
   std::string name1 =
       "Group_" + std::to_string(numBytes) + "B_" + std::to_string(dop) + "_dop_PageFaults";
   std::string name2 = "Group_" + std::to_string(numBytes) + "B_" + std::to_string(dop) + "_dop_LLC";
