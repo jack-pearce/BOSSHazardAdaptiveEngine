@@ -1356,7 +1356,7 @@ groupByAdaptiveParallel(int dop, int cardinality, bool secondKey,
     spanSizes.push_back(keySpan1.size());
   }
 
-  dop = std::min(dop, n);
+  dop = convertToValidDopValue(std::min(dop, n));
   std::mutex resultsMutex;
   std::queue<AggregatedKeysAndPayload<K, As...>> results;
   std::condition_variable cv;

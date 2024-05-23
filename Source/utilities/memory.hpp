@@ -108,7 +108,7 @@ public:
 private:
   Synchroniser() : tasksCompletedCount(0) {
 #ifdef MEMORY_INFO
-    std::cout << "Constructing thread synchrnoiser object\n";
+    std::cout << "Constructing thread synchroniser object\n";
 #endif
   }
 

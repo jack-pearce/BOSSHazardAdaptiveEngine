@@ -16,6 +16,7 @@
 #include "utilities/memory.hpp"
 #include "utilities/papiWrapper.hpp"
 #include "utilities/systemInformation.hpp"
+#include "utilities/utilities.hpp"
 
 #define USE_ADAPTIVE_OVER_ADAPTIVE_PARALLEL_FOR_DOP_1
 // #define CREATE_SPANS_ALIGNED_TO_BATCHES
@@ -1612,7 +1613,7 @@ private:
 
     int numBatches1 = keySpans1.size();
     int numBatches2 = keySpans2.size();
-    int firstPassDop = std::min(std::min(numBatches1, numBatches2), dop);
+    int firstPassDop = convertToValidDopValue(std::min(std::min(numBatches1, numBatches2), dop));
     threadsStillRunning = firstPassDop;
 
 #ifdef DEBUG

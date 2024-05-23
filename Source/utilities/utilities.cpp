@@ -1,7 +1,19 @@
 #include <cmath>
 #include <numeric>
 
+#include "config.hpp"
 #include "utilities.hpp"
+
+inline bool isPowerOfTwo(int n) {
+  return n > 0 && (n & (n - 1)) == 0;
+}
+
+int convertToValidDopValue(int dop) {
+  if (dop == adaptive::config::LOGICAL_CORE_COUNT || isPowerOfTwo(dop)) {
+    return dop;
+  }
+  return static_cast<int>(roundDownToPowerOf2(static_cast<uint32_t>(dop)));
+}
 
 uint32_t roundDownToPowerOf2(uint32_t num) {
   if(num <= 2) {

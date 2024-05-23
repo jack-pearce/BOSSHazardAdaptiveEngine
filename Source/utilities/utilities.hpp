@@ -5,6 +5,8 @@
 #include <papi.h>
 #include <vector>
 
+int convertToValidDopValue(int dop);
+
 uint32_t roundDownToPowerOf2(uint32_t num);
 
 void setCardinalityEnvironmentVariable(int cardinality);

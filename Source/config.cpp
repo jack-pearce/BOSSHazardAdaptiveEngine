@@ -9,7 +9,8 @@ auto groupImplementation = adaptive::Group::GroupAdaptiveParallel;
 uint32_t minTuplesPerThread = 100;
 int minPartitionSize = 100000;
 
-bool DEFER_GATHER_PHASE_OF_SELECT_TO_OTHER_ENGINES = true;
+bool DEFER_GATHER_PHASE_OF_SELECT_TO_OTHER_ENGINES = false;
+bool CONSTANTS_INITIALISED = true;
 
 // TODO - machine config, these should be determined and set during the build process
 // int32_t LOGICAL_CORE_COUNT = 4;

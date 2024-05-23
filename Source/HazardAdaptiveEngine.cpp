@@ -48,6 +48,7 @@ using adaptive::EngineInstanceState;
 using adaptive::SelectOperatorState;
 using adaptive::SelectOperatorStates;
 using adaptive::config::DEFER_GATHER_PHASE_OF_SELECT_TO_OTHER_ENGINES;
+using adaptive::config::CONSTANTS_INITIALISED; // TODO to remove (make part of installation)
 using adaptive::config::groupImplementation;
 using adaptive::config::nonVectorizedDOP;
 using adaptive::config::partitionImplementation;
@@ -1236,37 +1237,8 @@ public:
                                std::is_same_v<T, std::string const>) {
                     auto unfilteredColumn = std::move(typedSpan);
                     auto* filteredColumn = new std::remove_cv_t<T>[indexes.size()];
-                    if(nonVectorizedDOP == 1 ||
-                       indexes.size() <= (2 * adaptive::config::minTuplesPerThread)) {
-                      for(size_t i = 0; i < indexes.size(); ++i) {
-                        filteredColumn[i] = unfilteredColumn[indexes[i]];
-                      }
-                    } else {
-                      const auto numThreads =
-                          std::min(nonVectorizedDOP,
-                                   static_cast<int32_t>(indexes.size() /
-                                                        adaptive::config::minTuplesPerThread));
-                      assert(numThreads >= 2);
-                      const auto indexesPerThread = indexes.size() / numThreads;
-                      int32_t startIndex = 0;
-                      auto& synchroniser = Synchroniser::getInstance();
-                      for(int32_t threadNum = 0; threadNum < numThreads; ++threadNum) {
-                        int32_t indexesToProcess =
-                            threadNum + 1 < numThreads
-                                ? static_cast<int32_t>(indexesPerThread)
-                                : static_cast<int32_t>(indexes.size()) - startIndex;
-                        ThreadPool::getInstance().enqueue(
-                            [&synchroniser, startIndex, endIndex = startIndex + indexesToProcess,
-                             indexesPtr = &*indexes.begin(), filteredPtr = filteredColumn,
-                             unfilteredPtr = &*unfilteredColumn.begin()]() {
-                              for(int32_t i = startIndex; i < endIndex; ++i) {
-                                filteredPtr[i] = unfilteredPtr[indexesPtr[i]];
-                              }
-                              synchroniser.taskComplete();
-                            });
-                        startIndex += indexesToProcess;
-                      }
-                      synchroniser.waitUntilComplete(numThreads);
+                    for(size_t i = 0; i < indexes.size(); ++i) {
+                      filteredColumn[i] = unfilteredColumn[indexes[i]];
                     }
                     return Span<T>(filteredColumn, indexes.size(),
                                    [filteredColumn]() { delete[] filteredColumn; });

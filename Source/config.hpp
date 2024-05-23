@@ -25,6 +25,7 @@ extern uint32_t minTuplesPerThread;
 extern int minPartitionSize;
 
 extern bool DEFER_GATHER_PHASE_OF_SELECT_TO_OTHER_ENGINES;
+extern bool CONSTANTS_INITIALISED;
 
 extern int32_t LOGICAL_CORE_COUNT;
 extern std::string projectFilePath;
