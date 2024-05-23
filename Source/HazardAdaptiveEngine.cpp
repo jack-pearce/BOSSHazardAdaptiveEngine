@@ -48,7 +48,6 @@ using adaptive::EngineInstanceState;
 using adaptive::SelectOperatorState;
 using adaptive::SelectOperatorStates;
 using adaptive::config::DEFER_GATHER_PHASE_OF_SELECT_TO_OTHER_ENGINES;
-using adaptive::config::CONSTANTS_INITIALISED; // TODO to remove (make part of installation)
 using adaptive::config::groupImplementation;
 using adaptive::config::nonVectorizedDOP;
 using adaptive::config::partitionImplementation;
@@ -1530,7 +1529,7 @@ static Expression evaluateInternal(Expression&& e) {
  * boolean instead
  * */
 static void initialiseLibraryConstants() {
-  if(!CONSTANTS_INITIALISED) {
+  if(!adaptive::config::CONSTANTS_INITIALISED) {
     adaptive::MachineConstants::getInstance().calculateMissingMachineConstants();
     CONSTANTS_INITIALISED = true;
   }
