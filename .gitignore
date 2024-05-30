@@ -5,6 +5,7 @@
 .idea
 cmake*
 build/
+build-vs/
 Debug/
 Release/
 MinSizeRel/
