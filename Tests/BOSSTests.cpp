@@ -3393,6 +3393,39 @@ TEST_CASE("Join - multi-key join", "[hazard-adaptive-engine]") {
   }
 }
 
+TEST_CASE("Complex projections", "[hazard-adaptive-engine]") {
+  auto engine = boss::engines::BootstrapEngine();
+  REQUIRE(!librariesToTest.empty());
+  auto eval = [&engine](auto&& expression) mutable {
+    return engine.evaluate("EvaluateInEngines"_("List"_(GENERATE(from_range(librariesToTest))),
+                                                std::forward<decltype(expression)>(expression)));
+  };
+
+  auto lineitem =
+    "Table"_("L_ORDERKEY"_(createIntSpanOf(1, 1, 2, 3)),                                 // NOLINT
+              "L_PARTKEY"_(createIntSpanOf(1, 2, 3, 4)),                                  // NOLINT
+              "L_SUPPKEY"_(createIntSpanOf(1, 2, 3, 4)),                                  // NOLINT
+              "L_RETURNFLAG"_(createStringSpanOf("N", "N", "A", "A")),                       // NOLINT
+              "L_LINESTATUS"_(createStringSpanOf("O", "O", "F", "F")),                       // NOLINT
+              "L_RETURNFLAG_INT"_(createInt64SpanOf('N'_i64, 'N'_i64, 'A'_i64, 'A'_i64)),   // NOLINT
+              "L_LINESTATUS_INT"_(createInt64SpanOf('O'_i64, 'O'_i64, 'F'_i64, 'F'_i64)),   // NOLINT
+              "L_QUANTITY"_(createIntSpanOf(17, 21, 8, 5)),                               // NOLINT
+              "L_EXTENDEDPRICE"_(createFloatSpanOf(17954.55, 34850.16, 7712.48, 25284.00)), // NOLINT
+              "L_DISCOUNT"_(createFloatSpanOf(0.10, 0.05, 0.06, 0.06)),                     // NOLINT
+              "L_TAX"_(createFloatSpanOf(0.02, 0.06, 0.02, 0.06)),                          // NOLINT
+              "L_SHIPDATE"_(createIntSpanOf(8400, 9130, 9861, 9130)));
+
+  SECTION("Q9 projection") {
+    auto result = eval("Project"_(lineitem.clone(CloneReason::FOR_TESTING),
+                          "As"_("flag"_, "L_RETURNFLAG"_,
+                          "amount"_, "Minus"_("Times"_("L_EXTENDEDPRICE"_, "Minus"_(1.0, "L_DISCOUNT"_)),
+                                   "Times"_("L_EXTENDEDPRICE"_, "L_TAX"_)),
+                          "ship_year"_, "Year"_("L_SHIPDATE"_))));
+
+    CHECK(result == "Table"_());
+  }
+}
+
 int main(int argc, char* argv[]) {
   Catch::Session session;
   session.configData().showSuccessfulTests = true;

@@ -1119,6 +1119,37 @@ public:
                        hoursInADay);
     };
 
+    (*this)["Year"_] = [](ComplexExpressionWithStaticArguments<Symbol>&& input) -> Expression {
+      Pred::Function pred =
+          [pred1 = createLambdaArgument(get<0>(input.getStaticArguments()))](
+              ExpressionArguments& columns,
+              Span<int32_t>* /*unused*/) mutable -> std::optional<ExpressionSpanArgument> {
+        auto arg1 = pred1(columns, nullptr);
+        if(!arg1) {
+          return std::nullopt;
+        }
+        ExpressionSpanArgument span;
+        std::visit(boss::utilities::overload(
+                       [](auto&&) { throw std::runtime_error("Unsupported column type in Year"); },
+                       [&span]<IntegralType T>(boss::expressions::atoms::Span<T>&& typedSpan) {
+                         std::vector<int32_t> output;
+                         output.reserve(typedSpan.size());
+                         constexpr double daysInYear = 365.25;
+                         constexpr int epochYear = 1970;
+                         for(auto& epochInDays : typedSpan) {
+                           double yearsSinceEpoch = static_cast<double>(epochInDays) / daysInYear;
+                           int year = epochYear + static_cast<int>(std::floor(yearsSinceEpoch));
+                           output.push_back(year);
+                         }
+                         span = Span<int32_t>(std::vector(output));
+                       }),
+                   std::move(*arg1));
+        return span;
+      };
+      return PredWrapper(
+          std::make_unique<Pred>(std::move(pred), toBOSSExpression(std::move(input))));
+    };
+
     (*this)["Project"_] = [](ComplexExpression&& inputExpr) -> Expression {
       if(!holds_alternative<ComplexExpression>(*(inputExpr.getArguments().begin())) ||
          get<ComplexExpression>(*(inputExpr.getArguments().begin())).getHead().getName() !=
