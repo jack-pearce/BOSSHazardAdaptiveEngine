@@ -11,7 +11,7 @@
 #include <stdexcept>
 
 #include "constants/machineConstants.hpp"
-#include "hash_map/robin_map.h"
+#include "lazy_hash_map/robin_map.h"
 #include "utilities/memory.hpp"
 #include "utilities/papiWrapper.hpp"
 #include "utilities/utilities.hpp"

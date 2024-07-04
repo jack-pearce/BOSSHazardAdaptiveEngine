@@ -5,7 +5,7 @@
 
 #include "HazardAdaptiveEngine.hpp"
 #include "groupQueries.hpp"
-#include "hash_map/robin_map.h"
+#include "lazy_hash_map/robin_map.h"
 #include "operators/group.hpp"
 #include "operators/select.hpp"
 #include "utilities/dataGeneration.hpp"
