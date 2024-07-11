@@ -7,7 +7,7 @@ auto selectImplementation = adaptive::Select::Adaptive;
 auto partitionImplementation = adaptive::PartitionOperators::RadixBitsAdaptiveParallel;
 auto groupImplementation = adaptive::Group::GroupAdaptiveParallel;
 uint32_t minTuplesPerThread = 100;
-int minPartitionSize = 100000;
+int minPartitionSize = 300000;
 
 bool DEFER_GATHER_PHASE_OF_SELECT_TO_OTHER_ENGINES = false;
 bool CONSTANTS_INITIALISED = true; // TODO to remove (make part of installation)

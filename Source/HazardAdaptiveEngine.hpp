@@ -16,5 +16,6 @@ using Expression = HAExpressionSystem::Expression;
 using ExpressionArguments = HAExpressionSystem::ExpressionArguments;
 using ExpressionSpanArguments = HAExpressionSystem::ExpressionSpanArguments;
 using ExpressionSpanArgument = HAExpressionSystem::ExpressionSpanArgument;
+using boss::Span;
 
 #endif // BOSSHAZARDADAPTIVEENGINE_HAZARDADAPTIVEENGINE_H

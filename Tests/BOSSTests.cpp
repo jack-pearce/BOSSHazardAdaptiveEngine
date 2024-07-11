@@ -2800,7 +2800,7 @@ TEST_CASE("Group multiple spans", "[hazard-adaptive-engine]") {
   }
 }
 
-TEST_CASE("Join - single-span", "[hazard-adaptive-engine]") {
+TEST_CASE("Partitioned join - single-span", "[hazard-adaptive-engine]") {
   auto engine = boss::engines::BootstrapEngine();
   REQUIRE(!librariesToTest.empty());
   auto eval = [&engine](boss::Expression&& expression) mutable {
@@ -2808,12 +2808,12 @@ TEST_CASE("Join - single-span", "[hazard-adaptive-engine]") {
                                                 std::move(expression)));
   };
 
-  SECTION("Simple join 1") {
+  SECTION("Simple partitioned join 1") {
     auto intTable1 = "Table"_("L_key"_(createIntSpanOf(500, 2, 1, 984, 871)),
                               "L_value"_(createIntSpanOf(1, 2, 3, 4, 5))); // NOLINT
     auto intTable2 = "Table"_("O_key"_(createIntSpanOf(7, 8, 1, 2)),
                               "O_value"_(createIntSpanOf(1, 2, 3, 4))); // NOLINT
-    auto result = eval("Join"_(std::move(intTable1), std::move(intTable2),
+    auto result = eval("PartitionedJoin"_(std::move(intTable1), std::move(intTable2),
                                "Where"_("Equal"_("L_key"_, "O_key"_))));
 
     CHECK(result == "Join"_("RadixPartition"_("Table"_("L_value"_("List"_(1,2,3,4,5))),
@@ -2826,7 +2826,7 @@ TEST_CASE("Join - single-span", "[hazard-adaptive-engine]") {
     );
   }
 
-  SECTION("Simple join 2") {
+  SECTION("Simple partitioned join 2") {
     auto intTable1 = "Table"_("L_key"_(createIntSpanOf(4000001, 4000002, 20009, 5, 4)),
                               "L_value"_(createIntSpanOf(1, 2, 3, 4, 5))); // NOLINT
     auto intTable2 = "Table"_("O_key"_(createIntSpanOf(5, 4, 20009, 4000002)),
@@ -2834,7 +2834,7 @@ TEST_CASE("Join - single-span", "[hazard-adaptive-engine]") {
     auto result = eval("Join"_(std::move(intTable1), std::move(intTable2),
                                "Where"_("Equal"_("L_key"_, "O_key"_))));
 
-    CHECK(result == "Join"_("RadixPartition"_("Table"_("L_value"_("List"_(1,2,3,4,5))),
+    CHECK(result == "PartitionedJoin"_("RadixPartition"_("Table"_("L_value"_("List"_(1,2,3,4,5))),
                                               "Partition"_("L_key"_("List"_(4)),"Indexes"_(4)),
                                               "Partition"_("L_key"_("List"_(5)),"Indexes"_(3)),
                                               "Partition"_("L_key"_("List"_(20009)),"Indexes"_(2)),
@@ -2849,7 +2849,7 @@ TEST_CASE("Join - single-span", "[hazard-adaptive-engine]") {
   }
 }
 
-TEST_CASE("Join - multi-span", "[hazard-adaptive-engine]") {
+TEST_CASE("Partitioned join - multi-span", "[hazard-adaptive-engine]") {
   auto engine = boss::engines::BootstrapEngine();
   REQUIRE(!librariesToTest.empty());
   auto eval = [&engine](boss::Expression&& expression) mutable {
@@ -2857,12 +2857,12 @@ TEST_CASE("Join - multi-span", "[hazard-adaptive-engine]") {
                                                 std::move(expression)));
   };
 
-  SECTION("Simple join 1") {
+  SECTION("Simple partitioned join 1") {
     auto intTable1 = "Table"_("L_key"_(createTwoSpansInt(1,100)),
                               "L_value"_(createTwoSpansInt(1,4))); // NOLINT
     auto intTable2 = "Table"_("O_key"_(createTwoSpansInt(10000,1)),
                               "O_value"_(createTwoSpansInt(1,4))); // NOLINT
-    auto result = eval("Join"_(std::move(intTable1), std::move(intTable2),
+    auto result = eval("PartitionedJoin"_(std::move(intTable1), std::move(intTable2),
                                "Where"_("Equal"_("L_key"_, "O_key"_))));
 
     CHECK(result == "Join"_("RadixPartition"_("Table"_("L_value"_("List"_(1,2,3,4,5,6))),
@@ -2877,12 +2877,12 @@ TEST_CASE("Join - multi-span", "[hazard-adaptive-engine]") {
     );
   }
 
-  SECTION("Simple join 2") {
+  SECTION("Simple partitioned join 2") {
     auto intTable1 = "Table"_("L_key"_(createTwoSpansInt(100,200)),
                               "L_value"_(createTwoSpansInt(1,4))); // NOLINT
     auto intTable2 = "Table"_("O_key"_(createTwoSpansInt(1,5)),
                               "O_value"_(createTwoSpansInt(1,4))); // NOLINT
-    auto result = eval("Join"_(std::move(intTable1), std::move(intTable2),
+    auto result = eval("PartitionedJoin"_(std::move(intTable1), std::move(intTable2),
                                "Where"_("Equal"_("L_key"_, "O_key"_))));
 
     CHECK(result == "Join"_("RadixPartition"_("Table"_("L_value"_("List"_(1,2,3,4,5,6)))),
@@ -2891,7 +2891,7 @@ TEST_CASE("Join - multi-span", "[hazard-adaptive-engine]") {
     );
   }
 
-  SECTION("Simple join 3") {
+  SECTION("Simple partitioned join 3") {
     using SpanArguments = boss::expressions::ExpressionSpanArguments;
     std::vector<intType> v1 = {2, 3};
     std::vector<intType> v2 = {100, 101, 102};
@@ -2906,7 +2906,7 @@ TEST_CASE("Join - multi-span", "[hazard-adaptive-engine]") {
                               "L_value"_(createTwoSpansInt(1,4))); // NOLINT
     auto intTable2 = "Table"_("O_key"_(createTwoSpansInt(10000, 1)),
                               "O_value"_(createTwoSpansInt(1, 4))); // NOLINT
-    auto result = eval("Join"_(std::move(intTable1), std::move(intTable2),
+    auto result = eval("PartitionedJoin"_(std::move(intTable1), std::move(intTable2),
                                "Where"_("Equal"_("L_key"_, "O_key"_))));
 
     CHECK(result == "Join"_("RadixPartition"_("Table"_("L_value"_("List"_(1,2,3,4,5,6))),
@@ -2919,7 +2919,7 @@ TEST_CASE("Join - multi-span", "[hazard-adaptive-engine]") {
   }
 }
 
-TEST_CASE("Join - multi-span-test", "[hazard-adaptive-engine]") {
+TEST_CASE("Partitioned join - multi-span-test", "[hazard-adaptive-engine]") {
   auto engine = boss::engines::BootstrapEngine();
   REQUIRE(!librariesToTest.empty());
   auto eval = [&engine](boss::Expression&& expression) mutable {
@@ -2927,12 +2927,12 @@ TEST_CASE("Join - multi-span-test", "[hazard-adaptive-engine]") {
                                                 std::move(expression)));
   };
 
-  SECTION("Simple join 1") {
+  SECTION("Simple partitioned join 1") {
     auto intTable1 = "Table"_("L_key"_(createTwoSpansInt(1,100)),
                               "L_value"_(createTwoSpansInt(1,4))); // NOLINT
     auto intTable2 = "Table"_("O_key"_(createTwoSpansInt(10000,1)),
                               "O_value"_(createTwoSpansInt(1,4))); // NOLINT
-    auto result = eval("Join"_(std::move(intTable1), std::move(intTable2),
+    auto result = eval("PartitionedJoin"_(std::move(intTable1), std::move(intTable2),
                                "Where"_("Equal"_("L_key"_, "O_key"_))));
 
     CHECK(result == "Join"_("RadixPartition"_("Table"_("L_value"_("List"_(1,2,3,4,5,6))),
@@ -2947,12 +2947,12 @@ TEST_CASE("Join - multi-span-test", "[hazard-adaptive-engine]") {
     );
   }
 
-  SECTION("Simple join 2") {
+  SECTION("Simple partitioned join 2") {
     auto intTable1 = "Table"_("L_key"_(createTwoSpansIntDecrease(1,100)),
                               "L_value"_(createTwoSpansInt(1,4))); // NOLINT
     auto intTable2 = "Table"_("O_key"_(createTwoSpansIntDecrease(10000,1)),
                               "O_value"_(createTwoSpansInt(1,4))); // NOLINT
-    auto result = eval("Join"_(std::move(intTable1), std::move(intTable2),
+    auto result = eval("PartitionedJoin"_(std::move(intTable1), std::move(intTable2),
                                "Where"_("Equal"_("L_key"_, "O_key"_))));
 
     CHECK(result == "Join"_("RadixPartition"_("Table"_("L_value"_("List"_(1,2,3,4,5,6))),
@@ -2967,12 +2967,12 @@ TEST_CASE("Join - multi-span-test", "[hazard-adaptive-engine]") {
     );
   }
 
-  SECTION("Simple join 3") {
+  SECTION("Simple partitioned join 3") {
     auto intTable1 = "Table"_("L_key"_(createTwoSpansIntDecrease(1,100)),
                               "L_value"_(createTwoSpansInt(1,4))); // NOLINT
     auto intTable2 = "Table"_("O_key"_(createIntSpanOf(10002,10001,10000,3,2,1)),
                               "O_value"_(createIntSpanOf(1,2,3,4,5,6))); // NOLINT
-    auto result = eval("Join"_(std::move(intTable1), std::move(intTable2),
+    auto result = eval("PartitionedJoin"_(std::move(intTable1), std::move(intTable2),
                                "Where"_("Equal"_("L_key"_, "O_key"_))));
 
     CHECK(result == "Join"_("RadixPartition"_("Table"_("L_value"_("List"_(1,2,3,4,5,6))),
@@ -2987,12 +2987,12 @@ TEST_CASE("Join - multi-span-test", "[hazard-adaptive-engine]") {
     );
   }
 
-  SECTION("Simple join 4") {
+  SECTION("Simple partitioned join 4") {
     auto intTable1 = "Table"_("L_key"_(createFourSpansIntFrom(1)),
                               "L_value"_(createFourSpansIntFrom(1))); // NOLINT
     auto intTable2 = "Table"_("O_key"_(createTwoSpansIntDecrease(10000,1)),
                               "O_value"_(createTwoSpansInt(1,4))); // NOLINT
-    auto result = eval("Join"_(std::move(intTable1), std::move(intTable2),
+    auto result = eval("PartitionedJoin"_(std::move(intTable1), std::move(intTable2),
                                "Where"_("Equal"_("L_key"_, "O_key"_))));
 
     CHECK(result == "Join"_("RadixPartition"_("Table"_("L_value"_("List"_(8,4,7,3,6,2,5,1))),
@@ -3007,12 +3007,12 @@ TEST_CASE("Join - multi-span-test", "[hazard-adaptive-engine]") {
     );
   }
 
-  SECTION("Simple join 5") {
+  SECTION("Simple partitioned join 5") {
     auto intTable1 = "Table"_("L_key"_(createFourSpansIntFrom(1)),
                               "L_value"_(createFourSpansIntFrom(1))); // NOLINT
     auto intTable2 = "Table"_("O_key"_(createFourSpansIntFrom(4)),
                               "O_value"_(createFourSpansIntFrom(4))); // NOLINT
-    auto result = eval("Join"_(std::move(intTable1), std::move(intTable2),
+    auto result = eval("PartitionedJoin"_(std::move(intTable1), std::move(intTable2),
                                "Where"_("Equal"_("L_key"_, "O_key"_))));
 
     CHECK(result == "Join"_("RadixPartition"_("Table"_("L_value"_("List"_(8,4,7,3,6,2,5,1))),
@@ -3031,12 +3031,12 @@ TEST_CASE("Join - multi-span-test", "[hazard-adaptive-engine]") {
     );
   }
 
-  SECTION("Simple join 6") {
+  SECTION("Simple partitioned join 6") {
     auto intTable1 = "Table"_("L_key"_(createTwoSpansInt(1,100)),
                               "L_value"_(createTwoSpansInt(1,4))); // NOLINT
     auto intTable2 = "Table"_("O_key"_(createTwoSpansInt(10000000,1)),
                               "O_value"_(createTwoSpansInt(1,4))); // NOLINT
-    auto result = eval("Join"_(std::move(intTable1), std::move(intTable2),
+    auto result = eval("PartitionedJoin"_(std::move(intTable1), std::move(intTable2),
                                "Where"_("Equal"_("L_key"_, "O_key"_))));
 
     CHECK(result == "Join"_("RadixPartition"_("Table"_("L_value"_("List"_(1,2,3,4,5,6))),
@@ -3363,7 +3363,7 @@ TEST_CASE("Group tests - multi-keys 2", "[hazard-adaptive-engine]") {
   }
 }
 
-TEST_CASE("Join - multi-key join", "[hazard-adaptive-engine]") {
+TEST_CASE("Partitioned join - multi-key partitioned join", "[hazard-adaptive-engine]") {
   auto engine = boss::engines::BootstrapEngine();
   REQUIRE(!librariesToTest.empty());
   auto eval = [&engine](boss::Expression&& expression) mutable {
@@ -3371,18 +3371,18 @@ TEST_CASE("Join - multi-key join", "[hazard-adaptive-engine]") {
                                                 std::move(expression)));
   };
 
-  SECTION("Multi-key join is not evaluated") {
+  SECTION("Multi-key partitioned join is not evaluated") {
     auto intTable1 = "Table"_("L_key1"_(createTwoSpansInt(1, 100)),
                               "L_key2"_(createTwoSpansInt(100, 1)),
                               "L_value"_(createTwoSpansInt(1, 4))); // NOLINT
     auto intTable2 = "Table"_("O_key1"_(createTwoSpansInt(10000, 1)),
                               "O_key2"_(createTwoSpansInt(1, 10000)),
                               "O_value"_(createTwoSpansInt(1, 4))); // NOLINT
-    auto result = eval("Join"_(std::move(intTable1), std::move(intTable2),
+    auto result = eval("PartitionedJoin"_(std::move(intTable1), std::move(intTable2),
                                "Where"_("Equal"_("List"_("L_key1"_, "L_key2"_),
                                                  "List"_("O_key1"_, "O_key2"_)))));
 
-    CHECK(result == "Join"_("Table"_("L_key1"_("List"_(1,2,3,100,101,102)),
+    CHECK(result == "PartitionedJoin"_("Table"_("L_key1"_("List"_(1,2,3,100,101,102)),
                                      "L_key2"_("List"_(100,101,102, 1,2,3)),
                                      "L_value"_("List"_(1,2,3,4,5,6))),
                             "Table"_("O_key1"_("List"_(10000,10001,10002,1,2,3)),
@@ -3425,6 +3425,206 @@ TEST_CASE("Complex projections", "[hazard-adaptive-engine]") {
 
     CHECK(result == "Table"_("amount"_("List"_(15800, 31016.6, 7095.48, 22249.9)),
                              "ship_year"_("List"_(1992, 1994, 1996, 1994))));
+  }
+}
+
+TEST_CASE("Join - multi-key join", "[hazard-adaptive-engine]") {
+  auto engine = boss::engines::BootstrapEngine();
+  REQUIRE(!librariesToTest.empty());
+  auto eval = [&engine](boss::Expression&& expression) mutable {
+    return engine.evaluate("EvaluateInEngines"_("List"_(GENERATE(from_range(librariesToTest))),
+                                                std::move(expression)));
+  };
+
+  SECTION("Multi-key join is not evaluated") {
+    auto intTable1 = "Table"_("L_key1"_(createTwoSpansInt(1, 100)),
+                              "L_key2"_(createTwoSpansInt(100, 1)),
+                              "L_value"_(createTwoSpansInt(1, 4))); // NOLINT
+    auto intTable2 = "Table"_("O_key1"_(createTwoSpansInt(10000, 1)),
+                              "O_key2"_(createTwoSpansInt(1, 10000)),
+                              "O_value"_(createTwoSpansInt(1, 4))); // NOLINT
+    auto result = eval("Join"_(std::move(intTable1), std::move(intTable2),
+                               "Where"_("Equal"_("List"_("L_key1"_, "L_key2"_),
+                                                 "List"_("O_key1"_, "O_key2"_)))));
+
+    CHECK(result == "Join"_("Table"_("L_key1"_("List"_(1,2,3,100,101,102)),
+                                     "L_key2"_("List"_(100,101,102, 1,2,3)),
+                                     "L_value"_("List"_(1,2,3,4,5,6))),
+                            "Table"_("O_key1"_("List"_(10000,10001,10002,1,2,3)),
+                                     "O_key2"_("List"_(1,2,3,10000,10001,10002)),
+                                     "O_value"_("List"_(1,2,3,4,5,6))),
+                            "Where"_("Equal"_("List"_("L_key1"_, "L_key2"_),
+                                              "List"_("O_key1"_, "O_key2"_)))));
+  }
+}
+
+auto createIndexesSpan = [](auto... values) {
+  using SpanArguments = boss::expressions::ExpressionSpanArguments;
+  std::vector<int64_t> v = {values...};
+  auto s = boss::Span<int64_t>(std::move(v));
+  SpanArguments args;
+  args.emplace_back(std::move(s));
+  return boss::expressions::ComplexExpression("Indexes"_, {}, {}, std::move(args));
+};
+
+TEST_CASE("Join", "[hazard-adaptive-engine]") {
+  auto engine = boss::engines::BootstrapEngine();
+  REQUIRE(!librariesToTest.empty());
+  auto eval = [&engine](boss::Expression&& expression) mutable {
+    return engine.evaluate("EvaluateInEngines"_("List"_(GENERATE(from_range(librariesToTest))),
+                                                std::move(expression)));
+  };
+
+  SECTION("Simple join 1") {
+    auto result = eval("Join"_("RadixPartition"_("Table"_("L_key"_(createIntSpanOf(2, 1, 3, 99, 98)),
+                                                          "L_value"_(createIntSpanOf(1, 2, 3, 4, 5))),
+                                            "Partition"_("L_key"_(createIntSpanOf(2, 1, 3)),
+                                            createIndexesSpan(0, 1, 2))),
+                               "RadixPartition"_("Table"_("O_key"_(createIntSpanOf(50, 51, 1, 2)),
+                                                          "O_value"_(createIntSpanOf(1, 2, 3, 4))),
+                                            "Partition"_("O_key"_(createIntSpanOf(1, 2)),
+                                            createIndexesSpan(2, 3))),
+                               "Where"_("Equal"_("L_key"_, "O_key"_))));
+
+    CHECK(result == "TableIndexed"_("Table"_("L_key"_(createIntSpanOf(2, 1, 3, 99, 98)),
+                                             "L_value"_(createIntSpanOf(1, 2, 3, 4, 5))),
+                                    createIndexesSpan(1,0),
+                                    "Table"_("O_key"_(createIntSpanOf(50, 51, 1, 2)),
+                                             "O_value"_(createIntSpanOf(1, 2, 3, 4))),
+                                    createIndexesSpan(2,3)));
+  }
+
+  SECTION("Simple join 1 + project") {
+    auto result = eval("Project"_("Join"_("RadixPartition"_("Table"_("L_key"_(createIntSpanOf(2, 1, 3, 99, 98)),
+                                                          "L_value"_(createIntSpanOf(1, 2, 3, 4, 5))),
+                                            "Partition"_("L_key"_(createIntSpanOf(2, 1, 3)),
+                                            createIndexesSpan(0, 1, 2))),
+                               "RadixPartition"_("Table"_("O_key"_(createIntSpanOf(50, 51, 1, 2)),
+                                                          "O_value"_(createIntSpanOf(1, 2, 3, 4))),
+                                            "Partition"_("O_key"_(createIntSpanOf(1, 2)),
+                                            createIndexesSpan(2, 3))),
+                               "Where"_("Equal"_("L_key"_, "O_key"_))),
+                        "As"_("L_value"_, "L_value"_, "O_value"_, "O_value"_)));
+
+    CHECK(result == "Table"_("L_value"_(createIntSpanOf(2, 1)),
+                             "O_value"_(createIntSpanOf(3, 4))));
+  }
+
+  SECTION("Simple join 2") {
+    auto result = eval("Join"_("RadixPartition"_("Table"_("L_key"_(createTwoSpansIntStartingFrom(0)),
+                                                          "L_value"_(createTwoSpansIntStartingFrom(10))),
+                                            "Partition"_("L_key"_(createIntSpanOf(0, 1, 2, 3)),
+                                            createIndexesSpan(0, 1, 4294967296, 4294967297))),
+                               "RadixPartition"_("Table"_("O_key"_(createTwoSpansIntStartingFrom(2)),
+                                                          "O_value"_(createTwoSpansIntStartingFrom(22))),
+                                            "Partition"_("O_key"_(createIntSpanOf(2, 3, 4, 5)),
+                                            createIndexesSpan(0, 1, 4294967296, 4294967297))),
+                               "Where"_("Equal"_("L_key"_, "O_key"_))));
+
+    CHECK(result == "TableIndexed"_("Table"_("L_key"_(createIntSpanOf(0, 1, 2, 3)),
+                                             "L_value"_(createIntSpanOf(10, 11, 12, 13))),
+                                    createIndexesSpan(4294967296, 4294967297),
+                                    "Table"_("O_key"_(createIntSpanOf(2, 3, 4, 5)),
+                                             "O_value"_(createIntSpanOf(22, 23, 24, 25))),
+                                    createIndexesSpan(0, 1)));
+  }
+
+  SECTION("Simple join 2 + project") {
+    auto result = eval("Project"_("Join"_("RadixPartition"_("Table"_("L_key"_(createTwoSpansIntStartingFrom(0)),
+                                                          "L_value"_(createTwoSpansIntStartingFrom(10))),
+                                            "Partition"_("L_key"_(createIntSpanOf(0, 1, 2, 3)),
+                                            createIndexesSpan(0, 1, 4294967296, 4294967297))),
+                               "RadixPartition"_("Table"_("O_key"_(createTwoSpansIntStartingFrom(2)),
+                                                          "O_value"_(createTwoSpansIntStartingFrom(22))),
+                                            "Partition"_("O_key"_(createIntSpanOf(2, 3, 4, 5)),
+                                            createIndexesSpan(0, 1, 4294967296, 4294967297))),
+                               "Where"_("Equal"_("L_key"_, "O_key"_))),
+                        "As"_("L_value"_, "L_value"_, "O_value"_, "O_value"_)));
+
+    CHECK(result == "Table"_("L_value"_(createIntSpanOf(12, 13)),
+                             "O_value"_(createIntSpanOf(22, 23))));
+  }
+
+  SECTION("Simple join 3 - table as input") {
+    auto result = eval("Join"_("Table"_("L_key"_(createIntSpanOf(2, 1, 3, 99, 98)),
+                                        "L_value"_(createIntSpanOf(1, 2, 3, 4, 5))),
+                               "Table"_("O_key"_(createIntSpanOf(50, 51, 1, 2)),
+                                        "O_value"_(createIntSpanOf(1, 2, 3, 4))),
+                               "Where"_("Equal"_("L_key"_, "O_key"_))));
+
+    CHECK(result == "TableIndexed"_("Table"_("L_key"_(createIntSpanOf(2, 1, 3, 99, 98)),
+                                             "L_value"_(createIntSpanOf(1, 2, 3, 4, 5))),
+                                    createIndexesSpan(1,0),
+                                    "Table"_("O_key"_(createIntSpanOf(50, 51, 1, 2)),
+                                             "O_value"_(createIntSpanOf(1, 2, 3, 4))),
+                                    createIndexesSpan(2,3)));
+  }
+
+  SECTION("Simple join 4 - table as input") {
+    auto result = eval("Join"_("Table"_("L_key"_(createTwoSpansIntStartingFrom(0)),
+                                        "L_value"_(createTwoSpansIntStartingFrom(10))),
+                               "Table"_("O_key"_(createTwoSpansIntStartingFrom(2)),
+                                        "O_value"_(createTwoSpansIntStartingFrom(22))),
+                               "Where"_("Equal"_("L_key"_, "O_key"_))));
+
+    CHECK(result == "TableIndexed"_("Table"_("L_key"_(createIntSpanOf(0, 1, 2, 3)),
+                                             "L_value"_(createIntSpanOf(10, 11, 12, 13))),
+                                    createIndexesSpan(4294967296, 4294967297),
+                                    "Table"_("O_key"_(createIntSpanOf(2, 3, 4, 5)),
+                                             "O_value"_(createIntSpanOf(22, 23, 24, 25))),
+                                    createIndexesSpan(0, 1)));
+  }
+
+  SECTION("Simple join 5 - project including complex expression") {
+    auto result = eval("Project"_("TableIndexed"_(
+                                    "Table"_("L_key"_(createIntSpanOf(2, 1, 3, 99, 98)),
+                                             "L_value"_(createIntSpanOf(1, 2, 3, 4, 5))),
+                                    createIndexesSpan(1,0),
+                                    "Table"_("O_key"_(createIntSpanOf(50, 51, 1, 2)),
+                                             "O_value"_(createIntSpanOf(1, 2, 3, 4))),
+                                    createIndexesSpan(2,3)),
+                                    "As"_("newCol"_, "Times"_("L_value"_, "O_value"_))));
+
+    CHECK(result == "Table"_("newCol"_(createIntSpanOf(6, 4))));
+  }
+
+  SECTION("Simple join 6 - project including complex expression") {
+    auto result = eval("Project"_("TableIndexed"_(
+                                    "Table"_("L_key"_(createIntSpanOf(2, 1, 3, 99, 98)),
+                                             "L_value"_(createIntSpanOf(1, 2, 3, 4, 5))),
+                                    createIndexesSpan(1,0),
+                                    "Table"_("O_key"_(createIntSpanOf(50, 51, 1, 2)),
+                                             "O_value"_(createIntSpanOf(1, 2, 3, 4))),
+                                    createIndexesSpan(2,3)),
+                                    "As"_("newCol"_, "Times"_("L_value"_, "L_value"_))));
+
+    CHECK(result == "Table"_("newCol"_(createIntSpanOf(4, 1))));
+  }
+
+  SECTION("Simple join 7 - project including complex expression") {
+    auto result = eval("Project"_("TableIndexed"_(
+                                    "Table"_("L_key"_(createIntSpanOf(2, 1, 3, 99, 98)),
+                                             "L_value"_(createIntSpanOf(1, 2, 3, 4, 5))),
+                                    createIndexesSpan(1,0),
+                                    "Table"_("O_key"_(createIntSpanOf(50, 51, 1, 2)),
+                                             "O_value"_(createIntSpanOf(1, 2, 3, 4))),
+                                    createIndexesSpan(2,3)),
+                                    "As"_("newCol"_, "Times"_("L_value"_, 2))));
+
+    CHECK(result == "Table"_("newCol"_(createIntSpanOf(4, 2))));
+  }
+
+  SECTION("Simple join 8 - project including complex expression") {
+    auto result = eval("Project"_("TableIndexed"_(
+                                    "Table"_("L_key"_(createIntSpanOf(2, 1, 3, 99, 98)),
+                                             "L_value"_(createIntSpanOf(1, 2, 3, 4, 5))),
+                                    createIndexesSpan(1,0),
+                                    "Table"_("O_key"_(createIntSpanOf(50, 51, 1, 2)),
+                                             "O_value"_(createIntSpanOf(1, 2, 3, 4))),
+                                    createIndexesSpan(2,3)),
+                                    "As"_("newCol"_, "Times"_("L_value"_, "Minus"_(0, "O_value"_)))));
+
+    CHECK(result == "Table"_("newCol"_(createIntSpanOf(-6, -4))));
   }
 }
 
