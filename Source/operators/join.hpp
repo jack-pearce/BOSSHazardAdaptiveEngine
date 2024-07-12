@@ -22,6 +22,12 @@ template <typename T1, typename T2>
 JoinResultIndexes join(const ExpressionSpanArguments& keySpans1,
                        const ExpressionSpanArguments& keySpans2);
 
+template <typename T1, typename T2, typename T3, typename T4>
+JoinResultIndexes join(const ExpressionSpanArguments& keySpansFirstKey1,
+                       const ExpressionSpanArguments& keySpansSecondKey1,
+                       const ExpressionSpanArguments& keySpansFirstKey2,
+                       const ExpressionSpanArguments& keySpansSecondKey2);
+
 } // namespace adaptive
 
 #include "joinImplementation.hpp"
