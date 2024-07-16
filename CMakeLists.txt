@@ -64,11 +64,11 @@ set(CMAKE_SHARED_LINKER_FLAGS_DEBUG
     FORCE)
 
 # Release build type
-set(CMAKE_CXX_FLAGS_RELEASE "${COMMON_FLAGS} -O3 -g"
+set(CMAKE_CXX_FLAGS_RELEASE "${COMMON_FLAGS} -O3 -g0"
     CACHE STRING
     "Flags used by the C++ compiler during Release builds."
     FORCE)
-set(CMAKE_C_FLAGS_RELEASE "${COMMON_FLAGS} -O3 -g"
+set(CMAKE_C_FLAGS_RELEASE "${COMMON_FLAGS} -O3 -g0"
     CACHE STRING
     "Flags used by the C compiler during Release builds."
     FORCE)
