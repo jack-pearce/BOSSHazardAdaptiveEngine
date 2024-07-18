@@ -15,6 +15,7 @@
 #include <any>
 #include <cassert>
 #include <condition_variable>
+#include <cstddef>
 #include <iomanip>
 #include <iostream>
 #include <iterator>
@@ -1922,16 +1923,19 @@ public:
                               : getEngineInstanceState().getVectorizedDOP();
 
       return std::visit(
-          boss::utilities::overload(
-              [&](auto&) -> ComplexExpression {
-                throw std::runtime_error("Key has unsupported column type");
-              },
-              [&]<LimitedIntegralType K>(const Span<K>&) mutable -> ComplexExpression {
-                return typeColumnsAndGroup<K>(
-                    0, engineDOP, numAggregations, static_cast<int>(numKeys),
-                    std::move(outputColumnNames), std::move(key1), std::move(key2),
-                    std::move(aggregationColumns), std::move(aggFuncs));
-              }),
+          [&]<typename K>(const Span<K>& typedSpan) mutable -> ComplexExpression {
+            if constexpr(std::is_same_v<K, int32_t> || std::is_same_v<K, int64_t> ||
+                         std::is_same_v<K, int32_t const> || std::is_same_v<K, int64_t const>) {
+              return typeColumnsAndGroup<std::remove_cv_t<K>>(
+                  0, engineDOP, numAggregations, static_cast<int>(numKeys),
+                  std::move(outputColumnNames), std::move(key1), std::move(key2),
+                  std::move(aggregationColumns), std::move(aggFuncs));
+            } else {
+              using SpanType = std::decay_t<decltype(typedSpan)>;
+              throw std::runtime_error("Key has unsupported column type: " +
+                                       std::string(typeid(typename SpanType::element_type).name()));
+            }
+          },
           key1Ref.at(0));
     };
   };
