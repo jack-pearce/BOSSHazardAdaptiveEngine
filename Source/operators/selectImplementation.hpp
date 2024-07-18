@@ -172,7 +172,7 @@ public:
       return;
     }
 
-    constantsDOP = engineDOP;
+    constantsDOP = convertToValidDopValue(engineDOP);
     std::string lowerName = "SelectLower_" + std::to_string(sizeof(T)) + "B_elements_" +
                             std::to_string(constantsDOP) + "_dop";
     std::string upperName = "SelectUpper_" + std::to_string(sizeof(T)) + "B_elements_" +
