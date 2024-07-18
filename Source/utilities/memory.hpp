@@ -2,8 +2,11 @@
 #define BOSSHAZARDADAPTIVEENGINE_MEMORY_HPP
 
 #include "config.hpp"
+#include "utilities/systemInformation.hpp"
 
+#include <cassert>
 #include <condition_variable>
+#include <optional>
 #include <pthread.h>
 #include <queue>
 
@@ -11,8 +14,11 @@
 
 class ThreadPool {
 public:
-  static ThreadPool& getInstance() {
+  static ThreadPool& getInstance(std::optional<int> requiredDop) {
     static ThreadPool instance(adaptive::config::nonVectorizedDOP);
+    if(requiredDop.has_value() && *requiredDop > instance.getNumThreads()) {
+      instance.changeNumThreads(*requiredDop);
+    }
     return instance;
   }
 
@@ -26,6 +32,7 @@ public:
   }
 
   void changeNumThreads(uint32_t numThreads) {
+    assert(numThreads <= adaptive::logicalCoresCount() && numThreads >= 1);
     stop = true;
     cv.notify_all();
     for(auto& thread : threads) {
@@ -42,11 +49,14 @@ public:
 #endif
   }
 
+  int getNumThreads() const { return threads.size(); }
+
 private:
   explicit ThreadPool(size_t numThreads) : stop(false) {
 #ifdef MEMORY_INFO
-    std::cout << "Constructing threads for thread pool\n";
+    std::cout << "Constructing " << numThreads << " threads for thread pool\n";
 #endif
+    assert(numThreads <= adaptive::logicalCoresCount() && numThreads >= 1);
     threads.resize(numThreads);
     for(std::size_t i = 0; i < numThreads; ++i) {
       pthread_create(&threads[i], nullptr, workerThread, this);

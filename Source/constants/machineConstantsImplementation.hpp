@@ -2,6 +2,7 @@
 #define BOSSHAZARDADAPTIVEENGINE_MACHINECONSTANTSIMPLEMENTATION_HPP
 
 #include <iostream>
+#include <optional>
 
 #include "HazardAdaptiveEngine.hpp"
 #include "groupQueries.hpp"
@@ -343,7 +344,7 @@ PerfCounterResults runGroupFunctionMeasureHazards(int cardinality, int dop,
                                                   ExpressionSpanArguments&& keySpans,
                                                   std::vector<Span<As>>&&... typedAggCols,
                                                   Aggregator<As>... aggregators) {
-  auto& threadPool = ThreadPool::getInstance();
+  auto& threadPool = ThreadPool::getInstance(std::nullopt);
   auto& synchroniser = Synchroniser::getInstance();
   auto& keySpan = std::get<Span<K>>(keySpans.at(0));
   int n = keySpan.size();

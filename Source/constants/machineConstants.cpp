@@ -3,6 +3,7 @@
 #include <fstream>
 #include <iostream>
 #include <json/json.h>
+#include <optional>
 
 #include "groupQueries.hpp"
 #include "machineConstants.hpp"
@@ -112,14 +113,14 @@ void MachineConstants::calculateMissingMachineConstants() {
   // AdaptiveParallel can be used to calculate any missing machine constants
   auto nonVectorizedDOPvalue = adaptive::config::nonVectorizedDOP;
   adaptive::config::nonVectorizedDOP = static_cast<int32_t>(adaptive::logicalCoresCount());
-  ThreadPool::getInstance().changeNumThreads(adaptive::logicalCoresCount());
+  ThreadPool::getInstance(std::nullopt).changeNumThreads(adaptive::logicalCoresCount());
 
   // Update eventSet in main thread to include CPU cycles counters
   auto& eventSet = getThreadEventSet();
   switchEventSetToCycles(eventSet);
 
   // Update eventSets in worker threads to include CPU cycles counters
-  auto& threadPool = ThreadPool::getInstance();
+  auto& threadPool = ThreadPool::getInstance(std::nullopt);
   auto& synchroniser = Synchroniser::getInstance();
   for(uint32_t threadNum = 0; threadNum < adaptive::logicalCoresCount(); ++threadNum) {
     threadPool.enqueue([&synchroniser] {
@@ -181,7 +182,7 @@ void MachineConstants::calculateMissingMachineConstants() {
   // Revert number of threads in thread pool to that set in the config
   // Additionally, by recreating all the worker threads, we revert the eventSets to the default
   adaptive::config::nonVectorizedDOP = nonVectorizedDOPvalue;
-  ThreadPool::getInstance().changeNumThreads(adaptive::config::nonVectorizedDOP);
+  ThreadPool::getInstance(std::nullopt).changeNumThreads(adaptive::config::nonVectorizedDOP);
 }
 
 } // namespace adaptive

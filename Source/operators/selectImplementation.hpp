@@ -680,7 +680,8 @@ public:
     std::atomic<int32_t> positionToWrite = 0;
     std::vector<std::unique_ptr<SelectThreadArgs<T, P>>> threadArgs;
 
-    auto& threadPool = ThreadPool::getInstance();
+    auto& threadPool = ThreadPool::getInstance(dop);
+    assert(threadPool.getNumThreads() >= dop);
     auto& synchroniser = Synchroniser::getInstance();
 
     for(int32_t i = 0; i < dop; ++i) {

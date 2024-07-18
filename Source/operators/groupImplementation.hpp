@@ -1288,7 +1288,7 @@ std::vector<ExpressionSpanArguments> groupByAdaptiveParallelMerge(
     std::condition_variable& cv, std::mutex& resultsMutex, int dop, bool secondKey,
     std::queue<AggregatedKeysAndPayload<K, As...>>& results, Aggregator<As>... aggregators) {
 
-  auto& threadPool = ThreadPool::getInstance();
+  auto& threadPool = ThreadPool::getInstance(dop);
 
   for(int i = 0; i < dop - 1; ++i) {
     AggregatedKeysAndPayload<K, As...> mergeInput1;
@@ -1345,7 +1345,8 @@ groupByAdaptiveParallel(int dop, int cardinality, bool secondKey,
                         ExpressionSpanArguments&& keySpans1, ExpressionSpanArguments&& keySpans2,
                         std::vector<Span<As>>&&... typedAggCols, Aggregator<As>... aggregators) {
 
-  auto& threadPool = ThreadPool::getInstance();
+  auto& threadPool = ThreadPool::getInstance(dop);
+  assert(threadPool.getNumThreads() >= dop); // Will have a deadlock otherwise
 
   int n = 0;
   std::vector<int> spanSizes;
@@ -1442,7 +1443,6 @@ group(Group implementation, int dop, int numKeys, ExpressionSpanArguments&& keyS
                                      std::move(keySpans2), std::move(typedAggCols)...,
                                      aggregators...);
   case Group::GroupAdaptiveParallel:
-    assert(adaptive::config::nonVectorizedDOP >= dop); // Will have a deadlock otherwise
     return groupByAdaptiveParallel<K, As...>(dop, cardinality, numKeys == 2, std::move(keySpans1),
                                              std::move(keySpans2), std::move(typedAggCols)...,
                                              aggregators...);

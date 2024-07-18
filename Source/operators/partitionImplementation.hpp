@@ -1580,8 +1580,9 @@ public:
   PartitionAdaptiveParallel(const ExpressionSpanArguments& keySpans1_,
                             const ExpressionSpanArguments& keySpans2_, int dop_)
       : nInput1(0), keySpans1(keySpans1_), nInput2(0), keySpans2(keySpans2_), dop(dop_),
-        threadPool(ThreadPool::getInstance()), synchroniser(Synchroniser::getInstance()),
+        threadPool(ThreadPool::getInstance(dop_)), synchroniser(Synchroniser::getInstance()),
         totalOutputPartitions(0) {
+    assert(threadPool.getNumThreads() >= dop); // Will have a deadlock otherwise
 
     std::string startName = "Partition_startRadixBits";
     startingRadixBits =
@@ -2221,7 +2222,6 @@ PartitionedJoinArguments partitionJoinExpr(PartitionOperators partitionImplement
         }
 #endif
         if(partitionImplementation == PartitionOperators::RadixBitsAdaptiveParallel) {
-          assert(adaptive::config::nonVectorizedDOP >= dop); // Will have a deadlock otherwise
           auto partitionOperator =
               PartitionAdaptiveParallel<T1, T2>(tableOneKeys, tableTwoKeys, dop);
           return partitionOperator.processInput();
@@ -2268,7 +2268,7 @@ PartitionedJoinArguments partitionJoinExpr(PartitionOperators partitionImplement
     tableTwoPartitionsOfIndexSpans = std::move(tableTwoPartitionsOfIndexSpansTmp);
   } else {
     auto& synchroniser = Synchroniser::getInstance();
-    ThreadPool::getInstance().enqueue([&tableOneKeys, &partitionedTables,
+    ThreadPool::getInstance(2).enqueue([&tableOneKeys, &partitionedTables,
                                        &tableOnePartitionsOfKeySpans,
                                        &tableOnePartitionsOfIndexSpans, &synchroniser] {
       auto [tableOnePartitionsOfKeySpansTmp, tableOnePartitionsOfIndexSpansTmp] =
@@ -2278,7 +2278,7 @@ PartitionedJoinArguments partitionJoinExpr(PartitionOperators partitionImplement
       tableOnePartitionsOfIndexSpans = std::move(tableOnePartitionsOfIndexSpansTmp);
       synchroniser.taskComplete();
     });
-    ThreadPool::getInstance().enqueue([&tableTwoKeys, &partitionedTables,
+    ThreadPool::getInstance(2).enqueue([&tableTwoKeys, &partitionedTables,
                                        &tableTwoPartitionsOfKeySpans,
                                        &tableTwoPartitionsOfIndexSpans, &synchroniser] {
       auto [tableTwoPartitionsOfKeySpansTmp, tableTwoPartitionsOfIndexSpansTmp] =

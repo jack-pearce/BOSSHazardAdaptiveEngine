@@ -3,6 +3,7 @@
 .vs
 *.json
 .idea
+.patch
 cmake*
 build/
 build-vs/
