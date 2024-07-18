@@ -1580,6 +1580,10 @@ public:
          get<ComplexExpression>(*(inputExpr.getArguments().begin())).getHead().getName() ==
              "Table") {
 
+        int32_t engineDOP = getEngineInstanceState().getVectorizedDOP() == -1
+                  ? nonVectorizedDOP
+                  : getEngineInstanceState().getVectorizedDOP();
+
         // PredWrapper means it is a single key Join. If not a PredWrapper then multi-key Join
         if(holds_alternative<PredWrapper>(*std::next(inputExpr.getArguments().begin(), 2))) {
           ExpressionArguments args = std::move(inputExpr).getArguments();
@@ -1621,10 +1625,10 @@ public:
                         std::string(typeid(typename SpanType1::element_type).name()) + ", " +
                         std::string(typeid(typename SpanType2::element_type).name()));
                   },
-                  [&leftKeySpans, &rightKeySpans]<IntegralType Type1, IntegralType Type2>(
+                  [&leftKeySpans, &rightKeySpans, engineDOP]<IntegralType Type1, IntegralType Type2>(
                       boss::expressions::atoms::Span<Type1> const& /*typedSpan1*/,
                       boss::expressions::atoms::Span<Type2> const& /*typedSpan2*/) {
-                    return adaptive::join<Type1, Type2>(leftKeySpans, rightKeySpans);
+                    return adaptive::join<Type1, Type2>(leftKeySpans, rightKeySpans, engineDOP);
                   }),
               leftKeySpans.at(0), rightKeySpans.at(0));
 
@@ -1705,11 +1709,11 @@ public:
                         std::string(typeid(typename SpanType2::element_type).name()));
                   },
                   [&leftKeySpans1, &leftKeySpans2, &rightKeySpans1,
-                   &rightKeySpans2]<IntegralType Type1, IntegralType Type2>(
+                   &rightKeySpans2, engineDOP]<IntegralType Type1, IntegralType Type2>(
                       boss::expressions::atoms::Span<Type1> const& /*typedSpan1*/,
                       boss::expressions::atoms::Span<Type2> const& /*typedSpan2*/) {
                     return adaptive::join<Type1, Type1, Type2, Type2>(
-                        leftKeySpans1, leftKeySpans2, rightKeySpans1, rightKeySpans2);
+                        leftKeySpans1, leftKeySpans2, rightKeySpans1, rightKeySpans2, engineDOP);
                   }),
               leftKeySpans1.at(0), rightKeySpans1.at(0));
 
