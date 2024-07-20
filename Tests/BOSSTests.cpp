@@ -3648,6 +3648,42 @@ TEST_CASE("Join", "[hazard-adaptive-engine]") {
   }
 }
 
+TEST_CASE("Dates and years", "[hazard-adaptive-engine]") {
+  auto engine = boss::engines::BootstrapEngine();
+  REQUIRE(!librariesToTest.empty());
+  auto eval = [&engine](auto&& expression) mutable {
+    return engine.evaluate("EvaluateInEngines"_("List"_(GENERATE(from_range(librariesToTest))),
+                                                std::forward<decltype(expression)>(expression)));
+  };
+
+  auto asInt32Spans = [&eval](auto&& val0, auto&&... val) {
+    auto evalIfNeeded = [&eval](auto&& val) {
+      if constexpr(std::is_same_v<boss::ComplexExpression, std::decay_t<decltype(val)>>) {
+        return get<int32_t>(eval(std::move(val)));
+      } else {
+        return (int32_t)std::move(val);
+      }
+    };
+    boss::expressions::ExpressionSpanArguments spans;
+    spans.emplace_back(boss::Span<int32_t>{
+        std::vector<int32_t>{evalIfNeeded(std::move(val0)), evalIfNeeded(std::move(val))...}});
+    return boss::ComplexExpression("List"_, {}, {}, std::move(spans));
+  };
+
+  auto table = "Table"_(
+      "date"_(asInt32Spans("DateObject"_("1991-12-30"), "DateObject"_("1991-12-31"),
+                           "DateObject"_("1992-01-01"), "DateObject"_("1992-01-02"),
+                           "DateObject"_("1998-12-31"), "DateObject"_("1999-01-01"))));
+
+  SECTION("Create dates and years") {
+    auto result =
+        eval("Project"_(table.clone(CloneReason::FOR_TESTING),
+                        "As"_("year"_, "Year"_("date"_))));
+
+    CHECK(result == "Table"_("year"_(createIntSpanOf(1991, 1991, 1992, 1992, 1998, 1999))));
+  }
+}
+
 int main(int argc, char* argv[]) {
   Catch::Session session;
   session.configData().showSuccessfulTests = true;

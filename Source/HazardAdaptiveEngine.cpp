@@ -1189,11 +1189,9 @@ public:
       struct std::tm tm = {};
       iss >> std::get_time(&tm, "%Y-%m-%d");
       auto t = std::mktime(&tm);
-      static int const hoursInADay = 24;
-      return (int32_t)(std::chrono::duration_cast<std::chrono::hours>(
+      return (int32_t)std::chrono::duration_cast<std::chrono::days>(
                            std::chrono::system_clock::from_time_t(t).time_since_epoch())
-                           .count() /
-                       hoursInADay);
+                           .count();
     };
 
     (*this)["Year"_] = [](ComplexExpressionWithStaticArguments<Symbol>&& input) -> Expression {
@@ -1211,13 +1209,21 @@ public:
                        [&span]<IntegralType T>(boss::expressions::atoms::Span<T>&& typedSpan) {
                          std::vector<int32_t> output;
                          output.reserve(typedSpan.size());
-                         constexpr double daysInYear = 365.25;
-                         constexpr int epochYear = 1970;
-                         for(auto& epochInDays : typedSpan) {
-                           double yearsSinceEpoch = static_cast<double>(epochInDays) / daysInYear;
-                           int year = epochYear + static_cast<int>(std::floor(yearsSinceEpoch));
-                           output.push_back(year);
+
+                         // Correct version (but slower)
+                         /*std::chrono::system_clock::time_point epoch_start = std::chrono::system_clock::from_time_t(0);
+                         for(const auto& epochInDays : typedSpan) {
+                           std::chrono::system_clock::time_point date_time = epoch_start + std::chrono::hours(epochInDays * 24);
+                           std::time_t tt = std::chrono::system_clock::to_time_t(date_time);
+                           std::tm* gmt = std::gmtime(&tt);
+                           output.push_back(static_cast<int32_t>(gmt->tm_year + 1900));
+                         }*/
+
+                         // Identical version used to that in the Velox engine for a fair comparison
+                         for(const auto& epochInDays : typedSpan) {
+                          output.push_back(static_cast<int32_t>((static_cast<double>(epochInDays) + 719563.285) / 365.265));
                          }
+
                          span = Span<int32_t>(std::vector(output));
                        }),
                    std::move(*arg1));
