@@ -73,8 +73,6 @@ template <typename... As>
 std::vector<ExpressionSpanArguments> groupNoKeys(std::vector<Span<As>>&&... typedAggCols,
                                                  Aggregator<As>... aggregators) {
 
-  std::tuple<As...> resultValues = std::make_tuple(typedAggCols[0][0]...);
-
   std::vector<size_t> sizes;
   bool sizesUpdated = false;
   (
@@ -89,13 +87,25 @@ std::vector<ExpressionSpanArguments> groupNoKeys(std::vector<Span<As>>&&... type
       }(),
       ...);
 
-  for(size_t i = 1; i < sizes[0]; ++i) {
+  size_t spanNumber = 0;
+  std::tuple<As...> resultValues = [&] {
+    for(; spanNumber < sizes.size(); ++spanNumber) {
+      if(sizes[spanNumber] > 0) {
+        return std::make_tuple(typedAggCols[spanNumber][0]...);
+      }
+    }
+    throw std::runtime_error("Input to 'groupNoKeys' function contains zero elements");
+  }();
+
+  for(size_t i = 1; i < sizes[spanNumber]; ++i) {
     resultValues = std::apply(
-        [&](auto&&... args) { return std::make_tuple(aggregators(args, typedAggCols[0][i])...); },
+        [&](auto&&... args) {
+          return std::make_tuple(aggregators(args, typedAggCols[spanNumber][i])...);
+        },
         std::move(resultValues));
   }
 
-  for(size_t i = 1; i < sizes.size(); ++i) {
+  for(size_t i = spanNumber + 1; i < sizes.size(); ++i) {
     for(size_t j = 0; j < sizes[i]; ++j) {
       resultValues = std::apply(
           [&](auto&&... args) { return std::make_tuple(aggregators(args, typedAggCols[i][j])...); },
