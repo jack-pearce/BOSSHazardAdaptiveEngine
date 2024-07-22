@@ -25,6 +25,8 @@
 // #define DEBUG
 // #define VERBOSE_DEBUG
 
+// #define RANDOMISE_SINGLE_THREADED_ADAPTIVE_PERIOD
+
 namespace adaptive {
 
 /****************************** FOUNDATIONAL ALGORITHMS ******************************/
@@ -123,6 +125,16 @@ template <typename T, typename P> static SelectPredication<T, P>& getSelectPredi
 }
 
 /****************************** SINGLE-THREADED ******************************/
+
+namespace tuplesBetweenChecks {
+  constexpr int32_t AVERAGE = 50'000;
+  constexpr int32_t RANGE = 10'000;
+
+  int32_t inline getNext(int32_t previous) {
+    int64_t value = 1664525 * static_cast<int64_t>(previous) + 1013904223;
+    return AVERAGE - RANGE + static_cast<int32_t>((value % (2 * RANGE + 1)));
+  }
+}
 
 template <typename T, typename P> class MonitorSelect;
 
@@ -241,7 +253,7 @@ private:
 
 template <typename T, typename P>
 SelectAdaptive<T, P>::SelectAdaptive()
-    : tuplesPerHazardCheck(50000), maxConsecutivePredications(10), tuplesInBranchBurst(1000),
+    : tuplesPerHazardCheck(tuplesBetweenChecks::AVERAGE), maxConsecutivePredications(10), tuplesInBranchBurst(1000),
       consecutivePredications(maxConsecutivePredications),
       activeOperator(SelectImplementation::Predication_), eventSet(getThreadEventSet()),
       monitor(MonitorSelect<T, P>(
@@ -340,6 +352,10 @@ Span<int32_t> SelectAdaptive<T, P>::processInput(const Span<T>& column, T value,
     processMicroBatch(column, value, columnIsFirstArg, predicate);
     consecutivePredications += activeOperator == SelectImplementation::Predication_;
     monitor.checkHazards(microBatchSize, microBatchSelected);
+
+#ifdef RANDOMISE_SINGLE_THREADED_ADAPTIVE_PERIOD
+    tuplesPerHazardCheck = tuplesBetweenChecks::getNext(tuplesPerHazardCheck);
+#endif
   }
 
   // Run final (partial-)microBatch without updating robustness (either we are at the final tuple of
