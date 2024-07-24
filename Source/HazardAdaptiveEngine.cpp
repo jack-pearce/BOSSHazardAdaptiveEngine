@@ -33,8 +33,6 @@
 
 // #define DEBUG_MODE
 
-bool CONSTANTS_INITIALISED = false;
-
 constexpr int MAX_AGGREGATION_ARGS = 5;
 
 using ExpressionBuilder = boss::utilities::ExtensibleExpressionBuilder<HAExpressionSystem>;
@@ -1976,7 +1974,7 @@ static Expression evaluateInternal(Expression&& e) {
 static void initialiseLibraryConstants() {
   if(!adaptive::config::CONSTANTS_INITIALISED) {
     adaptive::MachineConstants::getInstance().calculateMissingMachineConstants();
-    CONSTANTS_INITIALISED = true;
+    adaptive::config::CONSTANTS_INITIALISED = true;
   }
 }
 
