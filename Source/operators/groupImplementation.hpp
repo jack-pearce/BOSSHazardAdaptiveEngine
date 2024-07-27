@@ -56,6 +56,29 @@ template <typename K, typename... As> struct Section {
       : n(n_), key1(k1), key2(k2), aggs(aggs_) {}
 };
 
+template <typename T>
+inline size_t findIndexFirstGreaterThanOrEqualTo(const std::vector<T>& sortedVector, T value) {
+  size_t left = 0;
+  size_t right = sortedVector.size();
+  size_t result = -1;
+
+  while (left < right) {
+    size_t mid = left + (right - left) / 2;
+
+    if (sortedVector[mid] >= value) {
+      result = mid;
+      right = mid;
+    } else {
+      left = mid + 1;
+    }
+  }
+
+  if(result == static_cast<size_t>(-1)) {
+    throw std::invalid_argument("No value in vector larger than requested value");
+  }
+  return result;
+}
+
 inline int getGroupResultCardinality() {
   auto getEnvironmentVariableNumber = [](const char* name, int& result) -> void {
     char* envVarStr = std::getenv(name);
@@ -1287,10 +1310,15 @@ void groupByAdaptiveParallelPerformMerge(std::mutex& resultsMutex, std::conditio
                                          AggregatedKeysAndPayload<K, As...>&& mergeInput2,
                                          std::queue<AggregatedKeysAndPayload<K, As...>>& results,
                                          Aggregator<As>... aggregators) {
-  std::vector<K> keys1 = std::move(std::get<0>(mergeInput1));
-  std::vector<K> keys2 = std::move(std::get<0>(mergeInput2));
-  std::tuple<std::vector<As>...> payloads1 = std::move(std::get<2>(mergeInput1));
-  std::tuple<std::vector<As>...> payloads2 = std::move(std::get<2>(mergeInput2));
+  using Keys = std::vector<K>;
+  using Payloads = std::tuple<std::vector<As>...>;
+
+  Keys keys1 = std::move(std::get<0>(mergeInput1));
+  Keys keys2 = std::move(std::get<0>(mergeInput2));
+  Payloads payloads1 = std::move(std::get<2>(mergeInput1));
+  Payloads payloads2 = std::move(std::get<2>(mergeInput2));
+  size_t index1 = 0;
+  size_t index2 = 0;
 
   size_t n1 = keys1.size();
   size_t n2 = keys2.size();
@@ -1299,80 +1327,115 @@ void groupByAdaptiveParallelPerformMerge(std::mutex& resultsMutex, std::conditio
   std::vector<K> resultKeys;
   resultKeys.reserve(maxOutputSize);
   std::vector<K> resultKeys2;
-  std::tuple<std::vector<As>...> resultValueVectors;
+  Payloads resultValueVectors;
   std::apply([&](auto&&... vec) { (vec.reserve(maxOutputSize), ...); }, resultValueVectors);
 
-  size_t l = 0;
-  size_t r = 0;
-
-  while(l < n1 && r < n2) {
-    if(keys1[l] < keys2[r]) {
-      resultKeys.push_back(keys1[l]);
-      [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
-        ((std::get<Is>(resultValueVectors).push_back(std::get<Is>(payloads1)[l])), ...);
-      }(std::make_index_sequence<sizeof...(As)>());
-      l++;
-    } else if(keys2[r] < keys1[l]) {
-      resultKeys.push_back(keys2[r]);
-      [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
-        ((std::get<Is>(resultValueVectors).push_back(std::get<Is>(payloads2)[r])), ...);
-      }(std::make_index_sequence<sizeof...(As)>());
-      r++;
-    } else {
-      resultKeys.push_back(keys1[l]);
-      [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
-        ((std::get<Is>(resultValueVectors)
-              .push_back(aggregators(std::get<Is>(payloads1)[l], std::get<Is>(payloads2)[r]))),
-         ...);
-      }(std::make_index_sequence<sizeof...(As)>());
-      l++;
-      r++;
-    }
-  }
-
-  if(l < n1) {
-    if(!resultKeys.empty() && resultKeys.back() == keys1[l]) {
-      [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
-        ((std::get<Is>(resultValueVectors).back() =
-              aggregators(std::get<Is>(resultValueVectors).back(), std::get<Is>(payloads1)[l])),
-         ...);
-      }(std::make_index_sequence<sizeof...(As)>());
-      l++;
-    }
-    resultKeys.insert(resultKeys.end(), std::make_move_iterator(keys1.begin() + l),
-                      std::make_move_iterator(keys1.end()));
-    [&]<size_t... Is>(std::index_sequence<Is...>) {
-      ((std::get<Is>(resultValueVectors)
-            .insert(std::get<Is>(resultValueVectors).end(),
-                    std::make_move_iterator(std::get<Is>(payloads1).begin() + l),
-                    std::make_move_iterator(std::get<Is>(payloads1).end()))),
-       ...);
-    }(std::make_index_sequence<sizeof...(As)>());
-  } else if(r < n2) {
-    if(!resultKeys.empty() && resultKeys.back() == keys2[r]) {
-      [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
-        ((std::get<Is>(resultValueVectors).back() =
-              aggregators(std::get<Is>(resultValueVectors).back(), std::get<Is>(payloads2)[r])),
-         ...);
-      }(std::make_index_sequence<sizeof...(As)>());
-      r++;
-    }
-    resultKeys.insert(resultKeys.end(), std::make_move_iterator(keys2.begin() + r),
-                      std::make_move_iterator(keys2.end()));
-    [&]<size_t... Is>(std::index_sequence<Is...>) {
-      ((std::get<Is>(resultValueVectors)
-            .insert(std::get<Is>(resultValueVectors).end(),
-                    std::make_move_iterator(std::get<Is>(payloads2).begin() + r),
-                    std::make_move_iterator(std::get<Is>(payloads2).end()))),
-       ...);
-    }(std::make_index_sequence<sizeof...(As)>());
-  }
-
-  {
+  auto pushResultsToQueue = [&]() {
     std::lock_guard<std::mutex> lock(resultsMutex);
     results.push(std::make_tuple(resultKeys, resultKeys2, resultValueVectors));
     cv.notify_one();
+  };
+
+  auto copyIntoResults = [&](Keys& keys, Payloads& payloads, size_t startElement,
+                             size_t numElements) -> void {
+    size_t currentResultElements = resultKeys.size();
+    resultKeys.resize(resultKeys.size() + numElements);
+    std::apply([&](auto&&... vec) { (vec.resize(vec.size() + numElements), ...); },
+               resultValueVectors);
+    memcpy(&resultKeys[currentResultElements], &keys[startElement], numElements * sizeof(K));
+    [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
+      ((memcpy(&std::get<Is>(resultValueVectors)[currentResultElements],
+               &std::get<Is>(payloads)[startElement],
+               numElements * sizeof(typename std::tuple_element<Is, Payloads>::type::value_type))),
+       ...);
+    }
+    (std::make_index_sequence<sizeof...(As)>());
+  };
+
+  if(n1 == 0) {
+    copyIntoResults(keys1, payloads1, 0, keys1.size());
+    pushResultsToQueue();
+    return;
   }
+  if(n2 == 0) {
+    copyIntoResults(keys2, payloads2, 0, keys2.size());
+    pushResultsToQueue();
+    return;
+  }
+
+  K minKey1 = keys1[0];
+  K minKey2 = keys2[0];
+  K maxKey1 = keys1.back();
+  K maxKey2 = keys2.back();
+
+  {
+    bool minKey1LessThanMinKey2 = minKey1 < minKey2;
+    Keys& minKeys = minKey1LessThanMinKey2 ? keys1 : keys2;
+    Keys& otherKeys = minKey1LessThanMinKey2 ? keys2 : keys1;
+    Payloads& minPayloads = minKey1LessThanMinKey2 ? payloads1 : payloads2;
+    Payloads& otherPayloads = minKey1LessThanMinKey2 ? payloads2 : payloads1;
+
+    if(maxKey1 < minKey2 || maxKey2 < minKey1) { // no overlap (no merge required)
+      copyIntoResults(minKeys, minPayloads, 0, minKeys.size());
+      copyIntoResults(otherKeys, otherPayloads, 0, otherKeys.size());
+      pushResultsToQueue();
+      return;
+    }
+
+    // Binary search to find point at which overlap starts for minKeys
+    size_t numNotOverlapping = findIndexFirstGreaterThanOrEqualTo<K>(minKeys, otherKeys[0]);
+
+    // copy any non-overlapping values into results
+    copyIntoResults(minKeys, minPayloads, 0, numNotOverlapping);
+    size_t& minIndex = minKey1LessThanMinKey2 ? index1 : index2;
+    minIndex += numNotOverlapping;
+  }
+
+  {
+    bool maxKey1GreaterThanMaxKey2 = maxKey1 > maxKey2;
+    Keys& maxKeys = maxKey1GreaterThanMaxKey2 ? keys1 : keys2;
+    Keys& otherKeys = maxKey1GreaterThanMaxKey2 ? keys2 : keys1;
+    Payloads& maxPayloads = maxKey1GreaterThanMaxKey2 ? payloads1 : payloads2;
+    Payloads& otherPayloads = maxKey1GreaterThanMaxKey2 ? payloads2 : payloads1;
+    size_t& indexMax = maxKey1GreaterThanMaxKey2 ? index1 : index2;
+    size_t& indexOther = maxKey1GreaterThanMaxKey2 ? index2 : index1;
+
+    // Merge overlapping region (i.e. all remaining 'otherKeys')
+    while(indexOther < otherKeys.size()) {
+      if(otherKeys[indexOther] < maxKeys[indexMax]) {
+        resultKeys.push_back(otherKeys[indexOther]);
+        [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
+          ((std::get<Is>(resultValueVectors).push_back(std::get<Is>(otherPayloads)[indexOther])),
+           ...);
+        }
+        (std::make_index_sequence<sizeof...(As)>());
+        indexOther++;
+      } else if(maxKeys[indexMax] < otherKeys[indexOther]) {
+        resultKeys.push_back(maxKeys[indexMax]);
+        [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
+          ((std::get<Is>(resultValueVectors).push_back(std::get<Is>(maxPayloads)[indexMax])), ...);
+        }
+        (std::make_index_sequence<sizeof...(As)>());
+        indexMax++;
+      } else {
+        resultKeys.push_back(otherKeys[indexOther]);
+        [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
+          ((std::get<Is>(resultValueVectors)
+                .push_back(aggregators(std::get<Is>(otherPayloads)[indexOther],
+                                       std::get<Is>(maxPayloads)[indexMax]))),
+           ...);
+        }
+        (std::make_index_sequence<sizeof...(As)>());
+        indexOther++;
+        indexMax++;
+      }
+    }
+
+    // copy any remaining values into results
+    copyIntoResults(maxKeys, maxPayloads, indexMax, maxKeys.size() - indexMax);
+  }
+
+  pushResultsToQueue();
 }
 
 template <typename K, typename... As>
