@@ -9,6 +9,7 @@
 #include <iostream>
 #include <queue>
 #include <stdexcept>
+#include <string>
 
 #include "constants/machineConstants.hpp"
 #include "lazy_hash_map/robin_map.h"
@@ -52,21 +53,36 @@ template <typename K, typename... As> struct Section {
 };
 
 inline int getGroupResultCardinality() {
-  int cardinality = DEFAULT_GROUP_RESULT_CARDINALITY;
-  char* cardinalityStr = std::getenv("GROUP_RESULT_CARDINALITY");
-  if(cardinalityStr != nullptr) {
-    cardinality = std::atoi(cardinalityStr);
+  auto getEnvironmentVariableNumber = [](const char* name, int& result) -> void {
+    char* envVarStr = std::getenv(name);
+    if(envVarStr != nullptr) {
+      int value = std::atoi(envVarStr);
 #ifdef DEBUG
-    std::cout << "Read 'GROUP' result cardinality environment variable value of: " << cardinality
-              << std::endl;
+      std::cout << "Read '" << name << "' environment variable value of: " << value << std::endl;
 #endif
-    return cardinality;
+      result = value;
+    } else {
+#ifdef DEBUG
+    std::cout << "Could not read '" << name << "' environment variable " << std::endl;
+#endif
+    }
+  };
+
+  int thisCardinality = DEFAULT_GROUP_RESULT_CARDINALITY;
+  getEnvironmentVariableNumber("GROUP_RESULT_CARDINALITY", thisCardinality);
+  int nextCardinality = -1;
+  getEnvironmentVariableNumber("NEXT_GROUP_RESULT_CARDINALITY", nextCardinality);
+
+  // Swap environment variables so that the correct value is picked up next i.e. repeatedly
+  // swapping between the two values for repeated execution of a query with max two GROUP ops
+  if(nextCardinality > 0) {
+    std::string thisValue = std::to_string(nextCardinality);
+    std::string nextValue = std::to_string(thisCardinality);
+    setenv("GROUP_RESULT_CARDINALITY", thisValue.c_str(), 1);
+    setenv("NEXT_GROUP_RESULT_CARDINALITY", nextValue.c_str(), 1);
   }
-#ifdef DEBUG
-  std::cout << "'GROUP' result cardinality environment variable not set, using default value: "
-            << cardinality << std::endl;
-#endif
-  return cardinality;
+
+  return thisCardinality;
 }
 
 template <typename... As>
