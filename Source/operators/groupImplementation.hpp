@@ -7,10 +7,12 @@
 #include <cstring>
 #include <functional>
 #include <iostream>
+#include <memory>
 #include <queue>
 #include <stdexcept>
 #include <string>
 
+#include "HazardAdaptiveEngine.hpp"
 #include "constants/machineConstants.hpp"
 #include "lazy_hash_map/robin_map.h"
 #include "utilities/memory.hpp"
@@ -22,6 +24,8 @@
 #define USE_ADAPTIVE_OVER_ADAPTIVE_PARALLEL_FOR_DOP_1
 
 namespace adaptive {
+
+using config::minPartitionSize;
 
 constexpr float PERCENT_INPUT_TO_TRACK = 0.001;             // 0.1%
 constexpr float PERCENT_INPUT_IN_TRANSIENT_CHECK = 0.00005; // 0.005%
@@ -1203,12 +1207,74 @@ groupByAdaptive(int cardinality, bool secondKey, ExpressionSpanArguments&& keySp
   std::vector<ExpressionSpanArguments> result;
   result.reserve(sizeof...(As) + 1 + secondKey);
 
-  result.emplace_back(Span<K>(std::move(std::get<0>(resultVectors))));
-  if(secondKey)
-    result.emplace_back(Span<K>(std::move(std::get<1>(resultVectors))));
-  [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
-    (result.emplace_back(Span<As>(std::move(std::get<Is>(std::get<2>(resultVectors))))), ...);
-  }(std::make_index_sequence<sizeof...(As)>());
+  auto [keys1, keys2, payloads] = std::move(resultVectors);
+  auto keysPtr1 = std::make_shared<std::vector<K>>(std::move(keys1));
+  auto keysPtr2 = std::make_shared<std::vector<K>>(std::move(keys2));
+  auto payloadsPtrs = std::apply(
+      [&](auto&&... vecs) {
+        return std::make_tuple(std::make_shared<std::vector<As>>(std::move(vecs))...);
+      },
+      std::move(payloads));
+
+  size_t numResultSpans = (keysPtr1->size() + minPartitionSize - 1) / minPartitionSize;
+
+  ExpressionSpanArguments key1ResultSpans;
+  key1ResultSpans.reserve(numResultSpans);
+  size_t spanStart = 0;
+  size_t spanSize = minPartitionSize;
+  for(int i = 0; i < std::max(static_cast<int>(numResultSpans) - 1, 0); ++i) {
+    key1ResultSpans.emplace_back(
+        Span<K>(keysPtr1->data() + spanStart, spanSize, [ptr = keysPtr1]() {}));
+    spanStart += spanSize;
+  }
+  spanSize = keysPtr1->size() - spanStart;
+  if(spanSize > 0) {
+    key1ResultSpans.emplace_back(
+        Span<K>(keysPtr1->data() + spanStart, spanSize, [ptr = keysPtr1]() {}));
+  }
+  result.push_back(std::move(key1ResultSpans));
+
+  if(secondKey) {
+    ExpressionSpanArguments key2ResultSpans;
+    key2ResultSpans.reserve(numResultSpans);
+    size_t spanStart = 0;
+    size_t spanSize = minPartitionSize;
+    for(int i = 0; i < std::max(static_cast<int>(numResultSpans) - 1, 0); ++i) {
+      key2ResultSpans.emplace_back(
+          Span<K>(keysPtr2->data() + spanStart, spanSize, [ptr = keysPtr2]() {}));
+      spanStart += spanSize;
+    }
+    spanSize = keysPtr2->size() - spanStart;
+    if(spanSize > 0) {
+      key2ResultSpans.emplace_back(
+          Span<K>(keysPtr2->data() + spanStart, spanSize, [ptr = keysPtr2]() {}));
+    }
+    result.push_back(std::move(key2ResultSpans));
+  }
+
+  [&]<size_t... Is>(std::index_sequence<Is...>) {
+    (
+        [&]() {
+          ExpressionSpanArguments payloadSpans;
+          payloadSpans.reserve(numResultSpans);
+          auto payloadPtr = std::get<Is>(payloadsPtrs);
+          size_t spanStart = 0;
+          size_t spanSize = minPartitionSize;
+          for(int i = 0; i < std::max(static_cast<int>(numResultSpans) - 1, 0); ++i) {
+            payloadSpans.emplace_back(
+                Span<As>(payloadPtr->data() + spanStart, spanSize, [ptr = payloadPtr]() {}));
+            spanStart += spanSize;
+          }
+          spanSize = payloadPtr->size() - spanStart;
+          if(spanSize > 0) {
+            payloadSpans.emplace_back(
+                Span<As>(payloadPtr->data() + spanStart, spanSize, [ptr = payloadPtr]() {}));
+          }
+          result.push_back(std::move(payloadSpans));
+        }(),
+        ...);
+  }
+  (std::make_index_sequence<sizeof...(As)>());
 
   return result;
 }
@@ -1340,27 +1406,89 @@ std::vector<ExpressionSpanArguments> groupByAdaptiveParallelMerge(
 
   AggregatedKeysAndPayload<K, As...> resultVectors = std::move(results.front());
   results.pop();
-
   std::vector<ExpressionSpanArguments> result;
   result.reserve(sizeof...(As) + 1 + secondKey);
 
+  auto [keys1, keys2, payloads] = std::move(resultVectors);
+  auto keysPtr1 = std::make_shared<std::vector<K>>(std::move(keys1));
+  auto keysPtr2 = std::make_shared<std::vector<K>>(std::move(keys2));
+  auto payloadsPtrs = std::apply(
+      [&](auto&&... vecs) {
+        return std::make_tuple(std::make_shared<std::vector<As>>(std::move(vecs))...);
+      },
+      std::move(payloads));
+
+  size_t numResultSpans = (keysPtr1->size() + minPartitionSize - 1) / minPartitionSize;
+
   if(!secondKey) {
-    result.emplace_back(Span<K>(std::move(std::get<0>(resultVectors))));
-  } else {
-    std::vector<K> resultKeys1 = std::move(std::get<0>(resultVectors));
-    std::vector<K> resultKeys2 = std::move(std::get<1>(resultVectors));
-    resultKeys2.reserve(resultKeys1.size());
-    for(size_t i = 0; i < resultKeys1.size(); ++i) {
-      resultKeys2.push_back(resultKeys1[i] >> FIRST_KEY_BITS);
-      resultKeys1[i] = resultKeys1[i] & FIRST_KEY_MASK;
+    ExpressionSpanArguments keyResultSpans;
+    keyResultSpans.reserve(numResultSpans);
+    size_t spanStart = 0;
+    size_t spanSize = minPartitionSize;
+    for(int i = 0; i < std::max(static_cast<int>(numResultSpans) - 1, 0); ++i) {
+      keyResultSpans.emplace_back(
+          Span<K>(keysPtr1->data() + spanStart, spanSize, [ptr = keysPtr1]() {}));
+      spanStart += spanSize;
     }
-    result.emplace_back(Span<K>(std::move(resultKeys1)));
-    result.emplace_back(Span<K>(std::move(resultKeys2)));
+    spanSize = keysPtr1->size() - spanStart;
+    if(spanSize > 0) {
+      keyResultSpans.emplace_back(
+          Span<K>(keysPtr1->data() + spanStart, spanSize, [ptr = keysPtr1]() {}));
+    }
+    result.push_back(std::move(keyResultSpans));
+  } else {
+    keysPtr2->reserve(keysPtr1->size());
+    for(size_t i = 0; i < keysPtr1->size(); ++i) {
+      keysPtr2->push_back((*keysPtr1)[i] >> FIRST_KEY_BITS);
+      (*keysPtr1)[i] = (*keysPtr1)[i] & FIRST_KEY_MASK;
+    }
+    ExpressionSpanArguments keyResultSpans1;
+    ExpressionSpanArguments keyResultSpans2;
+    keyResultSpans1.reserve(numResultSpans);
+    keyResultSpans2.reserve(numResultSpans);
+    size_t spanStart = 0;
+    size_t spanSize = minPartitionSize;
+    for(int i = 0; i < std::max(static_cast<int>(numResultSpans) - 1, 0); ++i) {
+      keyResultSpans1.emplace_back(
+          Span<K>(keysPtr1->data() + spanStart, spanSize, [ptr = keysPtr1]() {}));
+      keyResultSpans2.emplace_back(
+          Span<K>(keysPtr2->data() + spanStart, spanSize, [ptr = keysPtr2]() {}));
+      spanStart += spanSize;
+    }
+    spanSize = keysPtr2->size() - spanStart;
+    if(spanSize > 0) {
+      keyResultSpans1.emplace_back(
+          Span<K>(keysPtr1->data() + spanStart, spanSize, [ptr = keysPtr1]() {}));
+      keyResultSpans2.emplace_back(
+          Span<K>(keysPtr2->data() + spanStart, spanSize, [ptr = keysPtr2]() {}));
+    }
+    result.push_back(std::move(keyResultSpans1));
+    result.push_back(std::move(keyResultSpans2));
   }
 
-  [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
-    (result.emplace_back(Span<As>(std::move(std::get<Is>(std::get<2>(resultVectors))))), ...);
-  }(std::make_index_sequence<sizeof...(As)>());
+  [&]<size_t... Is>(std::index_sequence<Is...>) {
+    (
+        [&]() {
+          ExpressionSpanArguments payloadSpans;
+          payloadSpans.reserve(numResultSpans);
+          auto payloadPtr = std::get<Is>(payloadsPtrs);
+          size_t spanStart = 0;
+          size_t spanSize = minPartitionSize;
+          for(int i = 0; i < std::max(static_cast<int>(numResultSpans) - 1, 0); ++i) {
+            payloadSpans.emplace_back(
+                Span<As>(payloadPtr->data() + spanStart, spanSize, [ptr = payloadPtr]() {}));
+            spanStart += spanSize;
+          }
+          spanSize = payloadPtr->size() - spanStart;
+          if(spanSize > 0) {
+            payloadSpans.emplace_back(
+                Span<As>(payloadPtr->data() + spanStart, spanSize, [ptr = payloadPtr]() {}));
+          }
+          result.push_back(std::move(payloadSpans));
+        }(),
+        ...);
+  }
+  (std::make_index_sequence<sizeof...(As)>());
 
   return result;
 }
