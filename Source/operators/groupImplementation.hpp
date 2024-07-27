@@ -428,8 +428,8 @@ inline void groupBySortFinalPassAndAggMultiThread(
     std::tuple<std::vector<std::remove_cv_t<As>>...>& resultValueVectors, bool secondKey,
     bool splitKeysInResult, int msbPosition, Aggregator<As>... aggregators) {
 
-  static bool bucketEntryPresent[1 << BITS_PER_GROUP_RADIX_PASS];
-  static std::tuple<As...> payloadAggs[1 << BITS_PER_GROUP_RADIX_PASS];
+  static thread_local bool bucketEntryPresent[1 << BITS_PER_GROUP_RADIX_PASS];
+  static thread_local std::tuple<As...> payloadAggs[1 << BITS_PER_GROUP_RADIX_PASS];
   std::fill(std::begin(bucketEntryPresent), std::end(bucketEntryPresent), false);
 
   auto addKeys = [&resultKeys, &resultKeys2, secondKey, splitKeysInResult](auto key) mutable {
@@ -471,7 +471,7 @@ inline void groupBySortFinalPassAndAggMultiThread(
   }
 }
 
-// This are the prior two functions is only to remove the thread_local keyword when single-threaded
+// This and the prior two functions is only to remove the thread_local keyword when single-threaded
 // since this was observed to have an overhead when profiled
 template <typename K, typename... As>
 void groupBySortFinalPassAndAgg(
