@@ -271,31 +271,32 @@ JoinResultIndexes join(const ExpressionSpanArguments& keySpans1,
   }
   synchroniser.waitUntilComplete(dop);
 
-  size_t totalResultSize = 0;
-  for(const auto& resultsVec : results1) {
-    totalResultSize += resultsVec.size();
+  std::vector<int64_t> cumulativeResultSizes(1 + results1.size(), 0);
+  for(size_t i = 0; i < results1.size(); i++) {
+    cumulativeResultSizes[i + 1] =
+        cumulativeResultSizes[i] + static_cast<int64_t>(results1[i].size());
   }
 
   std::shared_ptr<std::vector<int64_t>> resultIndexesPtr1 =
       std::make_shared<std::vector<int64_t>>();
-  resultIndexesPtr1->reserve(totalResultSize);
+  resultIndexesPtr1->reserve(cumulativeResultSizes.back());
+  resultIndexesPtr1->resize(cumulativeResultSizes.back());
   std::shared_ptr<std::vector<int64_t>> resultIndexesPtr2 =
       std::make_shared<std::vector<int64_t>>();
-  resultIndexesPtr2->reserve(totalResultSize);
+  resultIndexesPtr2->reserve(cumulativeResultSizes.back());
+  resultIndexesPtr2->resize(cumulativeResultSizes.back());
 
-  threadPool.enqueue([&synchroniser, &results1, &resultIndexesPtr1] {
-    for(const auto& vec : results1) {
-      resultIndexesPtr1->insert(resultIndexesPtr1->end(), vec.begin(), vec.end());
-    }
-    synchroniser.taskComplete();
-  });
-  threadPool.enqueue([&synchroniser, &results2, &resultIndexesPtr2] {
-    for(const auto& vec : results2) {
-      resultIndexesPtr2->insert(resultIndexesPtr2->end(), vec.begin(), vec.end());
-    }
-    synchroniser.taskComplete();
-  });
-  synchroniser.waitUntilComplete(2);
+  for(int taskNum = 0; taskNum < dop; ++taskNum) {
+    threadPool.enqueue([&results1, &results2, taskNum, &cumulativeResultSizes, resultIndexesPtr1,
+                        resultIndexesPtr2, &synchroniser] {
+      std::copy(results1[taskNum].begin(), results1[taskNum].end(),
+                resultIndexesPtr1->begin() + cumulativeResultSizes[taskNum]);
+      std::copy(results2[taskNum].begin(), results2[taskNum].end(),
+                resultIndexesPtr2->begin() + cumulativeResultSizes[taskNum]);
+      synchroniser.taskComplete();
+    });
+  }
+  synchroniser.waitUntilComplete(dop);
 
   size_t numResultSpans = (resultIndexesPtr1->size() + minPartitionSize - 1) / minPartitionSize;
   ExpressionSpanArguments resultSpans1;
@@ -543,31 +544,32 @@ JoinResultIndexes join(const ExpressionSpanArguments& keySpansFirstKey1,
   }
   synchroniser.waitUntilComplete(dop);
 
-  size_t totalResultSize = 0;
-  for(const auto& resultsVec : results1) {
-    totalResultSize += resultsVec.size();
+  std::vector<int64_t> cumulativeResultSizes(1 + results1.size(), 0);
+  for(size_t i = 0; i < results1.size(); i++) {
+    cumulativeResultSizes[i + 1] =
+        cumulativeResultSizes[i] + static_cast<int64_t>(results1[i].size());
   }
 
   std::shared_ptr<std::vector<int64_t>> resultIndexesPtr1 =
       std::make_shared<std::vector<int64_t>>();
-  resultIndexesPtr1->reserve(totalResultSize);
+  resultIndexesPtr1->reserve(cumulativeResultSizes.back());
+  resultIndexesPtr1->resize(cumulativeResultSizes.back());
   std::shared_ptr<std::vector<int64_t>> resultIndexesPtr2 =
       std::make_shared<std::vector<int64_t>>();
-  resultIndexesPtr2->reserve(totalResultSize);
+  resultIndexesPtr2->reserve(cumulativeResultSizes.back());
+  resultIndexesPtr2->resize(cumulativeResultSizes.back());
 
-  threadPool.enqueue([&synchroniser, &results1, &resultIndexesPtr1] {
-    for(const auto& vec : results1) {
-      resultIndexesPtr1->insert(resultIndexesPtr1->end(), vec.begin(), vec.end());
-    }
-    synchroniser.taskComplete();
-  });
-  threadPool.enqueue([&synchroniser, &results2, &resultIndexesPtr2] {
-    for(const auto& vec : results2) {
-      resultIndexesPtr2->insert(resultIndexesPtr2->end(), vec.begin(), vec.end());
-    }
-    synchroniser.taskComplete();
-  });
-  synchroniser.waitUntilComplete(2);
+  for(int taskNum = 0; taskNum < dop; ++taskNum) {
+    threadPool.enqueue([&results1, &results2, taskNum, &cumulativeResultSizes, resultIndexesPtr1,
+                        resultIndexesPtr2, &synchroniser] {
+      std::copy(results1[taskNum].begin(), results1[taskNum].end(),
+                resultIndexesPtr1->begin() + cumulativeResultSizes[taskNum]);
+      std::copy(results2[taskNum].begin(), results2[taskNum].end(),
+                resultIndexesPtr2->begin() + cumulativeResultSizes[taskNum]);
+      synchroniser.taskComplete();
+    });
+  }
+  synchroniser.waitUntilComplete(dop);
 
   size_t numResultSpans = (resultIndexesPtr1->size() + minPartitionSize - 1) / minPartitionSize;
   ExpressionSpanArguments resultSpans1;
