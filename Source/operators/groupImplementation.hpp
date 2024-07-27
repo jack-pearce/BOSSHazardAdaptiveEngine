@@ -1444,6 +1444,9 @@ group(Group implementation, int dop, int numKeys, ExpressionSpanArguments&& keyS
       Aggregator<As>... aggregators) {
   assert(numKeys >= 0 && numKeys <= 2);
   int cardinality = getGroupResultCardinality();
+  if(cardinality / dop > 1000) {
+    cardinality = cardinality / dop; // Reduce starting hash table size for each thread
+  }
   if(numKeys == 0) {
     return groupNoKeys<As...>(std::move(typedAggCols)..., aggregators...);
   }
