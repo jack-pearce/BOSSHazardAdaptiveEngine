@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
@@ -21,6 +22,7 @@
 
 #define ADAPTIVITY_OUTPUT
 // #define DEBUG
+// #define FAST_MERGE_DEBUG
 #define USE_ADAPTIVE_OVER_ADAPTIVE_PARALLEL_FOR_DOP_1
 
 namespace adaptive {
@@ -962,6 +964,49 @@ groupByAdaptive(int dop, const std::vector<int>& spanSizes, int n, int outerInde
                 const ExpressionSpanArguments& keySpans1, const ExpressionSpanArguments& keySpans2,
                 const std::vector<Span<As>>&... typedAggCols, Aggregator<As>... aggregators) {
 
+  if(dop > 1 && (n / cardinality) < 20) { // Fall back to sort straight away
+#ifdef FAST_MERGE_DEBUG
+    std::cout << "Falling back to sort-based implementation immediately" << std::endl;
+#endif
+    // Empty map related variables
+    HA_tsl::robin_map<K, std::tuple<As...>> map(0);
+    int entriesInMapToTrack = 0;
+    std::pair<K, std::tuple<As...>>** mapPtrs = nullptr;
+
+    std::vector<Section<K, As...>> sectionsToBeSorted;
+    int elements = n;
+
+    auto addSectionToSectionsToBeSorted = [&](int tuplesToProcess_) mutable {
+      if(!secondKey) {
+        sectionsToBeSorted.emplace_back(Section<K, As...>(
+            tuplesToProcess_, &(std::get<Span<K>>(keySpans1.at(outerIndex))[innerIndex]),
+            &(std::get<Span<K>>(keySpans1.at(outerIndex))[innerIndex]),
+            std::make_tuple(&(typedAggCols[outerIndex][innerIndex])...)));
+      } else {
+        sectionsToBeSorted.emplace_back(Section<K, As...>(
+            tuplesToProcess_, &(std::get<Span<K>>(keySpans1.at(outerIndex))[innerIndex]),
+            &(std::get<Span<K>>(keySpans2.at(outerIndex))[innerIndex]),
+            std::make_tuple(&(typedAggCols[outerIndex][innerIndex])...)));
+      }
+    };
+
+    int tuplesToProcess = n;
+    while(tuplesToProcess && (spanSizes[outerIndex] - innerIndex) <= tuplesToProcess) {
+      addSectionToSectionsToBeSorted(spanSizes[outerIndex] - innerIndex);
+      tuplesToProcess -= (spanSizes[outerIndex] - innerIndex);
+      ++outerIndex;
+      innerIndex = 0;
+    }
+    if(tuplesToProcess > 0) {
+      addSectionToSectionsToBeSorted(tuplesToProcess);
+      innerIndex += tuplesToProcess;
+    }
+
+    return groupByAdaptiveAuxSort<K, As...>(dop, map, largestKey, mapPtrs, entriesInMapToTrack,
+                                            elements, cardinality, sectionsToBeSorted, secondKey,
+                                            splitKeysInResult, aggregators...);
+  }
+
   int tuplesInTransientCheck =
       static_cast<int>(PERCENT_INPUT_IN_TRANSIENT_CHECK * static_cast<float>(n));
   int tuplesPerTransientCheckReading = static_cast<int>(std::ceil(tuplesInTransientCheck / 10.0));
@@ -1324,9 +1369,9 @@ void groupByAdaptiveParallelPerformMerge(std::mutex& resultsMutex, std::conditio
   size_t n2 = keys2.size();
   size_t maxOutputSize = n1 + n2;
 
-  std::vector<K> resultKeys;
+  Keys resultKeys;
   resultKeys.reserve(maxOutputSize);
-  std::vector<K> resultKeys2;
+  Keys resultKeys2;
   Payloads resultValueVectors;
   std::apply([&](auto&&... vec) { (vec.reserve(maxOutputSize), ...); }, resultValueVectors);
 
@@ -1438,37 +1483,345 @@ void groupByAdaptiveParallelPerformMerge(std::mutex& resultsMutex, std::conditio
   pushResultsToQueue();
 }
 
+struct Interval {
+  size_t start;
+  size_t end;
+  size_t taskNum;
+};
+
+// Intervals must be sorted by start and then by end
+inline bool containsOnlySequentialOverlappingIntervals(const std::vector<Interval>& intervals) {
+  for (size_t i = 0; i < intervals.size() - 1; ++i) {
+    const Interval& current = intervals[i];
+    const Interval& next = intervals[i + 1];
+
+    if (current.end >= next.end) {
+      return false; // Fully overlapping interval
+    }
+
+    if (i < intervals.size() - 2) {
+      const Interval& nextNext = intervals[i + 2];
+      if (current.end > next.start && current.end > nextNext.start) {
+        return false; // More than two overlapping intervals
+      }
+    }
+  }
+#ifdef FAST_MERGE_DEBUG
+    std::cout << "Intervals do only contain sequential overlapping intervals, will run fast parallel merge" << std::endl;
+#endif
+  return true;
+}
+
+// Intervals must be sorted by start and then by end
+template <typename K, typename... As>
+AggregatedKeysAndPayload<K, As...> groupByAdaptiveFastParallelMerge(
+  const std::vector<Interval>& intervals, std::mutex& resultsMutex, int dop,
+    std::vector<AggregatedKeysAndPayload<K, As...>>& results, Aggregator<As>... aggregators) {
+
+  auto& threadPool = ThreadPool::getInstance(dop);
+  auto& synchroniser = Synchroniser::getInstance();
+
+  using Keys = std::vector<K>;
+  using Payloads = std::tuple<std::vector<As>...>;
+
+  size_t maxResultSize = 0;
+  for (const auto& intermediateResult : results) {
+    maxResultSize += std::get<0>(intermediateResult).size();
+  }
+
+  Keys resultKeys(maxResultSize);
+  Keys resultKeys2;
+  Payloads resultValueVectors;
+  std::apply([&](auto&&... vec) { (vec.resize(maxResultSize), ...); }, resultValueVectors);
+  size_t resultsSize = 0;
+
+  std::queue<AggregatedKeysAndPayload<K, As...>> overlappingResults;
+  int totalTasks = 0;
+
+  auto firstIndexOfValueGreater = [](const Keys& keys, K value) {
+    for(size_t i = 0; i < keys.size(); i++) {
+      if (keys[i] > value) {
+        return i;
+      }
+    }
+    throw std::runtime_error("Expected at least one value greater but none found");
+  };
+
+  auto lastIndexOfValueSmaller = [](const std::vector<K>& keys, K value) {
+      for (size_t i = keys.size(); i > 0; i--) {
+          if (keys[i - 1] < value) {
+              return i - 1;
+          }
+      }
+      throw std::runtime_error("Expected at least one value smaller but none found");
+  };
+
+  size_t startIndexInInterval = 0;
+  size_t endIndexInInterval = 0;
+  for (size_t i = 0; i < intervals.size(); ++i) { // Process interval and any overlap
+    if (i + 1 < intervals.size() && intervals[i + 1].start <= intervals[i].end) { // overlap
+
+      endIndexInInterval = lastIndexOfValueSmaller(std::get<0>(results[intervals[i].taskNum]), intervals[i + 1].start);
+      {
+        Keys& keys = std::get<0>(results[intervals[i].taskNum]);
+        Payloads& payloads = std::get<2>(results[intervals[i].taskNum]);
+        size_t index = resultsSize;
+        resultsSize += (endIndexInInterval + 1 - startIndexInInterval);
+#ifdef FAST_MERGE_DEBUG
+        std::cout << "Copy from task " << i << " index [" << startIndexInInterval << ", " << endIndexInInterval << "]" << std::endl;
+        std::cout << "Last value = " << keys[endIndexInInterval] << std::endl;
+#endif
+        totalTasks++;
+        threadPool.enqueue([&synchroniser, &resultKeys, &resultValueVectors, &keys, &payloads, startElement = startIndexInInterval, 
+                             numElements = (endIndexInInterval + 1 - startIndexInInterval), index]() mutable {
+
+              memcpy(&resultKeys[index], &keys[startElement], numElements * sizeof(K));
+              [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
+                ((memcpy(&std::get<Is>(resultValueVectors)[index],
+                        &std::get<Is>(payloads)[startElement],
+                        numElements * sizeof(typename std::tuple_element<Is, Payloads>::type::value_type))),
+                ...);
+              }
+              (std::make_index_sequence<sizeof...(As)>());
+              synchroniser.taskComplete();
+
+            });
+      }
+
+      startIndexInInterval = firstIndexOfValueGreater(std::get<0>(results[intervals[i + 1].taskNum]), intervals[i].end);
+      {
+        Keys& keys1 = std::get<0>(results[intervals[i].taskNum]);
+        Payloads& payloads1 = std::get<2>(results[intervals[i].taskNum]);
+        Keys& keys2 = std::get<0>(results[intervals[i + 1].taskNum]);
+        Payloads& payloads2 = std::get<2>(results[intervals[i + 1].taskNum]);
+#ifdef FAST_MERGE_DEBUG
+        std::cout << "Merge task " << i << " index [" << endIndexInInterval + 1 << ", " << keys1.size()  << ") with " 
+                  << " task " << i + 1 << " index [" << 0 << ", " << startIndexInInterval << ")" << std::endl;
+        std::cout << "Task " << i << " first value = " << keys1[endIndexInInterval + 1] << ", last value = " << keys1[keys1.size() - 1] << std::endl;
+        std::cout << "Task " << i + 1 << " first value = " << keys2[0] << ", last value = " << keys2[startIndexInInterval - 1] << std::endl;
+#endif
+        totalTasks++;
+        threadPool.enqueue([&synchroniser, &overlappingResults, &resultsMutex,
+                              &keys1, &keys2, &payloads1, &payloads2, 
+                              startElement1 = endIndexInInterval + 1,
+                              numElements1 = (keys1.size() - (endIndexInInterval + 1)),
+                              startElement2 = 0,
+                              numElements2 = startIndexInInterval, aggregators...]() mutable {
+
+                size_t end1 = startElement1 + numElements1;
+                size_t end2 = startElement2 + numElements2;
+                size_t maxOutputSize = numElements1 + numElements2;
+
+                std::vector<K> resultKeys;
+                resultKeys.reserve(maxOutputSize);
+                std::vector<K> resultKeys2;
+                std::tuple<std::vector<As>...> resultValueVectors;
+                std::apply([&](auto&&... vec) { (vec.reserve(maxOutputSize), ...); }, resultValueVectors);
+
+                size_t l = startElement1;
+                size_t r = startElement2;
+
+                while(l < end1 && r < end2) {
+                  if(keys1[l] < keys2[r]) {
+                    resultKeys.push_back(keys1[l]);
+                    [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
+                      ((std::get<Is>(resultValueVectors).push_back(std::get<Is>(payloads1)[l])), ...);
+                    }(std::make_index_sequence<sizeof...(As)>());
+                    l++;
+                  } else if(keys2[r] < keys1[l]) {
+                    resultKeys.push_back(keys2[r]);
+                    [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
+                      ((std::get<Is>(resultValueVectors).push_back(std::get<Is>(payloads2)[r])), ...);
+                    }(std::make_index_sequence<sizeof...(As)>());
+                    r++;
+                  } else {
+                    resultKeys.push_back(keys1[l]);
+                    [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
+                      ((std::get<Is>(resultValueVectors)
+                            .push_back(aggregators(std::get<Is>(payloads1)[l], std::get<Is>(payloads2)[r]))),
+                      ...);
+                    }(std::make_index_sequence<sizeof...(As)>());
+                    l++;
+                    r++;
+                  }
+                }
+
+                if(l < end1) {
+                  if(!resultKeys.empty() && resultKeys.back() == keys1[l]) {
+                    [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
+                      ((std::get<Is>(resultValueVectors).back() =
+                            aggregators(std::get<Is>(resultValueVectors).back(), std::get<Is>(payloads1)[l])),
+                      ...);
+                    }(std::make_index_sequence<sizeof...(As)>());
+                    l++;
+                  }
+                  resultKeys.insert(resultKeys.end(), std::make_move_iterator(keys1.begin() + l),
+                                    std::make_move_iterator(keys1.end()));
+                  [&]<size_t... Is>(std::index_sequence<Is...>) {
+                    ((std::get<Is>(resultValueVectors)
+                          .insert(std::get<Is>(resultValueVectors).end(),
+                                  std::make_move_iterator(std::get<Is>(payloads1).begin() + l),
+                                  std::make_move_iterator(std::get<Is>(payloads1).end()))),
+                    ...);
+                  }(std::make_index_sequence<sizeof...(As)>());
+                } else if(r < end2) {
+                  if(!resultKeys.empty() && resultKeys.back() == keys2[r]) {
+                    [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
+                      ((std::get<Is>(resultValueVectors).back() =
+                            aggregators(std::get<Is>(resultValueVectors).back(), std::get<Is>(payloads2)[r])),
+                      ...);
+                    }(std::make_index_sequence<sizeof...(As)>());
+                    r++;
+                  }
+                  resultKeys.insert(resultKeys.end(), std::make_move_iterator(keys2.begin() + r),
+                                    std::make_move_iterator(keys2.end()));
+                  [&]<size_t... Is>(std::index_sequence<Is...>) {
+                    ((std::get<Is>(resultValueVectors)
+                          .insert(std::get<Is>(resultValueVectors).end(),
+                                  std::make_move_iterator(std::get<Is>(payloads2).begin() + r),
+                                  std::make_move_iterator(std::get<Is>(payloads2).end()))),
+                    ...);
+                  }(std::make_index_sequence<sizeof...(As)>());
+                }
+
+                {
+                  std::lock_guard<std::mutex> lock(resultsMutex);
+                  overlappingResults.push(std::make_tuple(resultKeys, resultKeys2, resultValueVectors));
+                }
+
+                synchroniser.taskComplete();
+            });
+      }
+
+    } else { // no overlap
+
+      {
+        Keys& keys = std::get<0>(results[intervals[i].taskNum]);
+        Payloads& payloads = std::get<2>(results[intervals[i].taskNum]);
+        size_t index = resultsSize;
+        resultsSize += (keys.size() - startIndexInInterval);
+#ifdef FAST_MERGE_DEBUG
+        std::cout << "Copy from task " << i << " index [" << startIndexInInterval << ", " << keys.size() << ")" << std::endl;
+        std::cout << "First value = " << keys[startIndexInInterval] << std::endl;
+#endif
+        totalTasks++;
+        threadPool.enqueue([&synchroniser, &resultKeys, &resultValueVectors, &keys, &payloads, startElement = startIndexInInterval, 
+                             numElements = (keys.size() - startIndexInInterval), index]() mutable {
+
+
+              memcpy(&resultKeys[index], &keys[startElement], numElements * sizeof(K));
+              [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
+                ((memcpy(&std::get<Is>(resultValueVectors)[index],
+                        &std::get<Is>(payloads)[startElement],
+                        numElements * sizeof(typename std::tuple_element<Is, Payloads>::type::value_type))),
+                ...);
+              }
+              (std::make_index_sequence<sizeof...(As)>());
+
+              synchroniser.taskComplete();
+
+            });
+      }
+
+      startIndexInInterval = 0;
+    }
+  }
+  synchroniser.waitUntilComplete(totalTasks);
+
+  totalTasks = 0;
+  while(!overlappingResults.empty()) {
+    AggregatedKeysAndPayload<K, As...>mergedResult = std::move(overlappingResults.front());
+    overlappingResults.pop();
+    Keys& keys = std::get<0>(mergedResult);
+    Payloads& payloads = std::get<2>(mergedResult);
+    size_t index = resultsSize;
+    resultsSize += keys.size();
+    totalTasks++;
+    threadPool.enqueue([&synchroniser, &resultKeys, &resultValueVectors, &keys, &payloads,
+                        numElements = keys.size(), index]() mutable {
+
+          memcpy(&resultKeys[index], keys.data(), numElements * sizeof(K));
+          [&]<size_t... Is>(std::index_sequence<Is...>) { // NOLINT
+            ((memcpy(&std::get<Is>(resultValueVectors)[index],
+                    &std::get<Is>(payloads)[0],
+                    numElements * sizeof(typename std::tuple_element<Is, Payloads>::type::value_type))),
+            ...);
+          }
+          (std::make_index_sequence<sizeof...(As)>());
+
+          synchroniser.taskComplete();
+
+        });
+  }
+  synchroniser.waitUntilComplete(totalTasks);
+  resultKeys.resize(resultsSize);
+  std::apply([&](auto&&... vec) { (vec.resize(resultsSize), ...); }, resultValueVectors);
+  return {resultKeys, resultKeys2, resultValueVectors};
+}
+
 template <typename K, typename... As>
 std::vector<ExpressionSpanArguments> groupByAdaptiveParallelMerge(
     std::condition_variable& cv, std::mutex& resultsMutex, int dop, bool secondKey,
     std::queue<AggregatedKeysAndPayload<K, As...>>& results, Aggregator<As>... aggregators) {
-
-  auto& threadPool = ThreadPool::getInstance(dop);
-
-  for(int i = 0; i < dop - 1; ++i) {
-    AggregatedKeysAndPayload<K, As...> mergeInput1;
-    AggregatedKeysAndPayload<K, As...> mergeInput2;
-    {
-      std::unique_lock<std::mutex> lock(resultsMutex);
-      cv.wait(lock, [&results] { return results.size() >= 2; });
-      mergeInput1 = std::move(results.front());
+  std::vector<AggregatedKeysAndPayload<K, As...>> resultsVec;
+  resultsVec.reserve(results.size());
+  std::vector<Interval> intervals;
+  intervals.reserve(results.size());
+  size_t taskNum = 0;
+  while (!results.empty()) {
+      resultsVec.push_back(std::move(results.front()));
       results.pop();
-      mergeInput2 = std::move(results.front());
-      results.pop();
+      auto start = static_cast<size_t>(std::get<0>(resultsVec.back()).front());
+      auto end = static_cast<size_t>(std::get<0>(resultsVec.back()).back());
+      intervals.push_back({start, end, taskNum++});
+  } 
+
+  // Sort intervals by start time, and by end time in case of tie
+  std::sort(intervals.begin(), intervals.end(), [](const Interval& a, const Interval& b) {
+    if (a.start == b.start) {
+      return a.end < b.end;
     }
-    threadPool.enqueue([&resultsMutex, &cv, mergeInput1 = std::move(mergeInput1),
-                        mergeInput2 = std::move(mergeInput2), &results, aggregators...]() mutable {
-      groupByAdaptiveParallelPerformMerge<K, As...>(resultsMutex, cv, std::move(mergeInput1),
-                                                    std::move(mergeInput2), results,
-                                                    aggregators...);
-    });
+    return a.start < b.start;
+  });
+
+  AggregatedKeysAndPayload<K, As...> resultVectors;
+  if(containsOnlySequentialOverlappingIntervals(intervals)) {
+    resultVectors = groupByAdaptiveFastParallelMerge<K, As...>(intervals, resultsMutex, dop,
+                                                                resultsVec, aggregators...);
+  } else {
+    
+    for (auto& elem : resultsVec) {
+      results.push(std::move(elem));
+    }
+
+    auto& threadPool = ThreadPool::getInstance(dop);
+
+    for(int i = 0; i < dop - 1; ++i) {
+      AggregatedKeysAndPayload<K, As...> mergeInput1;
+      AggregatedKeysAndPayload<K, As...> mergeInput2;
+      {
+        std::unique_lock<std::mutex> lock(resultsMutex);
+        cv.wait(lock, [&results] { return results.size() >= 2; });
+        mergeInput1 = std::move(results.front());
+        results.pop();
+        mergeInput2 = std::move(results.front());
+        results.pop();
+      }
+      threadPool.enqueue([&resultsMutex, &cv, mergeInput1 = std::move(mergeInput1),
+                          mergeInput2 = std::move(mergeInput2), &results, aggregators...]() mutable {
+        groupByAdaptiveParallelPerformMerge<K, As...>(resultsMutex, cv, std::move(mergeInput1),
+                                                      std::move(mergeInput2), results,
+                                                      aggregators...);
+      });
+    }
+
+    std::unique_lock<std::mutex> lock(resultsMutex);
+    cv.wait(lock, [&results] { return results.size() == 1; });
+
+    resultVectors = std::move(results.front());
+    results.pop();
   }
 
-  std::unique_lock<std::mutex> lock(resultsMutex);
-  cv.wait(lock, [&results] { return results.size() == 1; });
-
-  AggregatedKeysAndPayload<K, As...> resultVectors = std::move(results.front());
-  results.pop();
   std::vector<ExpressionSpanArguments> result;
   result.reserve(sizeof...(As) + 1 + secondKey);
 
@@ -1563,6 +1916,7 @@ groupByAdaptiveParallel(int dop, int cardinality, bool secondKey,
                         std::vector<Span<As>>&&... typedAggCols, Aggregator<As>... aggregators) {
 
   auto& threadPool = ThreadPool::getInstance(dop);
+  auto& synchroniser = Synchroniser::getInstance();
   assert(threadPool.getNumThreads() >= dop); // Will have a deadlock otherwise
 
   int n = 0;
@@ -1583,12 +1937,12 @@ groupByAdaptiveParallel(int dop, int cardinality, bool secondKey,
   int remainingTuples = n % dop;
   int outerIndex = 0;
   int innerIndex = 0;
-  int tuplesPerThread;
+  int tuplesPerThread; // NOLINT
 
   for(auto taskNum = 0; taskNum < dop; ++taskNum) {
     tuplesPerThread = tuplesPerThreadBaseline + (taskNum < remainingTuples);
 
-    threadPool.enqueue([dop, &results, &resultsMutex, &cv, &spanSizes, tuplesPerThread, outerIndex,
+    threadPool.enqueue([&synchroniser, dop, &results, &resultsMutex, &spanSizes, tuplesPerThread, outerIndex,
                         innerIndex, cardinality, secondKey, &keySpans1, &keySpans2,
                         &typedAggCols..., aggregators...] {
       K largestKey = std::numeric_limits<K>::lowest();
@@ -1607,8 +1961,9 @@ groupByAdaptiveParallel(int dop, int cardinality, bool secondKey,
       {
         std::lock_guard<std::mutex> lock(resultsMutex);
         results.push(std::move(aggregatedKeysAndPayload));
-        cv.notify_one();
       }
+
+      synchroniser.taskComplete();
     });
 
     // Update outer and inner indexes to the start of the next thread
@@ -1621,6 +1976,7 @@ groupByAdaptiveParallel(int dop, int cardinality, bool secondKey,
       innerIndex += tuplesPerThread;
     }
   }
+  synchroniser.waitUntilComplete(dop);
 
   return groupByAdaptiveParallelMerge<K, As...>(cv, resultsMutex, dop, secondKey, results,
                                                 aggregators...);
