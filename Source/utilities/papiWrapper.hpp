@@ -14,6 +14,8 @@ class PAPI_eventSet {
 public:
   PAPI_eventSet(const PAPI_eventSet&) = delete;
   void operator=(const PAPI_eventSet&) = delete;
+  PAPI_eventSet(PAPI_eventSet&&) = delete;
+  PAPI_eventSet& operator=(PAPI_eventSet&&) = delete;
 
   explicit PAPI_eventSet(const std::vector<std::string>& counterNames);
   ~PAPI_eventSet();

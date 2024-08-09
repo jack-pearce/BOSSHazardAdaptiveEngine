@@ -17,18 +17,20 @@ enum Group { Hash, Sort, GroupAdaptive, GroupAdaptiveParallel };
 
 namespace config {
 
+// NOLINTBEGIN
 extern int32_t nonVectorizedDOP;
 extern adaptive::Select selectImplementation;
 extern adaptive::PartitionOperators partitionImplementation;
 extern adaptive::Group groupImplementation;
-extern uint32_t minTuplesPerThread;
-extern int minPartitionSize;
-
 extern bool DEFER_GATHER_PHASE_OF_SELECT_TO_OTHER_ENGINES;
 extern bool CONSTANTS_INITIALISED;
+extern int minPartitionSize;
+// NOLINTEND
 
-extern int32_t LOGICAL_CORE_COUNT;
-extern std::string projectFilePath;
+extern const uint32_t minTuplesPerThread;
+
+extern const int32_t LOGICAL_CORE_COUNT;
+extern const std::string projectFilePath;
 
 } // namespace config
 

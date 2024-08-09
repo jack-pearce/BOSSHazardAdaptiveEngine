@@ -5,7 +5,6 @@
 #include "config.hpp"
 
 #include <Expression.hpp>
-#include <optional>
 #include <string>
 #include <vector>
 

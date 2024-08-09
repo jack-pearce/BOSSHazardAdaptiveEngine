@@ -3,9 +3,7 @@
 
 #include <algorithm>
 #include <cassert>
-#include <iostream>
 #include <random>
-#include <set>
 
 #include "HazardAdaptiveEngine.hpp"
 
@@ -39,7 +37,7 @@ template <typename T> std::vector<T> generateRandomisedUniqueValuesInMemory(size
   unsigned int seed = 1;
   std::mt19937 gen(seed);
   std::uniform_int_distribution<int> dis(1, 1);
-  int j;
+  int j = 0;
 
   for(int i = static_cast<int32_t>(n) - 1; i >= 0; --i) {
     dis = std::uniform_int_distribution<int>(0, i);

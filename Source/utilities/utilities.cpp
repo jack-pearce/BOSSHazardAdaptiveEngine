@@ -1,15 +1,14 @@
 #include <cmath>
 #include <numeric>
+#include <stdexcept>
 
 #include "config.hpp"
 #include "utilities.hpp"
 
-inline bool isPowerOfTwo(int n) {
-  return n > 0 && (n & (n - 1)) == 0;
-}
+inline bool isPowerOfTwo(uint32_t n) { return n > 0 && (n & (n - 1)) == 0; }
 
 int convertToValidDopValue(int dop) {
-  if (dop == adaptive::config::LOGICAL_CORE_COUNT || isPowerOfTwo(dop)) {
+  if(dop == adaptive::config::LOGICAL_CORE_COUNT || isPowerOfTwo(static_cast<uint32_t>(dop))) {
     return dop;
   }
   return static_cast<int>(roundDownToPowerOf2(static_cast<uint32_t>(dop)));
@@ -19,12 +18,11 @@ uint32_t roundDownToPowerOf2(uint32_t num) {
   if(num <= 2) {
     return 1;
   }
-  uint32_t msbPos = sizeof(uint32_t) * 8 - __builtin_clz(num) - 1;
+  uint32_t msbPos = sizeof(uint32_t) * 8 - __builtin_clz(num) - 1; // NOLINT
   if((num & (num - 1)) == 0) {
-    return 1 << (msbPos - 1);
-  } else {
-    return 1 << msbPos;
+    return 1U << (msbPos - 1);
   }
+  return 1U << msbPos;
 }
 
 void setCardinalityEnvironmentVariable(int cardinality) {

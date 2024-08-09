@@ -9,20 +9,15 @@
 #include "operators/join.hpp"
 #include "operators/partition.hpp"
 #include "operators/select.hpp"
-#include "utilities/memory.hpp"
 
 #include <algorithm>
-#include <any>
 #include <cassert>
-#include <condition_variable>
 #include <cstddef>
 #include <iomanip>
 #include <iostream>
 #include <iterator>
-#include <list>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <numeric>
 #include <optional>
 #include <stdexcept>
@@ -40,7 +35,7 @@ static ExpressionBuilder operator""_(const char* name, size_t /*unused*/) {
   return ExpressionBuilder(name);
 }
 
-using boss::expressions::CloneReason;
+using boss::expressions::CloneReason; // NOLINT
 using BOSSExpressionSpanArguments = boss::DefaultExpressionSystem::ExpressionSpanArguments;
 using BOSSExpressionSpanArgument = boss::DefaultExpressionSystem::ExpressionSpanArgument;
 
@@ -66,37 +61,41 @@ static EngineInstanceState& getEngineInstanceState() {
   return engineInstanceState;
 }
 
+// NOLINTBEGIN(readability-function-cognitive-complexity)
+
 /******************************** AGGREGATION FUNCTIONS ********************************/
 
 template <typename T> using Aggregator = std::function<T(const T, const T)>;
 
 template <typename T>
-Aggregator<T> minAggregator = [](const T currentAggregate, const T numberToInclude) -> T {
+const Aggregator<T> minAggregator = [](const T currentAggregate, const T numberToInclude) -> T {
   return std::min(currentAggregate, numberToInclude);
 };
 
 template <typename T>
-Aggregator<T> maxAggregator = [](const T currentAggregate, const T numberToInclude) -> T {
+const Aggregator<T> maxAggregator = [](const T currentAggregate, const T numberToInclude) -> T {
   return std::max(currentAggregate, numberToInclude);
 };
 
 template <typename T>
-Aggregator<T> sumAggregator = [](const T currentAggregate, const T numberToInclude) -> T {
+const Aggregator<T> sumAggregator = [](const T currentAggregate, const T numberToInclude) -> T {
   return currentAggregate + numberToInclude;
 };
 
-auto getAggregatorName = [](std::string_view name) -> adaptive::Aggregation {
+const auto getAggregatorName = [](std::string_view name) -> adaptive::Aggregation {
   if(name == "Min") {
     return adaptive::Aggregation::Min;
-  } else if(name == "Max") {
-    return adaptive::Aggregation::Max;
-  } else if(name == "Sum") {
-    return adaptive::Aggregation::Sum;
-  } else if(name == "Count") {
-    return adaptive::Aggregation::Count;
-  } else {
-    throw std::runtime_error("Invalid aggregator function name");
   }
+  if(name == "Max") {
+    return adaptive::Aggregation::Max;
+  }
+  if(name == "Sum") {
+    return adaptive::Aggregation::Sum;
+  }
+  if(name == "Count") {
+    return adaptive::Aggregation::Count;
+  }
+  throw std::runtime_error("Invalid aggregator function name");
 };
 
 template <typename T> auto getAggregatorFunction(const Aggregation aggregation) -> Aggregator<T> {
@@ -105,7 +104,7 @@ template <typename T> auto getAggregatorFunction(const Aggregation aggregation) 
     return minAggregator<T>;
   case Aggregation::Max:
     return maxAggregator<T>;
-  case Aggregation::Sum:
+  case Aggregation::Sum: // NOLINT
     return sumAggregator<T>;
   case Aggregation::Count:
     return sumAggregator<T>; // We perform operator on array of 1s, so use super aggregate operation
@@ -261,7 +260,8 @@ static boss::Expression toBOSSExpression(Expression&& expr, bool isPredicate = f
       boss::utilities::overload(
           [&](ComplexExpression&& e) -> boss::Expression {
             auto [head, unused_, dynamics, spans] = std::move(e).decompose();
-            int NChildIsPredicate = dynamics.size(); // no child is a predicate as default
+            int NChildIsPredicate = static_cast<int>(dynamics.size());
+            // no child is a predicate as default
             if(head == "Select"_) {
               NChildIsPredicate = 1; // Select(relation, predicate)
             } else if(head == "Join"_) {
@@ -719,30 +719,29 @@ private:
           },
           e.getDynamicArguments().at(0));
       return PredWrapper(std::make_unique<Pred>(std::move(pred), toBOSSExpression(std::move(e))));
-    } else {
-      Pred::Function pred = std::accumulate(
-          e.getDynamicArguments().begin(), e.getDynamicArguments().end(),
-          (Pred::Function &&) createLambdaArgument(get<0>(e.getStaticArguments())),
-          [&f](auto&& acc, auto const& e) -> Pred::Function {
-            return std::visit(
-                [&f, &acc](auto&& arg) -> Pred::Function {
-                  return
-                      [acc, pred2 = createLambdaArgument(arg), &f](
-                          ExpressionArguments& columns,
-                          Span<int32_t>* indexes) mutable -> std::optional<ExpressionSpanArgument> {
-                        assert(!indexes);
-                        auto arg1 = acc(columns, nullptr);
-                        auto arg2 = pred2(columns, nullptr);
-                        if(!arg1 || !arg2) {
-                          return {};
-                        }
-                        return createLambdaResult(std::move(*arg1), std::move(*arg2), f, -1);
-                      };
-                },
-                e);
-          });
-      return PredWrapper(std::make_unique<Pred>(std::move(pred), toBOSSExpression(std::move(e))));
     }
+    Pred::Function pred = std::accumulate(
+        e.getDynamicArguments().begin(), e.getDynamicArguments().end(),
+        (Pred::Function &&) createLambdaArgument(get<0>(e.getStaticArguments())),
+        [&f](auto&& acc, auto const& e) -> Pred::Function {
+          return std::visit(
+              [&f, &acc](auto&& arg) -> Pred::Function {
+                return
+                    [acc, pred2 = createLambdaArgument(arg),
+                     &f](ExpressionArguments& columns,
+                         Span<int32_t>* indexes) mutable -> std::optional<ExpressionSpanArgument> {
+                      assert(!indexes);
+                      auto arg1 = acc(columns, nullptr);
+                      auto arg2 = pred2(columns, nullptr);
+                      if(!arg1 || !arg2) {
+                        return {};
+                      }
+                      return createLambdaResult(std::move(*arg1), std::move(*arg2), f, -1);
+                    };
+              },
+              e);
+        });
+    return PredWrapper(std::make_unique<Pred>(std::move(pred), toBOSSExpression(std::move(e))));
   }
 
   template <typename T1, typename T2>
@@ -771,7 +770,7 @@ private:
               for(auto it = std::next(preds.begin()); it != preds.end(); ++it) {
                 (*it)(columns, &candidateIndexes);
               }
-              span = Span<int32_t>(std::move(candidateIndexes));
+              span = Span<int32_t>(std::move(candidateIndexes)); // NOLINT
             } else {
               throw std::runtime_error("Multi-predicate lambda column input is not indexes");
             }
@@ -824,7 +823,7 @@ private:
              get<ComplexExpression>(column.getArguments().at(0)).getSpanArguments().size()) {
             return std::nullopt;
           }
-          auto& span =
+          const auto& span =
               get<ComplexExpression>(column.getArguments().at(0)).getSpanArguments().at(index++);
           return std::visit(
               []<typename T>(Span<T> const& typedSpan) -> std::optional<ExpressionSpanArgument> {
@@ -944,7 +943,7 @@ private:
   }
 
   static bool columnInTable(const std::string& colName, const ExpressionArguments& columns) {
-    for(const auto& column : columns) {
+    for(const auto& column : columns) { // NOLINT
       if(get<ComplexExpression>(column).getHead().getName() == colName) {
         return true;
       }
@@ -967,8 +966,8 @@ private:
               std::vector<T2> values;
               values.reserve(indexSpan.size());
               for(const auto& index : indexSpan) {
-                uint32_t spanNumber = static_cast<uint32_t>(index >> 32);
-                uint32_t spanOffset = static_cast<uint32_t>(index & 0xFFFFFFFF);
+                auto spanNumber = static_cast<uint32_t>(index >> 32);        // NOLINT
+                auto spanOffset = static_cast<uint32_t>(index & 0xFFFFFFFF); // NOLINT
                 values.push_back(get<Span<T>>(spans.at(spanNumber)).at(spanOffset));
               }
               result.emplace_back(Span<T>(std::vector(std::move(values))));
@@ -992,8 +991,8 @@ public:
       if(key == "RadixJoinMinPartitionSize"_) {
         adaptive::config::minPartitionSize =
             std::holds_alternative<int32_t>(input.getDynamicArguments()[0])
-                ? std::get<int32_t>(input.getDynamicArguments()[0])
-                : std::get<int64_t>(input.getDynamicArguments()[0]);
+                ? std::get<int32_t>(input.getDynamicArguments()[0])  // NOLINT
+                : std::get<int64_t>(input.getDynamicArguments()[0]); // NOLINT
         return true;
       }
       if(key == "DeferGatherPhase"_) {
@@ -1188,8 +1187,8 @@ public:
       iss >> std::get_time(&tm, "%Y-%m-%d");
       auto t = std::mktime(&tm);
       return (int32_t)std::chrono::duration_cast<std::chrono::days>(
-                           std::chrono::system_clock::from_time_t(t).time_since_epoch())
-                           .count();
+                 std::chrono::system_clock::from_time_t(t).time_since_epoch())
+          .count();
     };
 
     (*this)["Year"_] = [](ComplexExpressionWithStaticArguments<Symbol>&& input) -> Expression {
@@ -1202,29 +1201,32 @@ public:
           return std::nullopt;
         }
         ExpressionSpanArgument span;
-        std::visit(boss::utilities::overload(
-                       [](auto&&) { throw std::runtime_error("Unsupported column type in Year"); },
-                       [&span]<IntegralType T>(boss::expressions::atoms::Span<T>&& typedSpan) {
-                         std::vector<int32_t> output;
-                         output.reserve(typedSpan.size());
+        std::visit(
+            boss::utilities::overload(
+                [](auto&&) { throw std::runtime_error("Unsupported column type in Year"); },
+                [&span]<IntegralType T>(boss::expressions::atoms::Span<T>&& typedSpan) {
+                  std::vector<int32_t> output;
+                  output.reserve(typedSpan.size());
 
-                         // Correct version (but slower)
-                         /*std::chrono::system_clock::time_point epoch_start = std::chrono::system_clock::from_time_t(0);
-                         for(const auto& epochInDays : typedSpan) {
-                           std::chrono::system_clock::time_point date_time = epoch_start + std::chrono::hours(epochInDays * 24);
-                           std::time_t tt = std::chrono::system_clock::to_time_t(date_time);
-                           std::tm* gmt = std::gmtime(&tt);
-                           output.push_back(static_cast<int32_t>(gmt->tm_year + 1900));
-                         }*/
+                  // Correct version (but slower)
+                  /*std::chrono::system_clock::time_point epoch_start =
+                  std::chrono::system_clock::from_time_t(0); for(const auto& epochInDays :
+                  typedSpan) { std::chrono::system_clock::time_point date_time = epoch_start
+                  + std::chrono::hours(epochInDays * 24); std::time_t tt =
+                  std::chrono::system_clock::to_time_t(date_time); std::tm* gmt =
+                  std::gmtime(&tt); output.push_back(static_cast<int32_t>(gmt->tm_year +
+                  1900));
+                  }*/
 
-                         // Identical version used to that in the Velox engine for a fair comparison
-                         for(const auto& epochInDays : typedSpan) {
-                          output.push_back(static_cast<int32_t>((static_cast<double>(epochInDays) + 719563.285) / 365.265));
-                         }
+                  // Identical version used to that in the Velox engine for a fair comparison
+                  for(const auto& epochInDays : typedSpan) {
+                    output.push_back(static_cast<int32_t>(
+                        (static_cast<double>(epochInDays) + 719563.285) / 365.265)); // NOLINT
+                  }
 
-                         span = Span<int32_t>(std::vector(output));
-                       }),
-                   std::move(*arg1));
+                  span = Span<int32_t>(std::vector(output));
+                }),
+            std::move(*arg1));
         return span;
       };
       return PredWrapper(
@@ -1377,48 +1379,47 @@ public:
         ExpressionArguments tableArg;
         tableArg.emplace_back(std::move(tableExpression));
         return ComplexExpression("Gather"_, {}, std::move(tableArg), std::move(indexesArg));
-      } else { // COMPLETE FULL SELECT OPERATION (INCLUDING GATHER PHASE)
-        ExpressionSpanArguments indexesArg;
-        while(auto predicate = predFunc(columns, nullptr)) {
-          assert(std::holds_alternative<Span<int32_t>>(*predicate));
-          auto& indexes = std::get<Span<int32_t>>(*predicate);
-          indexesArg.emplace_back(std::move(indexes));
-        }
-        for(auto& columnRef : columns) {
-          auto column = get<ComplexExpression>(std::move(columnRef));
-          auto [head, unused_, dynamics, spans] = std::move(column).decompose();
-          auto list = get<ComplexExpression>(std::move(dynamics.at(0)));
-          auto [listHead, listUnused_, listDynamics, listSpans] = std::move(list).decompose();
-          for(size_t spanNum = 0; spanNum < listSpans.size(); ++spanNum) {
-            const auto& indexes = std::get<Span<int32_t>>(indexesArg.at(spanNum));
-            listSpans.at(spanNum) = std::visit(
-                [&indexes]<typename T>(Span<T>&& typedSpan) -> ExpressionSpanArgument {
-                  if constexpr(std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t> ||
-                               std::is_same_v<T, double_t> || std::is_same_v<T, std::string> ||
-                               std::is_same_v<T, int32_t const> ||
-                               std::is_same_v<T, int64_t const> ||
-                               std::is_same_v<T, double_t const> ||
-                               std::is_same_v<T, std::string const>) {
-                    auto unfilteredColumn = std::move(typedSpan);
-                    auto* filteredColumn = new std::remove_cv_t<T>[indexes.size()];
-                    for(size_t i = 0; i < indexes.size(); ++i) {
-                      filteredColumn[i] = unfilteredColumn[indexes[i]];
-                    }
-                    return Span<T>(filteredColumn, indexes.size(),
-                                   [filteredColumn]() { delete[] filteredColumn; });
-                  } else {
-                    throw std::runtime_error("unsupported column type in select: " +
-                                             std::string(typeid(T).name()));
-                  }
-                },
-                std::move(listSpans.at(spanNum)));
-          }
-          dynamics.at(0) = ComplexExpression(std::move(listHead), {}, std::move(listDynamics),
-                                             std::move(listSpans));
-          columnRef = ComplexExpression(std::move(head), {}, std::move(dynamics), std::move(spans));
-        }
-        return ComplexExpression("Table"_, std::move(columns));
       }
+      // COMPLETE FULL SELECT OPERATION (INCLUDING GATHER PHASE)
+      ExpressionSpanArguments indexesArg;
+      while(auto predicate = predFunc(columns, nullptr)) {
+        assert(std::holds_alternative<Span<int32_t>>(*predicate));
+        auto& indexes = std::get<Span<int32_t>>(*predicate);
+        indexesArg.emplace_back(std::move(indexes));
+      }
+      for(auto& columnRef : columns) {
+        auto column = get<ComplexExpression>(std::move(columnRef));
+        auto [head, unused_, dynamics, spans] = std::move(column).decompose();
+        auto list = get<ComplexExpression>(std::move(dynamics.at(0)));
+        auto [listHead, listUnused_, listDynamics, listSpans] = std::move(list).decompose();
+        for(size_t spanNum = 0; spanNum < listSpans.size(); ++spanNum) {
+          const auto& indexes = std::get<Span<int32_t>>(indexesArg.at(spanNum));
+          listSpans.at(spanNum) = std::visit(
+              [&indexes]<typename T>(Span<T>&& typedSpan) -> ExpressionSpanArgument {
+                if constexpr(std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t> ||
+                             std::is_same_v<T, double_t> || std::is_same_v<T, std::string> ||
+                             std::is_same_v<T, int32_t const> || std::is_same_v<T, int64_t const> ||
+                             std::is_same_v<T, double_t const> ||
+                             std::is_same_v<T, std::string const>) {
+                  auto unfilteredColumn = std::move(typedSpan);
+                  auto* filteredColumn = new std::remove_cv_t<T>[indexes.size()];
+                  for(size_t i = 0; i < indexes.size(); ++i) {
+                    filteredColumn[i] = unfilteredColumn[indexes[i]];
+                  }
+                  return Span<T>(filteredColumn, indexes.size(),
+                                 [filteredColumn]() { delete[] filteredColumn; });
+                } else {
+                  throw std::runtime_error("unsupported column type in select: " +
+                                           std::string(typeid(T).name()));
+                }
+              },
+              std::move(listSpans.at(spanNum)));
+        }
+        dynamics.at(0) = ComplexExpression(std::move(listHead), {}, std::move(listDynamics),
+                                           std::move(listSpans));
+        columnRef = ComplexExpression(std::move(head), {}, std::move(dynamics), std::move(spans));
+      }
+      return ComplexExpression("Table"_, std::move(columns));
     };
 
     /** Currently only partitions each table on a single 'key' column
@@ -1510,12 +1511,13 @@ public:
              tableTwoPartitionsOfKeySpans.size() == tableTwoPartitionsOfIndexSpans.size());
 #endif
 
-      ExpressionArguments leftArgs, rightArgs, joinArgs;
+      ExpressionArguments leftArgs, rightArgs, joinArgs; // NOLINT
       leftArgs.emplace_back(ComplexExpression("Table"_, {}, std::move(leftRelationColumns), {}));
       rightArgs.emplace_back(ComplexExpression("Table"_, {}, std::move(rightRelationColumns), {}));
 
       for(size_t i = 0; i < tableOnePartitionsOfKeySpans.size(); ++i) {
-        ExpressionArguments leftKeyList, leftPartitionArg, rightKeyList, rightPartitionArg;
+        ExpressionArguments leftKeyList, leftPartitionArg;   // NOLINT
+        ExpressionArguments rightKeyList, rightPartitionArg; // NOLINT
 #ifdef DEBUG_MODE
         std::cout << "Number of tableOneKeySpans in partition " << i << " = "
                   << tableOnePartitionsOfKeySpans.at(i).size() << std::endl;
@@ -1585,8 +1587,8 @@ public:
              "Table") {
 
         int32_t engineDOP = getEngineInstanceState().getVectorizedDOP() == -1
-                  ? nonVectorizedDOP
-                  : getEngineInstanceState().getVectorizedDOP();
+                                ? nonVectorizedDOP
+                                : getEngineInstanceState().getVectorizedDOP();
 
         // PredWrapper means it is a single key Join. If not a PredWrapper then multi-key Join
         if(holds_alternative<PredWrapper>(*std::next(inputExpr.getArguments().begin(), 2))) {
@@ -1629,7 +1631,8 @@ public:
                         std::string(typeid(typename SpanType1::element_type).name()) + ", " +
                         std::string(typeid(typename SpanType2::element_type).name()));
                   },
-                  [&leftKeySpans, &rightKeySpans, engineDOP]<IntegralType Type1, IntegralType Type2>(
+                  [&leftKeySpans, &rightKeySpans,
+                   engineDOP]<IntegralType Type1, IntegralType Type2>(
                       boss::expressions::atoms::Span<Type1> const& /*typedSpan1*/,
                       boss::expressions::atoms::Span<Type2> const& /*typedSpan2*/) {
                     return adaptive::join<Type1, Type2>(leftKeySpans, rightKeySpans, engineDOP);
@@ -1646,92 +1649,90 @@ public:
           tableIndexedArgs.emplace_back(
               ComplexExpression("Indexes"_, {}, {}, std::move(joinResultIndexes.tableTwoIndexes)));
           return ComplexExpression("TableIndexed"_, {}, std::move(tableIndexedArgs), {});
-
-        } else { // Multi-key Join (assumes that keys in the same table are of the same type)
-
-          if(get<ComplexExpression>(
-                 get<ComplexExpression>(
-                     get<ComplexExpression>(*std::next(inputExpr.getArguments().begin(), 2))
-                         .getArguments()
-                         .at(0))
-                     .getArguments()
-                     .at(0))
-                 .getArguments()
-                 .size() > 2) {
+        }
+        // Multi-key Join (assumes that keys in the same table are of the same type)
+        if(get<ComplexExpression>(
+               get<ComplexExpression>(
+                   get<ComplexExpression>(*std::next(inputExpr.getArguments().begin(), 2))
+                       .getArguments()
+                       .at(0))
+                   .getArguments()
+                   .at(0))
+               .getArguments()
+               .size() > 2) {
 #ifdef DEBUG_MODE
-            std::cout << "Join contains more than 2 keys, Join left unevaluated..." << std::endl;
+          std::cout << "Join contains more than 2 keys, Join left unevaluated..." << std::endl;
 #endif
-            return toBOSSExpression(std::move(inputExpr));
-          }
+          return toBOSSExpression(std::move(inputExpr));
+        }
 
-          ExpressionArguments args = std::move(inputExpr).getArguments();
-          auto it = std::make_move_iterator(args.begin());
-          auto leftRelation = get<ComplexExpression>(std::move(*it));
-          auto leftRelationColumns = std::move(leftRelation).getDynamicArguments();
-          auto rightRelation = get<ComplexExpression>(std::move(*++it));
-          auto rightRelationColumns = std::move(rightRelation).getDynamicArguments();
+        ExpressionArguments args = std::move(inputExpr).getArguments();
+        auto it = std::make_move_iterator(args.begin());
+        auto leftRelation = get<ComplexExpression>(std::move(*it));
+        auto leftRelationColumns = std::move(leftRelation).getDynamicArguments();
+        auto rightRelation = get<ComplexExpression>(std::move(*++it));
+        auto rightRelationColumns = std::move(rightRelation).getDynamicArguments();
 
-          auto [unused1, unused2, whereArgs, unused3] =
-              get<ComplexExpression>(std::move(*++it)).decompose();
-          auto [unused4, unused5, equalArgs, unused6] =
-              get<ComplexExpression>(std::move(whereArgs.at(0))).decompose();
-          auto leftKeyList = get<ComplexExpression>(std::move(equalArgs.at(0)));
-          const auto& leftKeySymbol1 = get<Symbol>(leftKeyList.getDynamicArguments().at(0));
-          const auto& leftKeySymbol2 = get<Symbol>(leftKeyList.getDynamicArguments().at(1));
-          auto rightKeyList = get<ComplexExpression>(std::move(equalArgs.at(1)));
-          const auto& rightKeySymbol1 = get<Symbol>(rightKeyList.getDynamicArguments().at(0));
-          const auto& rightKeySymbol2 = get<Symbol>(rightKeyList.getDynamicArguments().at(1));
+        auto [unused1, unused2, whereArgs, unused3] =
+            get<ComplexExpression>(std::move(*++it)).decompose();
+        auto [unused4, unused5, equalArgs, unused6] =
+            get<ComplexExpression>(std::move(whereArgs.at(0))).decompose();
+        auto leftKeyList = get<ComplexExpression>(std::move(equalArgs.at(0)));
+        const auto& leftKeySymbol1 = get<Symbol>(leftKeyList.getDynamicArguments().at(0));
+        const auto& leftKeySymbol2 = get<Symbol>(leftKeyList.getDynamicArguments().at(1));
+        auto rightKeyList = get<ComplexExpression>(std::move(equalArgs.at(1)));
+        const auto& rightKeySymbol1 = get<Symbol>(rightKeyList.getDynamicArguments().at(0));
+        const auto& rightKeySymbol2 = get<Symbol>(rightKeyList.getDynamicArguments().at(1));
 
-          const ExpressionSpanArguments& leftKeySpans1 =
-              getColumnSpans(leftRelationColumns, leftKeySymbol1);
-          const ExpressionSpanArguments& leftKeySpans2 =
-              getColumnSpans(leftRelationColumns, leftKeySymbol2);
-          const ExpressionSpanArguments& rightKeySpans1 =
-              getColumnSpans(rightRelationColumns, rightKeySymbol1);
-          const ExpressionSpanArguments& rightKeySpans2 =
-              getColumnSpans(rightRelationColumns, rightKeySymbol2);
+        const ExpressionSpanArguments& leftKeySpans1 =
+            getColumnSpans(leftRelationColumns, leftKeySymbol1);
+        const ExpressionSpanArguments& leftKeySpans2 =
+            getColumnSpans(leftRelationColumns, leftKeySymbol2);
+        const ExpressionSpanArguments& rightKeySpans1 =
+            getColumnSpans(rightRelationColumns, rightKeySymbol1);
+        const ExpressionSpanArguments& rightKeySpans2 =
+            getColumnSpans(rightRelationColumns, rightKeySymbol2);
 
-          if(leftKeySpans1.size() == 0 || rightKeySpans2.size() == 0) {
-            ExpressionArguments tableIndexedArgs;
-            tableIndexedArgs.emplace_back(
-                ComplexExpression("Table"_, {}, std::move(leftRelationColumns), {}));
-            tableIndexedArgs.emplace_back(ComplexExpression("Indexes"_, {}, {}, {}));
-            tableIndexedArgs.emplace_back(
-                ComplexExpression("Table"_, {}, std::move(rightRelationColumns), {}));
-            tableIndexedArgs.emplace_back(ComplexExpression("Indexes"_, {}, {}, {}));
-            return ComplexExpression("TableIndexed"_, {}, std::move(tableIndexedArgs), {});
-          }
-
-          auto joinResultIndexes = std::visit(
-              boss::utilities::overload(
-                  [](auto&& typedSpan1, auto&& typedSpan2) -> adaptive::JoinResultIndexes {
-                    using SpanType1 = std::decay_t<decltype(typedSpan1)>;
-                    using SpanType2 = std::decay_t<decltype(typedSpan2)>;
-                    throw std::runtime_error(
-                        "Multi-key Join key has at least one unsupported column type: " +
-                        std::string(typeid(typename SpanType1::element_type).name()) + ", " +
-                        std::string(typeid(typename SpanType2::element_type).name()));
-                  },
-                  [&leftKeySpans1, &leftKeySpans2, &rightKeySpans1,
-                   &rightKeySpans2, engineDOP]<IntegralType Type1, IntegralType Type2>(
-                      boss::expressions::atoms::Span<Type1> const& /*typedSpan1*/,
-                      boss::expressions::atoms::Span<Type2> const& /*typedSpan2*/) {
-                    return adaptive::join<Type1, Type1, Type2, Type2>(
-                        leftKeySpans1, leftKeySpans2, rightKeySpans1, rightKeySpans2, engineDOP);
-                  }),
-              leftKeySpans1.at(0), rightKeySpans1.at(0));
-
+        if(leftKeySpans1.size() == 0 || rightKeySpans2.size() == 0) {
           ExpressionArguments tableIndexedArgs;
           tableIndexedArgs.emplace_back(
               ComplexExpression("Table"_, {}, std::move(leftRelationColumns), {}));
-          tableIndexedArgs.emplace_back(
-              ComplexExpression("Indexes"_, {}, {}, std::move(joinResultIndexes.tableOneIndexes)));
+          tableIndexedArgs.emplace_back(ComplexExpression("Indexes"_, {}, {}, {}));
           tableIndexedArgs.emplace_back(
               ComplexExpression("Table"_, {}, std::move(rightRelationColumns), {}));
-          tableIndexedArgs.emplace_back(
-              ComplexExpression("Indexes"_, {}, {}, std::move(joinResultIndexes.tableTwoIndexes)));
+          tableIndexedArgs.emplace_back(ComplexExpression("Indexes"_, {}, {}, {}));
           return ComplexExpression("TableIndexed"_, {}, std::move(tableIndexedArgs), {});
         }
+
+        auto joinResultIndexes = std::visit(
+            boss::utilities::overload(
+                [](auto&& typedSpan1, auto&& typedSpan2) -> adaptive::JoinResultIndexes {
+                  using SpanType1 = std::decay_t<decltype(typedSpan1)>;
+                  using SpanType2 = std::decay_t<decltype(typedSpan2)>;
+                  throw std::runtime_error(
+                      "Multi-key Join key has at least one unsupported column type: " +
+                      std::string(typeid(typename SpanType1::element_type).name()) + ", " +
+                      std::string(typeid(typename SpanType2::element_type).name()));
+                },
+                [&leftKeySpans1, &leftKeySpans2, &rightKeySpans1, &rightKeySpans2,
+                 engineDOP]<IntegralType Type1, IntegralType Type2>(
+                    boss::expressions::atoms::Span<Type1> const& /*typedSpan1*/,
+                    boss::expressions::atoms::Span<Type2> const& /*typedSpan2*/) {
+                  return adaptive::join<Type1, Type1, Type2, Type2>(
+                      leftKeySpans1, leftKeySpans2, rightKeySpans1, rightKeySpans2, engineDOP);
+                }),
+            leftKeySpans1.at(0), rightKeySpans1.at(0));
+
+        ExpressionArguments tableIndexedArgs;
+        tableIndexedArgs.emplace_back(
+            ComplexExpression("Table"_, {}, std::move(leftRelationColumns), {}));
+        tableIndexedArgs.emplace_back(
+            ComplexExpression("Indexes"_, {}, {}, std::move(joinResultIndexes.tableOneIndexes)));
+        tableIndexedArgs.emplace_back(
+            ComplexExpression("Table"_, {}, std::move(rightRelationColumns), {}));
+        tableIndexedArgs.emplace_back(
+            ComplexExpression("Indexes"_, {}, {}, std::move(joinResultIndexes.tableTwoIndexes)));
+        return ComplexExpression("TableIndexed"_, {}, std::move(tableIndexedArgs), {});
       }
 
       // If input is a radix partition then the it must be a single key Join which will be
@@ -1850,7 +1851,8 @@ public:
       auto byFlag = get<ComplexExpression>(args.at(1)).getHead().getName() == "By";
       auto byArgs = byFlag ? get<ComplexExpression>(std::move(*it++)).getDynamicArguments()
                            : ExpressionArguments{};
-      if(get<ComplexExpression>(args.at(1 + byFlag)).getHead().getName() != "As") {
+      if(get<ComplexExpression>(args.at(1 + static_cast<int>(byFlag))).getHead().getName() !=
+         "As") {
         throw std::runtime_error("Group must contain 'As' expression.");
       }
       size_t numKeys = byArgs.size();
@@ -1961,8 +1963,9 @@ static Expression evaluateInternal(Expression&& e) {
     auto unevaluated =
         ComplexExpression(std::move(head), {}, std::move(evaluatedDynamics), std::move(spans));
     auto it = operators.find(unevaluated.getHead());
-    if(it != operators.end())
+    if(it != operators.end()) {
       return it->second(std::move(unevaluated));
+    }
     return std::move(unevaluated);
   }
   return std::move(e);
@@ -1994,15 +1997,17 @@ static boss::Expression evaluate(boss::Expression&& expr) {
       auto letExpr = get<boss::ComplexExpression>(std::move(dynamics.at(1)));
       if(letExpr.getHead().getName() == "Stats") {
         auto [statsHead, unused1, statsArgs, unused2] = std::move(letExpr).decompose();
-        if(statsArgs.empty())
+        if(statsArgs.empty()) {
           throw std::runtime_error("No pointers to operator states in stats expression");
-        auto selectOperatorStates =
-            reinterpret_cast<SelectOperatorStates*>(get<int64_t>(statsArgs.at(0)));
+        }
+        auto* selectOperatorStates =
+            reinterpret_cast<SelectOperatorStates*>(get<int64_t>(statsArgs.at(0))); // NOLINT
         getEngineInstanceState().setStatsPtr(selectOperatorStates);
       } else if(letExpr.getHead().getName() == "Parallel") {
         auto [parallelHead, unused1, parallelArgs, unused2] = std::move(letExpr).decompose();
-        if(parallelArgs.empty())
+        if(parallelArgs.empty()) {
           throw std::runtime_error("No constantsDOP value in parallel expression");
+        }
         getEngineInstanceState().setVectorizedDOP(get<int32_t>(parallelArgs.at(0)));
       } else {
         throw std::runtime_error("Unexpected argument of 'Let' expression: " +
@@ -2022,3 +2027,5 @@ static boss::Expression evaluate(boss::Expression&& expr) {
 extern "C" __attribute__((visibility("default"))) BOSSExpression* evaluate(BOSSExpression* e) {
   return new BOSSExpression{.delegate = evaluate(std::move(e->delegate))};
 }
+
+// NOLINTEND(readability-function-cognitive-complexity)

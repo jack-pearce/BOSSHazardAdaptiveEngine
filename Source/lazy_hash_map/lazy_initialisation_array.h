@@ -4,22 +4,22 @@
 #include <cstdlib>
 #include <memory>
 
-template <typename T> class LazyInitializationArray {
+template <typename T> class LazyInitializationArray { // NOLINT
 public:
   using value_type = T;
   using size_type = std::size_t;
   using allocator_type = std::allocator<T>;
 
   // Note that elements initial value must be all 0s
-  LazyInitializationArray(size_type size) : size_(size), elementCount_(0) {
-    data_ = static_cast<pointer>(std::calloc(size_, sizeof(value_type)));
+  explicit LazyInitializationArray(size_type size) : size_(size), elementCount_(0) {
+    data_ = static_cast<pointer>(std::calloc(size_, sizeof(value_type))); // NOLINT
     if(!data_) {
       throw std::bad_alloc();
     }
   }
 
   // Note that individual elements are not free'd since we do not track their location
-  ~LazyInitializationArray() { std::free(data_); }
+  ~LazyInitializationArray() { std::free(data_); } // NOLINT
 
   value_type& operator[](size_type index) { return getElement(index); }
 

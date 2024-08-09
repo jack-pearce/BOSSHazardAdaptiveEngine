@@ -1,6 +1,7 @@
 #ifndef BOSSHAZARDADAPTIVEENGINE_SELECTIMPLEMENTATION_HPP
 #define BOSSHAZARDADAPTIVEENGINE_SELECTIMPLEMENTATION_HPP
 
+#include "HazardAdaptiveEngine.hpp"
 #include "constants/machineConstants.hpp"
 #include "engineInstanceState.hpp"
 #include "utilities/dataStructures.hpp"
@@ -29,6 +30,15 @@
 
 namespace adaptive {
 
+// NOLINTBEGIN(readability-function-cognitive-complexity)
+
+namespace selectConfig {
+constexpr int PREFETCH_DISTANCE = 100;
+constexpr uint32_t TUPLES_PER_HAZARD_CHECK = 1'000;
+constexpr uint32_t MAX_CONSECUTIVE_PREDICATIONS = 10;
+constexpr uint32_t TUPLES_IN_BRANCH_BURST = 1'000;
+} // namespace selectConfig
+
 /****************************** FOUNDATIONAL ALGORITHMS ******************************/
 
 template <typename T, typename P> class SelectBranch {
@@ -38,7 +48,7 @@ public:
                                   P& predicate, const Span<int32_t>* candidateIndexes,
                                   int32_t* selectedIndexes) {
     size_t numSelected = 0;
-    if(!candidateIndexes) {
+    if(candidateIndexes == nullptr) {
       if(columnIsFirstArg) {
         for(auto i = startCandidates; i < (startCandidates + numCandidates); ++i) {
           if(predicate(column[i], value)) {
@@ -78,7 +88,7 @@ public:
                                   P& predicate, const Span<int32_t>* candidateIndexes,
                                   int32_t* selectedIndexes) {
     size_t numSelected = 0;
-    if(!candidateIndexes) {
+    if(candidateIndexes == nullptr) {
       if(columnIsFirstArg) {
         for(auto i = startCandidates; i < (startCandidates + numCandidates); ++i) {
           selectedIndexes[numSelected] = static_cast<int32_t>(i);
@@ -98,13 +108,15 @@ public:
        * kept in the cache after the access (i.e. low temporal locality). */
       if(columnIsFirstArg) {
         for(auto i = startCandidates; i < (startCandidates + numCandidates); ++i) {
-          __builtin_prefetch(&column[(*candidateIndexes)[i + 100]], 0, 0);
+          __builtin_prefetch(&column[(*candidateIndexes)[i + selectConfig::PREFETCH_DISTANCE]], 0,
+                             0);
           selectedIndexes[numSelected] = (*candidateIndexes)[i];
           numSelected += predicate(column[(*candidateIndexes)[i]], value);
         }
       } else {
         for(auto i = startCandidates; i < (startCandidates + numCandidates); ++i) {
-          __builtin_prefetch(&column[(*candidateIndexes)[i + 100]], 0, 0);
+          __builtin_prefetch(&column[(*candidateIndexes)[i + selectConfig::PREFETCH_DISTANCE]], 0,
+                             0);
           selectedIndexes[numSelected] = (*candidateIndexes)[i];
           numSelected += predicate(value, column[(*candidateIndexes)[i]]);
         }
@@ -127,17 +139,18 @@ template <typename T, typename P> static SelectPredication<T, P>& getSelectPredi
 /****************************** SINGLE-THREADED ******************************/
 
 namespace tuplesBetweenChecks {
-  constexpr int32_t AVERAGE = 50'000;
-  constexpr int32_t RANGE = 10'000;
+constexpr int32_t AVERAGE = 50'000;
+constexpr int32_t RANGE = 10'000;
 
-  int32_t inline getNext(int32_t previous) {
-    int64_t value = 1664525 * static_cast<int64_t>(previous) + 1013904223;
-    return AVERAGE - RANGE + static_cast<int32_t>((value % (2 * RANGE + 1)));
-  }
+int32_t inline getNext(int32_t previous) {
+  int64_t value = 1664525 * static_cast<int64_t>(previous) + 1013904223; // NOLINT
+  return AVERAGE - RANGE + static_cast<int32_t>((value % (2 * RANGE + 1)));
 }
+} // namespace tuplesBetweenChecks
 
 template <typename T, typename P> class MonitorSelect;
 
+// This class acts as the Dispatcher
 template <typename T, typename P> class SelectAdaptive {
 public:
   SelectAdaptive();
@@ -149,7 +162,7 @@ public:
 private:
   inline void processMicroBatch(const Span<T>& column, T value, bool columnIsFirstArg,
                                 P& predicate);
-  Span<int32_t> candidateIndexes = {};
+  Span<int32_t> candidateIndexes;
 
   int32_t tuplesPerHazardCheck;
   int32_t maxConsecutivePredications;
@@ -206,6 +219,7 @@ public:
   void checkHazards(int32_t n, int32_t selected) const {
     float selectivity = static_cast<float>(selected) / static_cast<float>(n);
 
+    // NOLINTBEGIN
     if(__builtin_expect(
            (static_cast<float>(*branchMispredictions) / static_cast<float>(n)) >
                (((selectivity - lowerCrossoverSelectivity) * m) + lowerCrossoverSelectivity),
@@ -237,6 +251,7 @@ public:
       selectOperator->adjustRobustness(-1);
     }
   }
+  // NOLINTEND
 
   [[nodiscard]] int32_t getMispredictions() const {
     return static_cast<int32_t>(*branchMispredictions);
@@ -253,17 +268,20 @@ private:
 
 template <typename T, typename P>
 SelectAdaptive<T, P>::SelectAdaptive()
-    : tuplesPerHazardCheck(tuplesBetweenChecks::AVERAGE), maxConsecutivePredications(10), tuplesInBranchBurst(1000),
+    : tuplesPerHazardCheck(tuplesBetweenChecks::AVERAGE),
+      maxConsecutivePredications(selectConfig::MAX_CONSECUTIVE_PREDICATIONS),
+      tuplesInBranchBurst(selectConfig::TUPLES_IN_BRANCH_BURST),
       consecutivePredications(maxConsecutivePredications),
       activeOperator(SelectImplementation::Predication_), eventSet(getThreadEventSet()),
-      monitor(MonitorSelect<T, P>(
-          this, (eventSet.getCounterDiffsPtr() + EVENT::BRANCH_MISPREDICTIONS))),
+      monitor(MonitorSelect<T, P>(this,
+                                  (eventSet.getCounterDiffsPtr() + EVENT::BRANCH_MISPREDICTIONS))),
       branchOperator(SelectBranch<T, P>()), predicationOperator(SelectPredication<T, P>()) {
 #ifdef CONSTRUCT_DEBUG
   std::cout << "Constructing Select Adaptive operator object" << std::endl;
 #endif
 }
 
+// NOLINTBEGIN
 template <typename T, typename P> void SelectAdaptive<T, P>::adjustRobustness(int adjustment) {
   if(__builtin_expect((adjustment > 0) && activeOperator == SelectImplementation::Branch_, false)) {
 #ifdef DEBUG
@@ -272,6 +290,7 @@ template <typename T, typename P> void SelectAdaptive<T, P>::adjustRobustness(in
     activeOperator = SelectImplementation::Predication_;
   } else if(__builtin_expect(
                 (adjustment < 0) && activeOperator == SelectImplementation::Predication_, false)) {
+// NOLINTEND
 #ifdef DEBUG
     std::cout << "Switched to select branch" << std::endl;
 #endif
@@ -305,7 +324,7 @@ Span<int32_t> SelectAdaptive<T, P>::processInput(const Span<T>& column, T value,
 #endif
 
   // If a previous state exists then start from this point
-  if(state && state->consecutivePredications != -1) {
+  if(state != nullptr && state->consecutivePredications != -1) {
     activeOperator = state->activeOperator;               // Load operator state
     if(state->tuplesUntilHazardCheck > remainingTuples) { // We will not complete a hazard check
       microBatchSize = remainingTuples;
@@ -324,11 +343,12 @@ Span<int32_t> SelectAdaptive<T, P>::processInput(const Span<T>& column, T value,
       std::cout << totalSelected << " values selected by predicate" << std::endl;
 #endif
       return std::move(candidateIndexes).subspan(0, totalSelected);
-    } else {
+    } else { // NOLINT
       consecutivePredications = state->consecutivePredications;
       microBatchSize = state->tuplesUntilHazardCheck;
       processMicroBatch(column, value, columnIsFirstArg, predicate);
-      consecutivePredications += activeOperator == SelectImplementation::Predication_;
+      consecutivePredications +=
+          static_cast<int>(activeOperator == SelectImplementation::Predication_);
       monitor.checkHazards(microBatchSize + state->tuplesProcessed,
                            microBatchSelected + state->selected, state->branchMispredictions);
     }
@@ -338,7 +358,9 @@ Span<int32_t> SelectAdaptive<T, P>::processInput(const Span<T>& column, T value,
   while(remainingTuples > tuplesPerHazardCheck ||
         (consecutivePredications >= maxConsecutivePredications &&
          remainingTuples > tuplesInBranchBurst)) {
+    // NOLINTBEGIN
     if(__builtin_expect(consecutivePredications >= maxConsecutivePredications, false)) {
+// NOLINTEND
 #ifdef DEBUG
       std::cout << "Running branch burst" << std::endl;
 #endif
@@ -350,7 +372,8 @@ Span<int32_t> SelectAdaptive<T, P>::processInput(const Span<T>& column, T value,
     }
 
     processMicroBatch(column, value, columnIsFirstArg, predicate);
-    consecutivePredications += activeOperator == SelectImplementation::Predication_;
+    consecutivePredications +=
+        static_cast<int>(activeOperator == SelectImplementation::Predication_);
     monitor.checkHazards(microBatchSize, microBatchSelected);
 
 #ifdef RANDOMISE_SINGLE_THREADED_ADAPTIVE_PERIOD
@@ -363,7 +386,7 @@ Span<int32_t> SelectAdaptive<T, P>::processInput(const Span<T>& column, T value,
   microBatchSize = remainingTuples;
   processMicroBatch(column, value, columnIsFirstArg, predicate);
 
-  if(state) {
+  if(state != nullptr) {
     state->activeOperator = activeOperator; // Save operator state
     state->consecutivePredications = consecutivePredications;
     state->tuplesProcessed = microBatchSize;
@@ -447,7 +470,7 @@ template <typename T, typename P> struct SelectThreadArgs {
 
 template <typename T, typename P> class MonitorSelectParallel;
 
-template <typename T, typename P> class SelectAdaptiveParallelAux {
+template <typename T, typename P> class SelectAdaptiveParallelAux { // NOLINT
 public:
   explicit SelectAdaptiveParallelAux(SelectThreadArgs<T, P>* args);
   void adjustRobustness(int adjustment);
@@ -507,6 +530,7 @@ public:
     upperCrossoverSelectivity =
         static_cast<float>(MachineConstants::getInstance().getMachineConstant(upperName));
 
+    // NOLINTBEGIN
     // Gradient of number of branch misses between lower and upper cross-over selectivity
     m = ((1 - upperCrossoverSelectivity) - lowerCrossoverSelectivity) /
         (upperCrossoverSelectivity - lowerCrossoverSelectivity);
@@ -528,6 +552,7 @@ public:
       selectOperator->adjustRobustness(-1);
     }
   }
+  // NOLINTEND
 
 private:
   float lowerCrossoverSelectivity;
@@ -544,7 +569,9 @@ SelectAdaptiveParallelAux<T, P>::SelectAdaptiveParallelAux(SelectThreadArgs<T, P
       predicate(args->predicate), candidateIndexes(args->candidateIndexes),
       selectedIndexes(args->selectedIndexes), threadToMerge(args->threadToMerge),
       positionToWrite(args->positionToWrite), dop(args->dop), threadNum(args->threadNum),
-      tuplesPerHazardCheck(50000), maxConsecutivePredications(10), tuplesInBranchBurst(1000),
+      tuplesPerHazardCheck(selectConfig::TUPLES_PER_HAZARD_CHECK),
+      maxConsecutivePredications(selectConfig::MAX_CONSECUTIVE_PREDICATIONS),
+      tuplesInBranchBurst(selectConfig::TUPLES_IN_BRANCH_BURST),
       activeOperator(SelectImplementation::Predication_), branchOperator(SelectBranch<T, P>()),
       predicationOperator(SelectPredication<T, P>()), eventSet(getThreadEventSet()),
       monitor(MonitorSelectParallel<T, P>(
@@ -562,6 +589,7 @@ SelectAdaptiveParallelAux<T, P>::SelectAdaptiveParallelAux(SelectThreadArgs<T, P
 
 template <typename T, typename P>
 void SelectAdaptiveParallelAux<T, P>::adjustRobustness(int adjustment) {
+  // NOLINTBEGIN
   if(__builtin_expect((adjustment > 0) && activeOperator == SelectImplementation::Branch_, false)) {
 #ifdef DEBUG
     std::cout << "Switched to select predication" << std::endl;
@@ -580,6 +608,7 @@ void SelectAdaptiveParallelAux<T, P>::adjustRobustness(int adjustment) {
 template <typename T, typename P> void SelectAdaptiveParallelAux<T, P>::processInput() {
   while(remainingTuples > 0) {
     if(__builtin_expect(consecutivePredications >= maxConsecutivePredications, false)) {
+      // NOLINTEND
 #ifdef DEBUG
       std::cout << "Running branch burst" << std::endl;
 #endif
@@ -658,7 +687,7 @@ public:
       : column(column_), value(value_), columnIsFirstArg(columnIsFirstArg_), predicate(predicate_),
         candidateIndexes(std::move(candidateIndexes_)), dop(dop_) {
 
-    n = candidateIndexes.size() == 0 ? column.size() : candidateIndexes.size();
+    n = candidateIndexes.size() == 0 ? column.size() : candidateIndexes.size(); // NOLINT
     while(dop > 1 && (n / dop) < adaptive::config::minTuplesPerThread) {
       dop = roundDownToPowerOf2(dop);
     }
@@ -751,14 +780,14 @@ Span<int32_t> select(Select implementation, const Span<T>& column, U value, bool
         column, value, columnIsFirstArg, predicate, std::move(candidateIndexes), state, engineDOP));
   }
 
-  auto candidateIndexesPtr = candidateIndexes.size() > 0 ? &candidateIndexes : nullptr;
+  auto* candidateIndexesPtr = candidateIndexes.size() > 0 ? &candidateIndexes : nullptr;
   if(candidateIndexes.size() == 0) {
     auto* indexesArray = new int32_t[column.size()];
     candidateIndexes =
         Span<int32_t>(indexesArray, column.size(), [indexesArray]() { delete[] indexesArray; });
   }
   int32_t* selectedIndexes = candidateIndexes.begin();
-  size_t numSelected;
+  size_t numSelected = 0;
 
   if(implementation == Select::Branch) {
     numSelected = getSelectBranchOperator<T, P>().processMicroBatch(
@@ -775,3 +804,5 @@ Span<int32_t> select(Select implementation, const Span<T>& column, U value, bool
 } // namespace adaptive
 
 #endif // BOSSHAZARDADAPTIVEENGINE_SELECTIMPLEMENTATION_HPP
+
+// NOLINTEND(readability-function-cognitive-complexity)

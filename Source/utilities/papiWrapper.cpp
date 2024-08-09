@@ -40,8 +40,9 @@ PAPI_eventSet::PAPI_eventSet(const std::vector<std::string>& counterNames)
     exit(1);
   }
 
-  int eventCode;
+  int eventCode = 0;
   for(const std::string& counterName : counterNames) {
+    // NOLINTBEGIN
     if(__builtin_expect(PAPI_event_name_to_code(counterName.c_str(), &eventCode) != PAPI_OK,
                         false)) {
       std::cerr << "PAPI could not create event code!" << std::endl;
@@ -52,6 +53,7 @@ PAPI_eventSet::PAPI_eventSet(const std::vector<std::string>& counterNames)
       std::cerr << "Could not add '" << counterName << "' to event set!" << std::endl;
       exit(1);
     }
+    // NOLINTEND
   }
 
   PAPI_start(eventSet);
@@ -80,6 +82,7 @@ PAPI_eventSet::~PAPI_eventSet() {
 long_long* PAPI_eventSet::getCounterDiffsPtr() { return counterValuesDiff.data(); }
 
 void PAPI_eventSet::readCounters() {
+  // NOLINTBEGIN
   if(__builtin_expect(PAPI_read(eventSet, counterValues.data()) != PAPI_OK, false)) {
     std::cerr << "Could not read event set!" << std::endl;
     exit(1);
@@ -93,6 +96,7 @@ void PAPI_eventSet::readCountersAndUpdateDiff() {
     std::cerr << "Could not read event set!" << std::endl;
     exit(1);
   }
+  // NOLINTEND
 
   for(size_t i = 0; i < counterValuesDiff.size(); ++i) {
     counterValuesDiff[i] = counterValues[i] - counterValuesDiff[i];
@@ -104,7 +108,7 @@ int PAPI_eventSet::getEventSet() const { return eventSet; }
 long_long* PAPI_eventSet::getCounterValuesPtr() { return counterValues.data(); }
 
 inline bool counterInEventSet(const std::string& counter, const PAPI_eventSet& eventSet) {
-  int eventCode;
+  int eventCode = 0;
   if(PAPI_event_name_to_code(counter.c_str(), &eventCode) != PAPI_OK) {
     std::cerr << "PAPI could not create event code!" << std::endl;
     exit(1);
@@ -116,7 +120,7 @@ inline bool counterInEventSet(const std::string& counter, const PAPI_eventSet& e
     exit(1);
   }
 
-  std::unique_ptr<int[]> events(new int[numEvents]);
+  std::unique_ptr<int[]> events(new int[numEvents]); // NOLINT
   if(PAPI_list_events(eventSet.getEventSet(), events.get(), &numEvents) != PAPI_OK) {
     std::cerr << "Error: Failed to list events in the event set!" << std::endl;
     exit(1);
@@ -148,7 +152,8 @@ inline void removeCounterFromEventSet(const std::string& counter, PAPI_eventSet&
   }
 
   PAPI_stop(eventSet.getEventSet(), eventSet.getCounterValuesPtr());
-  int eventCode;
+  int eventCode = 0;
+  // NOLINTBEGIN
   if(__builtin_expect(PAPI_event_name_to_code(counter.c_str(), &eventCode) != PAPI_OK, false)) {
     std::cerr << "PAPI could not create event code!" << std::endl;
     exit(1);
@@ -157,6 +162,7 @@ inline void removeCounterFromEventSet(const std::string& counter, PAPI_eventSet&
     std::cerr << "Could not remove '" << counter << "' from event set!" << std::endl;
     exit(1);
   }
+  // NOLINTEND
   PAPI_start(eventSet.getEventSet());
 
 #ifdef DEBUG
@@ -166,7 +172,8 @@ inline void removeCounterFromEventSet(const std::string& counter, PAPI_eventSet&
 
 inline void addCounterToEventSet(const std::string& counter, PAPI_eventSet& eventSet) {
   PAPI_stop(eventSet.getEventSet(), eventSet.getCounterValuesPtr());
-  int eventCode;
+  int eventCode = 0;
+  // NOLINTBEGIN
   if(__builtin_expect(PAPI_event_name_to_code(counter.c_str(), &eventCode) != PAPI_OK, false)) {
     std::cerr << "PAPI could not create event code!" << std::endl;
     exit(1);
@@ -175,6 +182,7 @@ inline void addCounterToEventSet(const std::string& counter, PAPI_eventSet& even
     std::cerr << "Could not add '" << counter << "' to event set!" << std::endl;
     exit(1);
   }
+  // NOLINTEND
   PAPI_start(eventSet.getEventSet());
 
 #ifdef DEBUG
@@ -201,7 +209,8 @@ void switchEventSetToPartition(PAPI_eventSet& eventSet) {
 }
 
 PAPI_eventSet& getThreadEventSet() {
-  thread_local static PAPI_eventSet eventSet({"PERF_COUNT_HW_BRANCH_MISSES", "PERF_COUNT_SW_PAGE_FAULTS",
+  thread_local static PAPI_eventSet eventSet({"PERF_COUNT_HW_BRANCH_MISSES",
+                                              "PERF_COUNT_SW_PAGE_FAULTS",
                                               "PERF_COUNT_HW_CACHE_MISSES", "DTLB-STORE-MISSES"});
   return eventSet;
 }

@@ -39,17 +39,17 @@ namespace adaptive {
 template <typename T> using Aggregator = std::function<T(const T, const T)>;
 
 template <typename T>
-Aggregator<T> minAggregator = [](const T currentAggregate, const T numberToInclude) -> T {
+const Aggregator<T> minAggregator = [](const T currentAggregate, const T numberToInclude) -> T {
   return std::min(currentAggregate, numberToInclude);
 };
 
 template <typename T>
-Aggregator<T> maxAggregator = [](const T currentAggregate, const T numberToInclude) -> T {
+const Aggregator<T> maxAggregator = [](const T currentAggregate, const T numberToInclude) -> T {
   return std::max(currentAggregate, numberToInclude);
 };
 
 template <typename T>
-Aggregator<T> sumAggregator = [](const T currentAggregate, const T numberToInclude) -> T {
+const Aggregator<T> sumAggregator = [](const T currentAggregate, const T numberToInclude) -> T {
   return currentAggregate + numberToInclude;
 };
 

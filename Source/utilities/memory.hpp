@@ -6,6 +6,7 @@
 
 #include <cassert>
 #include <condition_variable>
+#include <functional>
 #include <optional>
 #include <pthread.h>
 #include <queue>
@@ -49,7 +50,13 @@ public:
 #endif
   }
 
-  int getNumThreads() const { return threads.size(); }
+  int getNumThreads() const { return static_cast<int>(threads.size()); }
+
+  ThreadPool(const ThreadPool&) = delete;
+  ThreadPool& operator=(const ThreadPool&) = delete;
+
+  ThreadPool(ThreadPool&&) = delete;
+  ThreadPool& operator=(ThreadPool&&) = delete;
 
 private:
   explicit ThreadPool(size_t numThreads) : stop(false) {

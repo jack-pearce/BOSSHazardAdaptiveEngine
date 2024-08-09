@@ -1,8 +1,6 @@
 #ifndef BOSSHAZARDADAPTIVEENGINE_GROUP_CPP
 #define BOSSHAZARDADAPTIVEENGINE_GROUP_CPP
 
-#include <iostream>
-
 #include "group.hpp"
 
 namespace adaptive {

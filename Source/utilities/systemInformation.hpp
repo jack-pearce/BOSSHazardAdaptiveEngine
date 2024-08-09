@@ -1,8 +1,8 @@
 #ifndef BOSSHAZARDADAPTIVEENGINE_SYSTEMINFORMATION_HPP
 #define BOSSHAZARDADAPTIVEENGINE_SYSTEMINFORMATION_HPP
 
-#include <immintrin.h>
 #include "config.hpp"
+#include <immintrin.h>
 #include <unistd.h>
 
 namespace adaptive {

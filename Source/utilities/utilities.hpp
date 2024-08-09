@@ -1,7 +1,7 @@
 #ifndef BOSSHAZARDADAPTIVEENGINE_UTILITIES_HPP
 #define BOSSHAZARDADAPTIVEENGINE_UTILITIES_HPP
 
-#include <iostream>
+#include <cstdint> 
 #include <papi.h>
 #include <vector>
 

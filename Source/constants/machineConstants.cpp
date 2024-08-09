@@ -21,7 +21,7 @@ void calculatePartitionMachineConstants() {
   std::cout << " Complete" << std::endl;
 
   std::cout << "Calculating machine constants for Partition_startRadixBits... ";
-  int startRadixBits = roundedMinimumRadixBits + 8;
+  int startRadixBits = roundedMinimumRadixBits + 8; // NOLINT
   MachineConstants::getInstance().updateMachineConstant("Partition_startRadixBits", startRadixBits);
   std::cout << " Complete" << std::endl;
 }
@@ -46,7 +46,7 @@ MachineConstants::MachineConstants() {
 }
 
 double MachineConstants::getMachineConstant(const std::string& key) const {
-  if(machineConstants.count(key) == 0) {
+  if(!machineConstants.contains(key)) {
     std::cout << "Machine constant for " << key << " not found. Exiting..." << std::endl;
     exit(1);
   }
@@ -135,26 +135,26 @@ void MachineConstants::calculateMissingMachineConstants() {
   while(dop <= logicalCoresCount()) {
     std::string dopStr = std::to_string(dop);
 
-    if(machineConstants.count("SelectLower_4B_elements_" + dopStr + "_dop") == 0 ||
-       machineConstants.count("SelectUpper_4B_elements_" + dopStr + "_dop") == 0) {
+    if(!machineConstants.contains("SelectLower_4B_elements_" + dopStr + "_dop") ||
+       !machineConstants.contains("SelectUpper_4B_elements_" + dopStr + "_dop")) {
       std::cout << "Machine constant for Select (4B elements, DOP=" + dopStr +
                        ") does not exist. Calculating now (this may take a while)."
                 << std::endl;
       calculateSelectMachineConstants<int32_t>(dop);
     }
 
-    if(machineConstants.count("SelectLower_8B_elements_" + dopStr + "_dop") == 0 ||
-       machineConstants.count("SelectUpper_8B_elements_" + dopStr + "_dop") == 0) {
+    if(!machineConstants.contains("SelectLower_8B_elements_" + dopStr + "_dop") ||
+       !machineConstants.contains("SelectUpper_8B_elements_" + dopStr + "_dop")) {
       std::cout << "Machine constant for Select (8B elements, DOP=" + dopStr +
                        ") does not exist. Calculating now (this may take a while)."
                 << std::endl;
       calculateSelectMachineConstants<int64_t>(dop);
     }
 
-    for(int groupQueryIdx = 1; groupQueryIdx <= 11; ++groupQueryIdx) {
+    for(int groupQueryIdx = 1; groupQueryIdx <= 11; ++groupQueryIdx) { // NOLINT
       auto names = getGroupMachineConstantNames(static_cast<GROUP_QUERIES>(groupQueryIdx), dop);
-      if(machineConstants.count(names.pageFaultDecreaseRate) == 0 ||
-         machineConstants.count(names.llcMissRate) == 0) {
+      if(!machineConstants.contains(names.pageFaultDecreaseRate) ||
+         !machineConstants.contains(names.llcMissRate)) {
         uint32_t numBytes = 4 + (4 * groupQueryIdx);
         std::cout << "Machine constant for Group (" << std::to_string(numBytes)
                   << "Bytes, DOP=" + dopStr +
@@ -171,8 +171,8 @@ void MachineConstants::calculateMissingMachineConstants() {
     dop = (dop * 2) <= logicalCoresCount() ? dop * 2 : logicalCoresCount();
   }
 
-  if(machineConstants.count("Partition_minRadixBits") == 0 ||
-     machineConstants.count("Partition_startRadixBits") == 0) {
+  if(!machineConstants.contains("Partition_minRadixBits") ||
+     !machineConstants.contains("Partition_startRadixBits")) {
     calculatePartitionMachineConstants();
   }
 

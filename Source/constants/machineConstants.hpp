@@ -11,6 +11,8 @@ public:
   static MachineConstants& getInstance();
   MachineConstants(const MachineConstants&) = delete;
   void operator=(const MachineConstants&) = delete;
+  MachineConstants(MachineConstants&&) = delete;
+  MachineConstants& operator=(MachineConstants&&) = delete;
 
   [[nodiscard]] double getMachineConstant(const std::string& key) const;
   void updateMachineConstant(const std::string& key, double value);

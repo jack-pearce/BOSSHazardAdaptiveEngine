@@ -11,6 +11,7 @@
 #include <memory>
 #include <vector>
 
+#include "HazardAdaptiveEngine.hpp"
 #include "constants/machineConstants.hpp"
 #include "utilities/dataStructures.hpp"
 #include "utilities/memory.hpp"
@@ -28,9 +29,16 @@
 #define INCLUDE_MIN_PARTITION_SIZE // Toggle, requires not creating spans aligned to batches
 #endif
 
-constexpr int TUPLES_PER_HAZARD_CHECK = 10 * 1000;
+// NOLINTBEGIN(hicpp-avoid-c-arrays, cppcoreguidelines-avoid-c-arrays,
+// readability-function-cognitive-complexity)
 
 namespace adaptive {
+
+namespace partitionConfig {
+constexpr int TUPLES_PER_HAZARD_CHECK = 10'000;
+constexpr float TUPLES_PER_STLB_STORE_MISS = 10.0;
+constexpr uint32_t SPAN_OFFSET_BITS = 32;
+} // namespace partitionConfig
 
 /****************************** FORWARD DECLARATIONS ******************************/
 
@@ -46,7 +54,8 @@ template <typename T> void printArray(T* data, int size) {
 class MonitorPartition {
 public:
   explicit MonitorPartition(const long_long* sTlbStoreMisses_)
-      : sTlbStoreMisses(sTlbStoreMisses_), tuplesPerTlbStoreMiss(10.0) {}
+      : sTlbStoreMisses(sTlbStoreMisses_),
+        tuplesPerTlbStoreMiss(partitionConfig::TUPLES_PER_STLB_STORE_MISS) {}
   inline bool robustnessIncreaseRequired(int tuplesProcessed) {
     return (static_cast<float>(tuplesProcessed) / static_cast<float>(*sTlbStoreMisses)) <
            tuplesPerTlbStoreMiss;
@@ -73,37 +82,37 @@ template <typename T1, typename T2> struct TwoPartitionedArrays {
 template <typename T1, typename T2> class Partition {
 public:
   Partition(const ExpressionSpanArguments& keySpans1_, const ExpressionSpanArguments& keySpans2_,
-            int radixBitsInput = 0)
+            uint32_t radixBitsInput = 0)
       : nInput1(0), keySpans1(keySpans1_), nInput2(0), keySpans2(keySpans2_) {
     std::string minName = "Partition_minRadixBits";
     auto radixBitsMin =
-        static_cast<int>(MachineConstants::getInstance().getMachineConstant(minName));
+        static_cast<uint32_t>(MachineConstants::getInstance().getMachineConstant(minName));
     radixBitsOperator = std::max(radixBitsInput, radixBitsMin);
-    
+
     nInput1 = getTotalLength<T1>(keySpans1);
     nInput2 = getTotalLength<T2>(keySpans2);
 
 #ifdef CHANGE_PARTITION_TO_SORT_FOR_TESTING
-    maxElementsPerPartition = 1;
+    maxElementsPerPartition = 1; // NOLINT
 #else
-    maxElementsPerPartition = static_cast<double>(l2cacheSize()) / sizeof(T1);
+    maxElementsPerPartition = static_cast<double>(l2cacheSize()) / sizeof(T1); // NOLINT
 #endif
 
-    buckets1 = std::vector<int>(1 + (1 << radixBitsOperator), 0);
-    returnBuffer1 = std::make_shared_for_overwrite<std::remove_cv_t<T1>[]>(nInput1);
-    tmpBuffer1 = nullptr; // Lazily allocate buffer when needed
+    buckets1 = std::vector<int>(1 + (1U << radixBitsOperator), 0);
+    returnBuffer1 = std::make_shared_for_overwrite<std::remove_cv_t<T1>[]>(nInput1); // NOLINT
+    tmpBuffer1 = nullptr; // Lazily allocate buffer when needed // NOLINT
 
-    returnIndexes1 = std::make_shared_for_overwrite<int64_t[]>(nInput1);
-    tmpIndexes1 = std::make_unique_for_overwrite<int64_t[]>(nInput1);
-    int msbToPartitionInput1 = getMsb<T1>(keySpans1, tmpIndexes1.get());
+    returnIndexes1 = std::make_shared_for_overwrite<int64_t[]>(nInput1); // NOLINT
+    tmpIndexes1 = std::make_unique_for_overwrite<int64_t[]>(nInput1);    // NOLINT
+    uint32_t msbToPartitionInput1 = getMsb<T1>(keySpans1, tmpIndexes1.get());
 
-    buckets2 = std::vector<int>(1 + (1 << radixBitsOperator), 0);
-    returnBuffer2 = std::make_shared_for_overwrite<std::remove_cv_t<T2>[]>(nInput2);
-    tmpBuffer2 = nullptr; // Lazily allocate buffer when needed
+    buckets2 = std::vector<int>(1 + (1U << radixBitsOperator), 0);
+    returnBuffer2 = std::make_shared_for_overwrite<std::remove_cv_t<T2>[]>(nInput2); // NOLINT
+    tmpBuffer2 = nullptr; // Lazily allocate buffer when needed // NOLINT
 
-    returnIndexes2 = std::make_shared_for_overwrite<int64_t[]>(nInput2);
-    tmpIndexes2 = std::make_unique_for_overwrite<int64_t[]>(nInput2);
-    int msbToPartitionInput2 = getMsb<T2>(keySpans2, tmpIndexes2.get());
+    returnIndexes2 = std::make_shared_for_overwrite<int64_t[]>(nInput2); // NOLINT
+    tmpIndexes2 = std::make_unique_for_overwrite<int64_t[]>(nInput2);    // NOLINT
+    uint32_t msbToPartitionInput2 = getMsb<T2>(keySpans2, tmpIndexes2.get());
 
     msbToPartitionInput = std::max(msbToPartitionInput1, msbToPartitionInput2);
   }
@@ -120,23 +129,23 @@ public:
   }
 
 private:
-  inline void performPartition() {
-    int msbToPartition = msbToPartitionInput;
+  inline void performPartition() { // NOLINT
+    uint32_t msbToPartition = msbToPartitionInput;
     auto buffer1 = returnBuffer1.get();
-    auto indexes1 = tmpIndexes1.get();
-    auto indexesBuffer1 = returnIndexes1.get();
-    auto buffer2 = returnBuffer2.get();
-    auto indexes2 = tmpIndexes2.get();
-    auto indexesBuffer2 = returnIndexes2.get();
+    auto* indexes1 = tmpIndexes1.get();
+    auto* indexesBuffer1 = returnIndexes1.get();
+    auto* buffer2 = returnBuffer2.get();
+    auto* indexes2 = tmpIndexes2.get();
+    auto* indexesBuffer2 = returnIndexes2.get();
 
-    int radixBits = std::min(msbToPartition, radixBitsOperator);
-    int shifts = msbToPartition - radixBits;
-    int numBuckets = 1 << radixBits;
-    unsigned int mask = numBuckets - 1;
+    uint32_t radixBits = std::min(msbToPartition, radixBitsOperator);
+    uint32_t shifts = msbToPartition - radixBits;
+    uint32_t numBuckets = 1U << radixBits;
+    uint32_t mask = numBuckets - 1;
 
     // Complete partitioning for array 1
-    int i;
-    for(auto& span : keySpans1) {
+    uint32_t i = 0;
+    for(const auto& span : keySpans1) {
       for(auto& key : std::get<Span<T1>>(span)) {
         buckets1[1 + ((key >> shifts) & mask)]++;
       }
@@ -148,9 +157,9 @@ private:
     std::vector<int> partitions1(buckets1.data() + 1, buckets1.data() + numBuckets + 1);
 
     int offset = 0;
-    for(auto& untypedSpan : keySpans1) {
+    for(const auto& untypedSpan : keySpans1) {
       auto& span = std::get<Span<T1>>(untypedSpan);
-      for(i = 0; i < static_cast<int>(span.size()); i++) {
+      for(i = 0; i < span.size(); i++) {
         auto index = buckets1[(span[i] >> shifts) & mask]++;
         buffer1[index] = span[i];
         indexesBuffer1[index] = indexes1[offset + i];
@@ -160,7 +169,7 @@ private:
     std::fill(buckets1.begin(), buckets1.end(), 0);
 
     // Complete partitioning for array 2
-    for(auto& span : keySpans2) {
+    for(const auto& span : keySpans2) {
       for(auto& key : std::get<Span<T2>>(span)) {
         buckets2[1 + ((key >> shifts) & mask)]++;
       }
@@ -172,9 +181,9 @@ private:
     std::vector<int> partitions2(buckets2.data() + 1, buckets2.data() + numBuckets + 1);
 
     offset = 0;
-    for(auto& untypedSpan : keySpans2) {
+    for(const auto& untypedSpan : keySpans2) {
       auto& span = std::get<Span<T2>>(untypedSpan);
-      for(i = 0; i < static_cast<int>(span.size()); i++) {
+      for(i = 0; i < span.size(); i++) {
         auto index = buckets2[(span[i] >> shifts) & mask]++;
         buffer2[index] = span[i];
         indexesBuffer2[index] = indexes2[offset + i];
@@ -226,19 +235,19 @@ private:
     }
   }
 
-  inline void performPartitionAux(int n1, std::remove_cv_t<T1>* keys1,
+  inline void performPartitionAux(uint32_t n1, std::remove_cv_t<T1>* keys1, // NOLINT
                                   std::remove_cv_t<T1>* buffer1, int64_t* indexes1,
-                                  int64_t* indexesBuffer1, int offset1, int n2,
+                                  int64_t* indexesBuffer1, int offset1, uint32_t n2,
                                   std::remove_cv_t<T2>* keys2, std::remove_cv_t<T2>* buffer2,
                                   int64_t* indexes2, int64_t* indexesBuffer2, int offset2,
-                                  int msbToPartition, int radixBits, bool copyRequired) {
+                                  uint32_t msbToPartition, uint32_t radixBits, bool copyRequired) {
     radixBits = std::min(msbToPartition, radixBits);
-    int shifts = msbToPartition - radixBits;
-    int numBuckets = 1 << radixBits;
-    unsigned int mask = numBuckets - 1;
+    uint32_t shifts = msbToPartition - radixBits;
+    uint32_t numBuckets = 1U << radixBits;
+    uint32_t mask = numBuckets - 1;
 
     // Complete partitioning for array 1
-    int i;
+    uint32_t i = 0;
     for(i = 0; i < n1; i++) {
       buckets1[1 + ((keys1[i] >> shifts) & mask)]++;
     }
@@ -327,7 +336,7 @@ private:
   }
 
   template <typename U> inline int getTotalLength(const ExpressionSpanArguments& keySpans) {
-    int n = 0;
+    uint32_t n = 0;
     for(const auto& untypedSpan : keySpans) {
       const auto& span = std::get<Span<U>>(untypedSpan);
       n += span.size();
@@ -335,21 +344,23 @@ private:
     return n;
   }
 
-  template <typename U> inline int getMsb(const ExpressionSpanArguments& keySpans, int64_t* indexes) {
+  template <typename U>
+  inline uint32_t getMsb(const ExpressionSpanArguments& keySpans, int64_t* indexes) {
     auto largest = std::numeric_limits<U>::min();
-    int64_t spanNumber = 0;
+    uint64_t spanNumber = 0;
     uint32_t indexNumber = 0;
     for(const auto& untypedSpan : keySpans) {
       const auto& span = std::get<Span<U>>(untypedSpan);
       uint32_t spanOffset = 0;
       for(const auto& key : span) {
         largest = std::max(largest, key);
-        indexes[indexNumber++] = (spanNumber << 32) | spanOffset++;
+        indexes[indexNumber++] =
+            static_cast<int64_t>((spanNumber << partitionConfig::SPAN_OFFSET_BITS) | spanOffset++);
       }
       spanNumber++;
     }
 
-    int msbToPartition = 0;
+    uint32_t msbToPartition = 0;
     while(largest != 0) {
       largest >>= 1;
       msbToPartition++;
@@ -357,7 +368,7 @@ private:
     return msbToPartition;
   }
 
-  int nInput1;
+  uint32_t nInput1;
   const ExpressionSpanArguments& keySpans1;
   std::shared_ptr<std::remove_cv_t<T1>[]> returnBuffer1;
   std::unique_ptr<std::remove_cv_t<T1>[]> tmpBuffer1;
@@ -366,7 +377,7 @@ private:
   std::vector<int> buckets1;
   vectorOfPairs<int, int> outputPartitions1;
 
-  int nInput2;
+  uint32_t nInput2;
   const ExpressionSpanArguments& keySpans2;
   std::shared_ptr<std::remove_cv_t<T2>[]> returnBuffer2;
   std::unique_ptr<std::remove_cv_t<T2>[]> tmpBuffer2;
@@ -375,13 +386,14 @@ private:
   std::vector<int> buckets2;
   vectorOfPairs<int, int> outputPartitions2;
 
-  int radixBitsOperator;
-  int msbToPartitionInput;
+  uint32_t radixBitsOperator;
+  uint32_t msbToPartitionInput;
   int maxElementsPerPartition;
 };
 
 /****************************** SINGLE-THREADED ******************************/
 
+// This class acts as the Dispatcher
 template <typename T1, typename T2> class PartitionAdaptive {
 public:
   PartitionAdaptive(const ExpressionSpanArguments& keySpans1_,
@@ -389,7 +401,7 @@ public:
       : nInput1(0), keySpans1(keySpans1_), nInput2(0), keySpans2(keySpans2_),
         eventSet(getThreadEventSet()),
         monitor(MonitorPartition(eventSet.getCounterDiffsPtr() + EVENT::DTLB_STORE_MISSES)),
-        tuplesPerHazardCheck(TUPLES_PER_HAZARD_CHECK) {
+        tuplesPerHazardCheck(partitionConfig::TUPLES_PER_HAZARD_CHECK) {
     std::string startName = "Partition_startRadixBits";
     radixBitsOperator =
         static_cast<int>(MachineConstants::getInstance().getMachineConstant(startName));
@@ -402,26 +414,26 @@ public:
     nInput2 = getTotalLength<T2>(keySpans2);
 
 #ifdef CHANGE_PARTITION_TO_SORT_FOR_TESTING
-    maxElementsPerPartition = 1;
+    maxElementsPerPartition = 1; // NOLINT
 #else
-    maxElementsPerPartition = static_cast<double>(l2cacheSize()) / sizeof(T1);
+    maxElementsPerPartition = static_cast<double>(l2cacheSize()) / sizeof(T1); // NOLINT
 #endif
 
-    buckets1 = std::vector<int>(1 + (1 << radixBitsOperator), 0);
-    returnBuffer1 = std::make_shared_for_overwrite<std::remove_cv_t<T1>[]>(nInput1);
-    tmpBuffer1 = nullptr; // Lazily allocate buffer when needed
+    buckets1 = std::vector<int>(1 + (1U << radixBitsOperator), 0);
+    returnBuffer1 = std::make_shared_for_overwrite<std::remove_cv_t<T1>[]>(nInput1); // NOLINT
+    tmpBuffer1 = nullptr; // Lazily allocate buffer when needed // NOLINT
 
-    returnIndexes1 = std::make_shared_for_overwrite<int64_t[]>(nInput1);
-    tmpIndexes1 = std::make_unique_for_overwrite<int64_t[]>(nInput1);
-    int msbToPartitionInput1 = getMsb<T1>(keySpans1, tmpIndexes1.get());
+    returnIndexes1 = std::make_shared_for_overwrite<int64_t[]>(nInput1); // NOLINT
+    tmpIndexes1 = std::make_unique_for_overwrite<int64_t[]>(nInput1);    // NOLINT
+    uint32_t msbToPartitionInput1 = getMsb<T1>(keySpans1, tmpIndexes1.get());
 
-    buckets2 = std::vector<int>(1 + (1 << radixBitsOperator), 0);
-    returnBuffer2 = std::make_shared_for_overwrite<std::remove_cv_t<T2>[]>(nInput2);
-    tmpBuffer2 = nullptr; // Lazily allocate buffer when needed
+    buckets2 = std::vector<int>(1 + (1U << radixBitsOperator), 0);
+    returnBuffer2 = std::make_shared_for_overwrite<std::remove_cv_t<T2>[]>(nInput2); // NOLINT
+    tmpBuffer2 = nullptr; // Lazily allocate buffer when needed // NOLINT
 
-    returnIndexes2 = std::make_shared_for_overwrite<int64_t[]>(nInput2);
-    tmpIndexes2 = std::make_unique_for_overwrite<int64_t[]>(nInput2);
-    int msbToPartitionInput2 = getMsb<T2>(keySpans2, tmpIndexes2.get());
+    returnIndexes2 = std::make_shared_for_overwrite<int64_t[]>(nInput2); // NOLINT
+    tmpIndexes2 = std::make_unique_for_overwrite<int64_t[]>(nInput2);    // NOLINT
+    uint32_t msbToPartitionInput2 = getMsb<T2>(keySpans2, tmpIndexes2.get());
 
     msbToPartitionInput = std::max(msbToPartitionInput1, msbToPartitionInput2);
   }
@@ -438,24 +450,24 @@ public:
   }
 
 private:
-  inline void performPartition() {
-    int msbToPartition = msbToPartitionInput;
-    auto buffer1 = returnBuffer1.get();
-    auto indexes1 = tmpIndexes1.get();
-    auto indexesBuffer1 = returnIndexes1.get();
-    auto buffer2 = returnBuffer2.get();
-    auto indexes2 = tmpIndexes2.get();
-    auto indexesBuffer2 = returnIndexes2.get();
+  inline void performPartition() { // NOLINT
+    uint32_t msbToPartition = msbToPartitionInput;
+    auto buffer1 = returnBuffer1.get(); // Output Collector
+    auto* indexes1 = tmpIndexes1.get();
+    auto* indexesBuffer1 = returnIndexes1.get();
+    auto* buffer2 = returnBuffer2.get(); // Output Collector
+    auto* indexes2 = tmpIndexes2.get();
+    auto* indexesBuffer2 = returnIndexes2.get();
 
-    int radixBits = std::min(msbToPartition, radixBitsOperator);
-    int shifts = msbToPartition - radixBits;
-    int numBuckets = 1 << radixBits;
-    int startingNumBuckets = numBuckets;
-    unsigned int mask = numBuckets - 1;
+    uint32_t radixBits = std::min(msbToPartition, radixBitsOperator);
+    uint32_t shifts = msbToPartition - radixBits;
+    uint32_t numBuckets = 1U << radixBits;
+    uint32_t startingNumBuckets = numBuckets;
+    uint32_t mask = numBuckets - 1;
 
     // Complete histogram for array 1
-    int i;
-    for(auto& span : keySpans1) {
+    uint32_t i = 0;
+    for(const auto& span : keySpans1) {
       for(auto& key : std::get<Span<T1>>(span)) {
         buckets1[1 + ((key >> shifts) & mask)]++;
       }
@@ -466,7 +478,7 @@ private:
     std::vector<int> partitions1(buckets1.data() + 1, buckets1.data() + numBuckets + 1);
 
     // Complete histogram for array 2
-    for(auto& span : keySpans2) {
+    for(const auto& span : keySpans2) {
       for(auto& key : std::get<Span<T2>>(span)) {
         buckets2[1 + ((key >> shifts) & mask)]++;
       }
@@ -476,13 +488,16 @@ private:
     }
     std::vector<int> partitions2(buckets2.data() + 1, buckets2.data() + numBuckets + 1);
 
-    bool keysComplete1 = false, keysComplete2 = false;
+    bool keysComplete1 = false;
+    bool keysComplete2 = false;
     auto outerIterator1 = keySpans1.begin();
     auto innerIterator1 = (std::get<Span<T1>>(*outerIterator1)).begin();
     auto outerIterator2 = keySpans2.begin();
     auto innerIterator2 = (std::get<Span<T2>>(*outerIterator2)).begin();
-    int offset1 = 0, offset2 = 0;
+    int offset1 = 0;
+    int offset2 = 0;
 
+    // This loop combined with the outer and inner iterators acts as the Input Interleaver
     while(!keysComplete1 || !keysComplete2) { // NOLINT
       if(!keysComplete1) {                    // NOLINT
         processSpansMicroBatch<T1, T2>(
@@ -546,20 +561,20 @@ private:
     }
   }
 
-  inline void performPartitionAux(int n1, std::remove_cv_t<T1>* keys1,
+  inline void performPartitionAux(uint32_t n1, std::remove_cv_t<T1>* keys1,
                                   std::remove_cv_t<T1>* buffer1, int64_t* indexes1,
-                                  int64_t* indexesBuffer1, int offset1, int n2,
+                                  int64_t* indexesBuffer1, int offset1, uint32_t n2,
                                   std::remove_cv_t<T2>* keys2, std::remove_cv_t<T2>* buffer2,
                                   int64_t* indexes2, int64_t* indexesBuffer2, int offset2,
-                                  int msbToPartition, int radixBits, bool copyRequired) {
+                                  uint32_t msbToPartition, uint32_t radixBits, bool copyRequired) {
     radixBits = std::min(msbToPartition, radixBits);
-    int shifts = msbToPartition - radixBits;
-    int numBuckets = 1 << radixBits;
-    int startingNumBuckets = numBuckets;
-    unsigned int mask = numBuckets - 1;
+    uint32_t shifts = msbToPartition - radixBits;
+    uint32_t numBuckets = 1U << radixBits;
+    uint32_t startingNumBuckets = numBuckets;
+    uint32_t mask = numBuckets - 1;
 
     // Complete histogram for array 1
-    int i, microBatchStart, microBatchSize;
+    uint32_t i, microBatchStart, microBatchSize; // NOLINT
     for(i = 0; i < n1; i++) {
       buckets1[1 + ((keys1[i] >> shifts) & mask)]++;
     }
@@ -577,7 +592,8 @@ private:
     }
     std::vector<int> partitions2(buckets2.data() + 1, buckets2.data() + numBuckets + 1);
 
-    int i1 = 0, i2 = 0;
+    // This loop acts as the Input Interleaver
+    uint32_t i1 = 0, i2 = 0; // NOLINT
     if(radixBits > minimumRadixBits) {
       while(i2 < n2 || i1 < n1) { // NOLINT
         if(i1 < n1) {             // NOLINT
@@ -679,19 +695,19 @@ private:
       OuterIt& outerIterator, InnerIt& innerIterator, const ExpressionSpanArguments& keySpans,
       std::remove_cv_t<U1>* buffer, const int64_t* indexes, int64_t* indexesBuffer,
       std::vector<int>& buckets, std::vector<int>& partitions, int& offset, bool& keysComplete,
-      int& shifts, unsigned int& mask, int& radixBits, int& numBuckets, OuterIt_2& outerIterator_2,
-      InnerIt_2& innerIterator_2, const ExpressionSpanArguments& keySpans_2,
-      std::remove_cv_t<U2>* buffer_2, const int64_t* indexes_2, int64_t* indexesBuffer_2,
-      std::vector<int>& buckets_2, std::vector<int>& partitions_2, int& offset_2,
-      bool& keysComplete_2) {
-    int processed = 0;
-    int microBatchChunkSize;
+      uint32_t& shifts, uint32_t& mask, uint32_t& radixBits, uint32_t& numBuckets,
+      OuterIt_2& outerIterator_2, InnerIt_2& innerIterator_2,
+      const ExpressionSpanArguments& keySpans_2, std::remove_cv_t<U2>* buffer_2,
+      const int64_t* indexes_2, int64_t* indexesBuffer_2, std::vector<int>& buckets_2,
+      std::vector<int>& partitions_2, int& offset_2, bool& keysComplete_2) {
+    uint32_t processed = 0;
+    uint32_t microBatchChunkSize; // NOLINT
     eventSet.readCounters();
     while(processed < tuplesPerHazardCheck) {
-      microBatchChunkSize =
-          std::min(tuplesPerHazardCheck - processed,
-                   static_cast<int>((std::get<Span<U1>>(*outerIterator)).end() - innerIterator));
-      for(auto i = 0; i < microBatchChunkSize; ++i) { // Run chunk
+      microBatchChunkSize = std::min(
+          tuplesPerHazardCheck - processed,
+          static_cast<uint32_t>((std::get<Span<U1>>(*outerIterator)).end() - innerIterator));
+      for(auto i = 0U; i < microBatchChunkSize; ++i) { // Run chunk
         auto index = buckets[((*innerIterator) >> shifts) & mask]++;
         buffer[index] = *(innerIterator++);
         indexesBuffer[index] = indexes[offset + processed++];
@@ -700,7 +716,7 @@ private:
         if(++outerIterator == keySpans.end()) {
           keysComplete = true;
           break;
-        } else {
+        } else { // NOLINT
           innerIterator = (std::get<Span<U1>>(*outerIterator)).begin();
         }
       }
@@ -708,11 +724,12 @@ private:
     eventSet.readCountersAndUpdateDiff();
     offset += processed;
 
+    // This calls the Output Transformer
     if(processed == tuplesPerHazardCheck && radixBits > minimumRadixBits &&
        monitor.robustnessIncreaseRequired(tuplesPerHazardCheck)) {
       --radixBits;
       ++shifts;
-      numBuckets >>= 1;
+      numBuckets >>= 1U;
       mask = numBuckets - 1;
 
 #ifdef ADAPTIVITY_OUTPUT
@@ -737,7 +754,7 @@ private:
           }
           if(++outerIterator == keySpans.end()) {
             break;
-          } else {
+          } else { // NOLINT
             innerIterator = (std::get<Span<U1>>(*outerIterator)).begin();
           }
         }
@@ -752,7 +769,7 @@ private:
           }
           if(++outerIterator_2 == keySpans_2.end()) {
             break;
-          } else {
+          } else { // NOLINT
             innerIterator_2 = (std::get<Span<U2>>(*outerIterator_2)).begin();
           }
         }
@@ -764,14 +781,14 @@ private:
   }
 
   template <typename U1, typename U2>
-  inline void processMicroBatch(int microBatchStart, int microBatchSize, int& i, int n,
-                                const U1* keys, std::remove_cv_t<U1>* buffer,
-                                const int64_t* indexes, int64_t* indexesBuffer,
-                                std::vector<int>& buckets, std::vector<int>& partitions,
-                                int& shifts, unsigned int& mask, int& radixBits, int& numBuckets,
-                                int& i_2, int n_2, const U2* keys_2, std::remove_cv_t<U2>* buffer_2,
-                                const int64_t* indexes_2, int64_t* indexesBuffer_2,
-                                std::vector<int>& buckets_2, std::vector<int>& partitions_2) {
+  inline void
+  processMicroBatch(uint32_t microBatchStart, uint32_t microBatchSize, uint32_t& i, uint32_t n,
+                    const U1* keys, std::remove_cv_t<U1>* buffer, const int64_t* indexes,
+                    int64_t* indexesBuffer, std::vector<int>& buckets, std::vector<int>& partitions,
+                    uint32_t& shifts, uint32_t& mask, uint32_t& radixBits, uint32_t& numBuckets,
+                    uint32_t& i_2, uint32_t n_2, const U2* keys_2, std::remove_cv_t<U2>* buffer_2,
+                    const int64_t* indexes_2, int64_t* indexesBuffer_2, std::vector<int>& buckets_2,
+                    std::vector<int>& partitions_2) {
     eventSet.readCounters();
 
     for(; i < microBatchStart + microBatchSize; i++) { // Run chunk
@@ -782,11 +799,12 @@ private:
 
     eventSet.readCountersAndUpdateDiff();
 
+    // This calls the Output Transformer
     if(microBatchSize == tuplesPerHazardCheck &&
        monitor.robustnessIncreaseRequired(microBatchSize)) {
       --radixBits;
       ++shifts;
-      numBuckets >>= 1;
+      numBuckets >>= 1U;
       mask = numBuckets - 1;
 
 #ifdef ADAPTIVITY_OUTPUT
@@ -816,32 +834,33 @@ private:
     }
   }
 
+  // This function represents the Output Transformer
   template <typename U>
   inline void mergePartitions(U* buffer, int64_t* indexesBuffer, std::vector<int>& partitions,
-                              std::vector<int>& buckets, int numBuckets, bool valuesInBuffer) {
-    if(valuesInBuffer) {                    // Skip if no elements have been scattered yet
-      for(int j = 0; j < numBuckets; ++j) { // Move values in buffer
-        auto destIndex = buckets[j << 1];
-        auto srcIndex = partitions[j << 1];
-        auto numElements = buckets[(j << 1) + 1] - srcIndex;
+                              std::vector<int>& buckets, uint32_t numBuckets, bool valuesInBuffer) {
+    if(valuesInBuffer) {                         // Skip if no elements have been scattered yet
+      for(uint32_t j = 0; j < numBuckets; ++j) { // Move values in buffer
+        auto destIndex = buckets[j << 1U];
+        auto srcIndex = partitions[j << 1U];
+        auto numElements = buckets[(j << 1U) + 1] - srcIndex;
         std::memmove(&buffer[destIndex], &buffer[srcIndex], numElements * sizeof(U)); // May overlap
         std::memmove(&indexesBuffer[destIndex], &indexesBuffer[srcIndex],
                      numElements * sizeof(int64_t));
       }
     }
 
-    for(int j = 0; j < numBuckets; ++j) { // Merge histogram values
-      buckets[j] = buckets[j << 1] + (buckets[(j << 1) + 1] - partitions[j << 1]);
+    for(uint32_t j = 0; j < numBuckets; ++j) { // Merge histogram values
+      buckets[j] = buckets[j << 1U] + (buckets[(j << 1U) + 1] - partitions[j << 1U]);
     }
 
-    for(int j = 1; j <= numBuckets; ++j) { // Merge partitions and reduce size
-      partitions[j - 1] = partitions[(j << 1) - 1];
+    for(uint32_t j = 1; j <= numBuckets; ++j) { // Merge partitions and reduce size
+      partitions[j - 1] = partitions[(j << 1U) - 1];
     }
     partitions.resize(numBuckets);
   }
 
   template <typename U> inline int getTotalLength(const ExpressionSpanArguments& keySpans) {
-    int n = 0;
+    uint32_t n = 0;
     for(const auto& untypedSpan : keySpans) {
       const auto& span = std::get<Span<U>>(untypedSpan);
       n += span.size();
@@ -849,21 +868,23 @@ private:
     return n;
   }
 
-  template <typename U> inline int getMsb(const ExpressionSpanArguments& keySpans, int64_t* indexes) {
+  template <typename U>
+  inline uint32_t getMsb(const ExpressionSpanArguments& keySpans, int64_t* indexes) {
     auto largest = std::numeric_limits<U>::min();
-    int64_t spanNumber = 0;
+    uint64_t spanNumber = 0;
     uint32_t indexNumber = 0;
     for(const auto& untypedSpan : keySpans) {
       const auto& span = std::get<Span<U>>(untypedSpan);
       uint32_t spanOffset = 0;
       for(const auto& key : span) {
         largest = std::max(largest, key);
-        indexes[indexNumber++] = (spanNumber << 32) | spanOffset++;
+        indexes[indexNumber++] =
+            static_cast<int64_t>((spanNumber << partitionConfig::SPAN_OFFSET_BITS) | spanOffset++);
       }
       spanNumber++;
     }
 
-    int msbToPartition = 0;
+    uint32_t msbToPartition = 0;
     while(largest != 0) {
       largest >>= 1;
       msbToPartition++;
@@ -871,7 +892,7 @@ private:
     return msbToPartition;
   }
 
-  int nInput1;
+  uint32_t nInput1;
   const ExpressionSpanArguments& keySpans1;
   std::shared_ptr<std::remove_cv_t<T1>[]> returnBuffer1;
   std::unique_ptr<std::remove_cv_t<T1>[]> tmpBuffer1;
@@ -880,7 +901,7 @@ private:
   std::vector<int> buckets1;
   vectorOfPairs<int, int> outputPartitions1;
 
-  int nInput2;
+  uint32_t nInput2;
   const ExpressionSpanArguments& keySpans2;
   std::shared_ptr<std::remove_cv_t<T2>[]> returnBuffer2;
   std::unique_ptr<std::remove_cv_t<T2>[]> tmpBuffer2;
@@ -889,14 +910,14 @@ private:
   std::vector<int> buckets2;
   vectorOfPairs<int, int> outputPartitions2;
 
-  int minimumRadixBits;
-  int radixBitsOperator;
-  int msbToPartitionInput;
+  uint32_t minimumRadixBits;
+  uint32_t radixBitsOperator;
+  uint32_t msbToPartitionInput;
   int maxElementsPerPartition;
 
   PAPI_eventSet& eventSet;
   MonitorPartition monitor;
-  int tuplesPerHazardCheck;
+  uint32_t tuplesPerHazardCheck;
 };
 
 /************************** SINGLE-THREADED FOR MULTI-THREADED **************************/
@@ -917,12 +938,13 @@ template <typename T1, typename T2> struct TwoPartitionedArraysAlt {
   PartitionedArrayAlt<T2> partitionedArrayTwo;
 };
 
+// This class acts as the Dispatcher
 template <typename T1, typename T2> class PartitionAdaptiveRawArrays {
 public:
   PartitionAdaptiveRawArrays()
       : eventSet(getThreadEventSet()),
         monitor(MonitorPartition(eventSet.getCounterDiffsPtr() + EVENT::DTLB_STORE_MISSES)),
-        tuplesPerHazardCheck(TUPLES_PER_HAZARD_CHECK) {
+        tuplesPerHazardCheck(partitionConfig::TUPLES_PER_HAZARD_CHECK) {
 
     size_t initialSize = 2 * l2cacheSize() / 4;
     keysTmpBuffer1.resize(initialSize);
@@ -932,9 +954,9 @@ public:
   }
 
   TwoPartitionedArraysPartitionsOnly
-  processInput(int n1, T1* keys1, int64_t* indexes1, int overallOffset1_, int n2, T2* keys2,
-               int64_t* indexes2, int overallOffset2_, int minimumRadixBits_, int radixBits,
-               int msbToPartitionInput_, int maxElementsPerPartition_,
+  processInput(uint32_t n1, T1* keys1, int64_t* indexes1, int overallOffset1_, uint32_t n2,
+               T2* keys2, int64_t* indexes2, int overallOffset2_, uint32_t minimumRadixBits_,
+               uint32_t radixBits, uint32_t msbToPartitionInput_, int maxElementsPerPartition_,
                std::atomic<int>* totalOutputPartitions_) {
     nInput1 = n1;
     keysInput1 = keys1;
@@ -961,9 +983,9 @@ public:
       indexesTmpBuffer2.resize(nInput2);
     }
 
-    buckets1.resize(1 + (1 << radixBitsOperator));
+    buckets1.resize(1 + (1U << radixBitsOperator));
     std::fill(buckets1.begin(), buckets1.end(), 0);
-    buckets2.resize(1 + (1 << radixBitsOperator));
+    buckets2.resize(1 + (1U << radixBitsOperator));
     std::fill(buckets1.begin(), buckets1.end(), 0);
 
     performPartition(nInput1, keysInput1, keysTmpBuffer1.data(), indexesInput1,
@@ -977,18 +999,18 @@ public:
   }
 
 private:
-  inline void performPartition(int n1, T1* keys1, T1* buffer1, int64_t* indexes1,
-                               int64_t* indexesBuffer1, int offset1, int n2, T2* keys2, T2* buffer2,
-                               int64_t* indexes2, int64_t* indexesBuffer2, int offset2,
-                               int msbToPartition, int radixBits, bool copyRequired) {
+  inline void performPartition(uint32_t n1, T1* keys1, T1* buffer1, int64_t* indexes1,
+                               int64_t* indexesBuffer1, int offset1, uint32_t n2, T2* keys2,
+                               T2* buffer2, int64_t* indexes2, int64_t* indexesBuffer2, int offset2,
+                               uint32_t msbToPartition, uint32_t radixBits, bool copyRequired) {
     radixBits = std::min(msbToPartition, radixBits);
-    int shifts = msbToPartition - radixBits;
-    int numBuckets = 1 << radixBits;
-    int startingNumBuckets = numBuckets;
-    unsigned int mask = numBuckets - 1;
+    uint32_t shifts = msbToPartition - radixBits;
+    uint32_t numBuckets = 1U << radixBits;
+    uint32_t startingNumBuckets = numBuckets;
+    uint32_t mask = numBuckets - 1;
 
     // Complete histogram for array 1
-    int i, microBatchStart, microBatchSize;
+    uint32_t i, microBatchStart, microBatchSize; // NOLINT
     for(i = 0; i < n1; i++) {
       buckets1[1 + ((keys1[i] >> shifts) & mask)]++;
     }
@@ -1006,10 +1028,11 @@ private:
     }
     std::vector<int> partitions2(buckets2.data() + 1, buckets2.data() + numBuckets + 1);
 
-    int i1 = 0, i2 = 0;
+    // This loop acts as the Input Interleaver
+    uint32_t i1 = 0, i2 = 0; // NOLINT
     if(radixBits > minimumRadixBits) {
-      while(i2 < n2 || i1 < n1) { // NOLINT
-        if(i1 < n1) {             // NOLINT
+      while(i2 < n2 || i1 < n1) {
+        if(i1 < n1) {
           microBatchSize = std::min(tuplesPerHazardCheck, n1 - i1);
           microBatchStart = i1;
 
@@ -1018,7 +1041,7 @@ private:
                                     radixBits, numBuckets, i2, n2, keys2, buffer2, indexes2,
                                     indexesBuffer2, buckets2, partitions2);
         }
-        if(i2 < n2) { // NOLINT
+        if(i2 < n2) {
           microBatchSize = std::min(tuplesPerHazardCheck, n2 - i2);
           microBatchStart = i2;
 
@@ -1103,14 +1126,14 @@ private:
   }
 
   template <typename U1, typename U2>
-  inline void processMicroBatch(int microBatchStart, int microBatchSize, int& i, int n,
-                                const U1* keys, U1* buffer, const int64_t* indexes,
+  inline void processMicroBatch(uint32_t microBatchStart, uint32_t microBatchSize, uint32_t& i,
+                                uint32_t n, const U1* keys, U1* buffer, const int64_t* indexes,
                                 int64_t* indexesBuffer, std::vector<int>& buckets,
-                                std::vector<int>& partitions, int& shifts, unsigned int& mask,
-                                int& radixBits, int& numBuckets, int& i_2, int n_2,
-                                const U2* keys_2, U2* buffer_2, const int64_t* indexes_2,
-                                int64_t* indexesBuffer_2, std::vector<int>& buckets_2,
-                                std::vector<int>& partitions_2) {
+                                std::vector<int>& partitions, uint32_t& shifts, uint32_t& mask,
+                                uint32_t& radixBits, uint32_t& numBuckets, uint32_t& i_2,
+                                uint32_t n_2, const U2* keys_2, U2* buffer_2,
+                                const int64_t* indexes_2, int64_t* indexesBuffer_2,
+                                std::vector<int>& buckets_2, std::vector<int>& partitions_2) {
     eventSet.readCounters();
 
     for(; i < microBatchStart + microBatchSize; i++) { // Run chunk
@@ -1121,11 +1144,12 @@ private:
 
     eventSet.readCountersAndUpdateDiff();
 
+    // This calls the Output Transformer
     if(microBatchSize == tuplesPerHazardCheck &&
        monitor.robustnessIncreaseRequired(microBatchSize)) {
       --radixBits;
       ++shifts;
-      numBuckets >>= 1;
+      numBuckets >>= 1U;
       mask = numBuckets - 1;
 
 #ifdef ADAPTIVITY_OUTPUT
@@ -1155,55 +1179,56 @@ private:
     }
   }
 
+  // This function represents the Output Transformer
   template <typename U>
   inline void mergePartitions(U* buffer, int64_t* indexesBuffer, std::vector<int>& partitions,
-                              std::vector<int>& buckets, int numBuckets, bool valuesInBuffer) {
-    if(valuesInBuffer) {                    // Skip if no elements have been scattered yet
-      for(int j = 0; j < numBuckets; ++j) { // Move values in buffer
-        auto destIndex = buckets[j << 1];
-        auto srcIndex = partitions[j << 1];
-        auto numElements = buckets[(j << 1) + 1] - srcIndex;
+                              std::vector<int>& buckets, uint32_t numBuckets, bool valuesInBuffer) {
+    if(valuesInBuffer) {                         // Skip if no elements have been scattered yet
+      for(uint32_t j = 0; j < numBuckets; ++j) { // Move values in buffer
+        auto destIndex = buckets[j << 1U];
+        auto srcIndex = partitions[j << 1U];
+        auto numElements = buckets[(j << 1U) + 1] - srcIndex;
         std::memmove(&buffer[destIndex], &buffer[srcIndex], numElements * sizeof(U)); // May overlap
         std::memmove(&indexesBuffer[destIndex], &indexesBuffer[srcIndex],
                      numElements * sizeof(int64_t));
       }
     }
 
-    for(int j = 0; j < numBuckets; ++j) { // Merge histogram values
-      buckets[j] = buckets[j << 1] + (buckets[(j << 1) + 1] - partitions[j << 1]);
+    for(uint32_t j = 0; j < numBuckets; ++j) { // Merge histogram values
+      buckets[j] = buckets[j << 1U] + (buckets[(j << 1U) + 1] - partitions[j << 1U]);
     }
 
-    for(int j = 1; j <= numBuckets; ++j) { // Merge partitions and reduce size
-      partitions[j - 1] = partitions[(j << 1) - 1];
+    for(uint32_t j = 1; j <= numBuckets; ++j) { // Merge partitions and reduce size
+      partitions[j - 1] = partitions[(j << 1U) - 1];
     }
     partitions.resize(numBuckets);
   }
 
   PAPI_eventSet& eventSet;
   MonitorPartition monitor;
-  int tuplesPerHazardCheck;
+  uint32_t tuplesPerHazardCheck;
   std::vector<T1> keysTmpBuffer1;
   std::vector<int64_t> indexesTmpBuffer1;
   std::vector<T2> keysTmpBuffer2;
   std::vector<int64_t> indexesTmpBuffer2;
 
-  int nInput1{};
+  uint32_t nInput1{};
   T1* keysInput1{};
   int64_t* indexesInput1{};
-  std::vector<int> buckets1{};
-  vectorOfPairs<int, int> outputPartitions1{};
+  std::vector<int> buckets1;
+  vectorOfPairs<int, int> outputPartitions1;
   int overallOffset1{};
 
-  int nInput2{};
+  uint32_t nInput2{};
   T2* keysInput2{};
   int64_t* indexesInput2{};
-  std::vector<int> buckets2{};
-  vectorOfPairs<int, int> outputPartitions2{};
+  std::vector<int> buckets2;
+  vectorOfPairs<int, int> outputPartitions2;
   int overallOffset2{};
 
-  int minimumRadixBits{};
-  int radixBitsOperator{};
-  int msbToPartitionInput{};
+  uint32_t minimumRadixBits{};
+  uint32_t radixBitsOperator{};
+  uint32_t msbToPartitionInput{};
   int maxElementsPerPartition{};
   std::atomic<int>* totalOutputPartitions{};
 };
@@ -1216,15 +1241,16 @@ static PartitionAdaptiveRawArrays<T1, T2>& getPartitionAdaptiveRawArrays() {
 
 /************************************ MULTI-THREADED ***********************************/
 
+// This class acts as the Dispatcher
 template <typename T1, typename T2> class PartitionAdaptiveParallelFirstPass {
 public:
   PartitionAdaptiveParallelFirstPass(const ExpressionSpanArguments& keySpans1_,
-                                     const ExpressionSpanArguments& keySpans2_,
-                                     int batchNumStart1_, int batchNumEnd1_, int n1,
-                                     int batchNumStart2_, int batchNumEnd2_, int n2,
-                                     int minimumRadixBits_, int startingRadixBits,
-                                     std::atomic<int>& globalRadixBits_, int msbToPartitionInput_,
-                                     int maxElementsPerPartition_,
+                                     const ExpressionSpanArguments& keySpans2_, int batchNumStart1_,
+                                     int batchNumEnd1_, uint32_t n1, int batchNumStart2_,
+                                     int batchNumEnd2_, uint32_t n2, uint32_t minimumRadixBits_,
+                                     uint32_t startingRadixBits,
+                                     std::atomic<uint32_t>& globalRadixBits_,
+                                     uint32_t msbToPartitionInput_, int maxElementsPerPartition_,
                                      std::atomic<int>& threadsStillRunning_)
       : nInput1(n1), keySpans1(keySpans1_), batchNumStart1(batchNumStart1_),
         batchNumEnd1(batchNumEnd1_), nInput2(n2), keySpans2(keySpans2_),
@@ -1234,14 +1260,14 @@ public:
         maxElementsPerPartition(maxElementsPerPartition_),
         threadsStillRunning(threadsStillRunning_), eventSet(getThreadEventSet()),
         monitor(MonitorPartition(eventSet.getCounterDiffsPtr() + EVENT::DTLB_STORE_MISSES)),
-        tuplesPerHazardCheck(TUPLES_PER_HAZARD_CHECK) {
+        tuplesPerHazardCheck(partitionConfig::TUPLES_PER_HAZARD_CHECK) {
 
 #ifdef DEBUG
-    std::cout << "For this thread: n1: " << nInput1 << ", n2: " << nInput2 << std::endl;
+    std::cout << "For this thread: n1: " << nInput1U << ", n2: " << nInput2 << std::endl;
 #endif
 
-    buckets1 = std::vector<int>(1 + (1 << radixBits), 0);
-    returnBuffer1 = std::make_shared_for_overwrite<std::remove_cv_t<T1>[]>(nInput1);
+    buckets1 = std::vector<int>(1 + (1U << radixBits), 0);
+    returnBuffer1 = std::make_shared_for_overwrite<std::remove_cv_t<T1>[]>(nInput1); // NOLINT
     returnIndexes1 = std::make_shared_for_overwrite<int64_t[]>(nInput1);
     inputIndexes1 = std::make_unique_for_overwrite<int64_t[]>(nInput1);
 
@@ -1250,18 +1276,19 @@ public:
     auto keySpansEnd1 = keySpans1.begin();
     std::advance(keySpansEnd1, batchNumEnd1);
 
-    auto indexesPtr1 = inputIndexes1.get();
-    int64_t spanNumber = batchNumStart1;
+    auto* indexesPtr1 = inputIndexes1.get();
+    uint64_t spanNumber = batchNumStart1;
     uint32_t indexNumber = 0;
     for(auto spansIt = keySpansStart1; spansIt != keySpansEnd1; ++spansIt) {
       uint32_t spanOffset = 0;
       for(size_t i = 0; i < std::get<Span<T1>>(*spansIt).size(); ++i) {
-        indexesPtr1[indexNumber++] = (spanNumber << 32) | spanOffset++;
+        indexesPtr1[indexNumber++] =
+            static_cast<int64_t>((spanNumber << partitionConfig::SPAN_OFFSET_BITS) | spanOffset++);
       }
       spanNumber++;
     }
 
-    buckets2 = std::vector<int>(1 + (1 << radixBits), 0);
+    buckets2 = std::vector<int>(1 + (1U << radixBits), 0);
     returnBuffer2 = std::make_shared_for_overwrite<std::remove_cv_t<T2>[]>(nInput2);
     returnIndexes2 = std::make_shared_for_overwrite<int64_t[]>(nInput2);
     inputIndexes2 = std::make_unique_for_overwrite<int64_t[]>(nInput2);
@@ -1271,13 +1298,14 @@ public:
     auto keySpansEnd2 = keySpans2.begin();
     std::advance(keySpansEnd2, batchNumEnd2);
 
-    auto indexesPtr2 = inputIndexes2.get();
+    auto* indexesPtr2 = inputIndexes2.get();
     spanNumber = batchNumStart2;
     indexNumber = 0;
     for(auto spansIt = keySpansStart2; spansIt != keySpansEnd2; ++spansIt) {
       uint32_t spanOffset = 0;
       for(size_t i = 0; i < std::get<Span<T2>>(*spansIt).size(); ++i) {
-        indexesPtr2[indexNumber++] = (spanNumber << 32) | spanOffset++;
+        indexesPtr2[indexNumber++] =
+            static_cast<int64_t>((spanNumber << partitionConfig::SPAN_OFFSET_BITS) | spanOffset++);
       }
       spanNumber++;
     }
@@ -1327,16 +1355,16 @@ public:
 
 private:
   inline void performPartition() {
-    auto buffer1 = returnBuffer1.get();
-    auto indexes1 = inputIndexes1.get();
-    auto indexesBuffer1 = returnIndexes1.get();
-    auto buffer2 = returnBuffer2.get();
-    auto indexes2 = inputIndexes2.get();
-    auto indexesBuffer2 = returnIndexes2.get();
+    auto buffer1 = returnBuffer1.get(); // Output Collector
+    auto* indexes1 = inputIndexes1.get();
+    auto* indexesBuffer1 = returnIndexes1.get();
+    auto* buffer2 = returnBuffer2.get(); // Output Collector
+    auto* indexes2 = inputIndexes2.get();
+    auto* indexesBuffer2 = returnIndexes2.get();
 
-    int shifts = msbToPartitionInput - radixBits;
-    int numBuckets = 1 << radixBits;
-    unsigned int mask = numBuckets - 1;
+    uint32_t shifts = msbToPartitionInput - radixBits;
+    uint32_t numBuckets = 1U << radixBits;
+    uint32_t mask = numBuckets - 1;
 
     // Initialise span iterators
     auto keySpansStart1 = keySpans1.begin();
@@ -1349,13 +1377,13 @@ private:
     std::advance(keySpansEnd2, batchNumEnd2);
 
 #ifdef DEBUG
-    std::cout << "batchNumStart1: " << batchNumStart1 << ", batchNumEnd1: " << batchNumEnd1
+    std::cout << "batchNumStart1: " << batchNumStart1U << ", batchNumEnd1: " << batchNumEnd1
               << ", batchNumStart2: " << batchNumStart2 << ", batchNumEnd2: " << batchNumEnd2
               << std::endl;
 #endif
 
     // Complete histogram for array 1
-    int i;
+    uint32_t i = 0;
     for(auto spansIt = keySpansStart1; spansIt != keySpansEnd1; ++spansIt) {
       for(auto& key : std::get<Span<T1>>(*spansIt)) {
         buckets1[1 + ((key >> shifts) & mask)]++;
@@ -1377,13 +1405,16 @@ private:
     }
     partitions2 = buckets2;
 
-    bool keysComplete1 = false, keysComplete2 = false;
+    bool keysComplete1 = false;
+    bool keysComplete2 = false;
     auto outerIterator1 = keySpansStart1;
     auto innerIterator1 = (std::get<Span<T1>>(*outerIterator1)).begin();
     auto outerIterator2 = keySpansStart2;
     auto innerIterator2 = (std::get<Span<T2>>(*outerIterator2)).begin();
-    int offset1 = 0, offset2 = 0;
+    int offset1 = 0;
+    int offset2 = 0;
 
+    // This loop combined with the outer and inner iterators acts as the Input Interleaver
     while(!keysComplete1 || !keysComplete2) { // NOLINT
       if(!keysComplete1) {                    // NOLINT
         processSpansMicroBatch<T1, T2>(
@@ -1401,15 +1432,16 @@ private:
       }
     }
 
+    // This is the Synchroniser
     threadsStillRunning.fetch_sub(1);
     if(radixBits > minimumRadixBits) { // Final synchronisation required with all complete threads
       while(threadsStillRunning > 0) {
         /* busy wait */
       }
-      int finalGlobalRadixBits = globalRadixBits.load();
+      uint32_t finalGlobalRadixBits = globalRadixBits.load();
       while(radixBits != finalGlobalRadixBits) {
         --radixBits;
-        numBuckets >>= 1;
+        numBuckets >>= 1U;
         mergePartitions(buffer1, indexesBuffer1, partitions1, buckets1, numBuckets, true);
         mergePartitions(buffer2, indexesBuffer2, partitions2, buckets2, numBuckets, true);
       }
@@ -1422,18 +1454,18 @@ private:
       OuterIt& outerIterator, OuterIt& outerIteratorEnd, InnerIt& innerIterator,
       std::remove_cv_t<U1>* buffer, const int64_t* indexes, int64_t* indexesBuffer,
       std::vector<int>& buckets, std::vector<int>& partitions, int& offset, bool& keysComplete,
-      int& shifts, unsigned int& mask, int& numBuckets, OuterIt_2& outerIterator_2,
+      uint32_t& shifts, uint32_t& mask, uint32_t& numBuckets, OuterIt_2& outerIterator_2,
       OuterIt_2& outerIteratorEnd_2, InnerIt_2& innerIterator_2, std::remove_cv_t<U2>* buffer_2,
       const int64_t* indexes_2, int64_t* indexesBuffer_2, std::vector<int>& buckets_2,
       std::vector<int>& partitions_2, int& offset_2, bool& keysComplete_2) {
-    int processed = 0;
-    int microBatchChunkSize;
+    uint32_t processed = 0;
+    uint32_t microBatchChunkSize = 0;
     eventSet.readCounters();
     while(processed < tuplesPerHazardCheck) {
-      microBatchChunkSize =
-          std::min(tuplesPerHazardCheck - processed,
-                   static_cast<int>((std::get<Span<U1>>(*outerIterator)).end() - innerIterator));
-      for(auto i = 0; i < microBatchChunkSize; ++i) { // Run chunk
+      microBatchChunkSize = std::min(
+          tuplesPerHazardCheck - processed,
+          static_cast<uint32_t>((std::get<Span<U1>>(*outerIterator)).end() - innerIterator));
+      for(auto i = 0U; i < microBatchChunkSize; ++i) { // Run chunk
         auto index = buckets[((*innerIterator) >> shifts) & mask]++;
         buffer[index] = *(innerIterator++);
         indexesBuffer[index] = indexes[offset + processed++];
@@ -1442,7 +1474,7 @@ private:
         if(++outerIterator == outerIteratorEnd) {
           keysComplete = true;
           break;
-        } else {
+        } else { // NOLINT
           innerIterator = (std::get<Span<U1>>(*outerIterator)).begin();
         }
       }
@@ -1450,7 +1482,8 @@ private:
     eventSet.readCountersAndUpdateDiff();
     offset += processed;
 
-    int tmpGlobalRadixBits;
+    // This is the Synchroniser
+    uint32_t tmpGlobalRadixBits; // NOLINT
     if(processed == tuplesPerHazardCheck && radixBits > minimumRadixBits &&
        monitor.robustnessIncreaseRequired(tuplesPerHazardCheck)) { // Local adjustment required
       if(globalRadixBits.load() > radixBits - 1) {                 // Global adjustment required
@@ -1473,7 +1506,7 @@ private:
     while(radixBits > tmpGlobalRadixBits) { // Sync with global
       --radixBits;
       ++shifts;
-      numBuckets >>= 1;
+      numBuckets >>= 1U;
       mask = numBuckets - 1;
 
       mergePartitions(buffer, indexesBuffer, partitions, buckets, numBuckets, true);
@@ -1489,7 +1522,7 @@ private:
             }
             if(++outerIterator == outerIteratorEnd) {
               break;
-            } else {
+            } else { // NOLINT
               innerIterator = (std::get<Span<U1>>(*outerIterator)).begin();
             }
           }
@@ -1504,7 +1537,7 @@ private:
             }
             if(++outerIterator_2 == outerIteratorEnd_2) {
               break;
-            } else {
+            } else { // NOLINT
               innerIterator_2 = (std::get<Span<U2>>(*outerIterator_2)).begin();
             }
           }
@@ -1517,31 +1550,32 @@ private:
     }
   }
 
+  // This function represents the Output Transformer
   template <typename U>
   inline void mergePartitions(U* buffer, int64_t* indexesBuffer, std::vector<int>& partitions,
-                              std::vector<int>& buckets, int numBuckets, bool valuesInBuffer) {
-    if(valuesInBuffer) {                    // Skip if no elements have been scattered yet
-      for(int j = 0; j < numBuckets; ++j) { // Move values in buffer
-        auto destIndex = buckets[j << 1];
-        auto srcIndex = partitions[(j << 1) + 1];
-        auto numElements = buckets[(j << 1) + 1] - srcIndex;
+                              std::vector<int>& buckets, uint32_t numBuckets, bool valuesInBuffer) {
+    if(valuesInBuffer) {                         // Skip if no elements have been scattered yet
+      for(uint32_t j = 0; j < numBuckets; ++j) { // Move values in buffer
+        auto destIndex = buckets[j << 1U];
+        auto srcIndex = partitions[(j << 1U) + 1];
+        auto numElements = buckets[(j << 1U) + 1] - srcIndex;
         std::memmove(&buffer[destIndex], &buffer[srcIndex], numElements * sizeof(U)); // May overlap
         std::memmove(&indexesBuffer[destIndex], &indexesBuffer[srcIndex],
                      numElements * sizeof(int64_t));
       }
     }
 
-    for(int j = 0; j < numBuckets; ++j) { // Merge histogram values
-      buckets[j] = buckets[j << 1] + (buckets[(j << 1) + 1] - partitions[(j << 1) + 1]);
+    for(uint32_t j = 0; j < numBuckets; ++j) { // Merge histogram values
+      buckets[j] = buckets[j << 1U] + (buckets[(j << 1U) + 1] - partitions[(j << 1U) + 1]);
     }
 
-    for(int j = 1; j <= numBuckets; ++j) { // Merge partitions and reduce size
-      partitions[j] = partitions[j << 1];
+    for(uint32_t j = 1; j <= numBuckets; ++j) { // Merge partitions and reduce size
+      partitions[j] = partitions[j << 1U];
     }
     partitions.resize(numBuckets + 1);
   }
 
-  int nInput1;
+  uint32_t nInput1;
   const ExpressionSpanArguments& keySpans1;
   int batchNumStart1;
   int batchNumEnd1;
@@ -1552,7 +1586,7 @@ private:
   std::vector<int> buckets1;
   std::vector<int> partitions1;
 
-  int nInput2;
+  uint32_t nInput2;
   const ExpressionSpanArguments& keySpans2;
   int batchNumStart2;
   int batchNumEnd2;
@@ -1563,16 +1597,16 @@ private:
   std::vector<int> buckets2;
   std::vector<int> partitions2;
 
-  int minimumRadixBits;
-  int radixBits;
-  std::atomic<int>& globalRadixBits;
-  int msbToPartitionInput;
+  uint32_t minimumRadixBits;
+  uint32_t radixBits;
+  std::atomic<uint32_t>& globalRadixBits;
+  uint32_t msbToPartitionInput;
   int maxElementsPerPartition;
   std::atomic<int>& threadsStillRunning;
 
   PAPI_eventSet& eventSet;
   MonitorPartition monitor;
-  int tuplesPerHazardCheck;
+  uint32_t tuplesPerHazardCheck;
 };
 
 template <typename T1, typename T2> class PartitionAdaptiveParallel {
@@ -1596,7 +1630,7 @@ public:
       msbToPartitionInput =
           std::max(getMsb<T1>(keySpans1, nInput1), getMsb<T2>(keySpans2, nInput2));
     } else {
-      int msb1, msb2;
+      int msb1, msb2; // NOLINT
       threadPool.enqueue([this, &msb1] {
         msb1 = getMsb<T1>(keySpans1, nInput1);
         synchroniser.taskComplete();
@@ -1648,14 +1682,15 @@ private:
     printArray<int>(cumulativeBatchSizes2.data(), cumulativeBatchSizes2.size());
 #endif
 
-    int numBatches1 = keySpans1.size();
-    int numBatches2 = keySpans2.size();
-    int firstPassDop = convertToValidDopValue(std::min(std::min(numBatches1, numBatches2), dop));
+    uint32_t numBatches1 = keySpans1.size();
+    uint32_t numBatches2 = keySpans2.size();
+    int firstPassDop = convertToValidDopValue(
+        std::min(std::min(numBatches1, numBatches2), static_cast<uint32_t>(dop)));
     threadsStillRunning = firstPassDop;
 
 #ifdef DEBUG
     std::cout << "firstPassDop: " << firstPassDop << std::endl;
-    std::cout << "numBatches1: " << numBatches1 << std::endl;
+    std::cout << "numBatches1: " << numBatches1U << std::endl;
     std::cout << "numBatches2: " << numBatches2 << std::endl;
 #endif
 
@@ -1663,19 +1698,22 @@ private:
     int baselineBatchesPerThread2 = numBatches2 / firstPassDop;
     int remainingBatches1 = numBatches1 % firstPassDop;
     int remainingBatches2 = numBatches2 % firstPassDop;
-    int startBatchNum1 = 0, startBatchNum2 = 0;
-    int endBatchNum1, endBatchNum2;
-    int batchesPerThread1, batchesPerThread2;
-    int overallOffset1, overallOffset2;
-    int elementsInThread1, elementsInThread2;
+    int startBatchNum1 = 0;
+    int startBatchNum2 = 0;
+    int endBatchNum1, endBatchNum2;           // NOLINT
+    int batchesPerThread1, batchesPerThread2; // NOLINT
+    int overallOffset1, overallOffset2;       // NOLINT
+    int elementsInThread1, elementsInThread2; // NOLINT
 
     std::vector<PartitionedArrayAlt<std::remove_cv_t<T1>>> firstPassPartitions1(firstPassDop);
     std::vector<PartitionedArrayAlt<std::remove_cv_t<T2>>> firstPassPartitions2(firstPassDop);
 
     for(auto taskNum = 0; taskNum < firstPassDop; ++taskNum) {
       if(taskNum < firstPassDop - 1) {
-        batchesPerThread1 = baselineBatchesPerThread1 + (taskNum < remainingBatches1);
-        batchesPerThread2 = baselineBatchesPerThread2 + (taskNum < remainingBatches2);
+        batchesPerThread1 =
+            baselineBatchesPerThread1 + static_cast<int>(taskNum < remainingBatches1);
+        batchesPerThread2 =
+            baselineBatchesPerThread2 + static_cast<int>(taskNum < remainingBatches2);
       } else {
         batchesPerThread1 = numBatches1 - startBatchNum1;
         batchesPerThread2 = numBatches2 - startBatchNum2;
@@ -1690,14 +1728,13 @@ private:
       elementsInThread1 = cumulativeBatchSizes1[endBatchNum1] - overallOffset1;
       elementsInThread2 = cumulativeBatchSizes2[endBatchNum2] - overallOffset2;
 
-      threadPool.enqueue([this, startBatchNum1, endBatchNum1,
-                          elementsInThread1, startBatchNum2, endBatchNum2, elementsInThread2,
-                          taskNum, &firstPassPartitions1, &firstPassPartitions2] {
+      threadPool.enqueue([this, startBatchNum1, endBatchNum1, elementsInThread1, startBatchNum2,
+                          endBatchNum2, elementsInThread2, taskNum, &firstPassPartitions1,
+                          &firstPassPartitions2] {
         auto op = PartitionAdaptiveParallelFirstPass<std::remove_cv_t<T1>, std::remove_cv_t<T2>>(
-            keySpans1, keySpans2, startBatchNum1, endBatchNum1,
-            elementsInThread1, startBatchNum2, endBatchNum2, elementsInThread2, minimumRadixBits,
-            startingRadixBits, globalRadixBits, msbToPartitionInput, maxElementsPerPartition,
-            threadsStillRunning);
+            keySpans1, keySpans2, startBatchNum1, endBatchNum1, elementsInThread1, startBatchNum2,
+            endBatchNum2, elementsInThread2, minimumRadixBits, startingRadixBits, globalRadixBits,
+            msbToPartitionInput, maxElementsPerPartition, threadsStillRunning);
         auto results = op.processInput();
         {
           std::lock_guard<std::mutex> lock(resultsMutex);
@@ -1728,7 +1765,8 @@ private:
               << ", msbToPartitionInput: " << msbToPartitionInput << std::endl;
 #endif
 
-    std::vector<int> partitions1, partitions2;
+    std::vector<int> partitions1;
+    std::vector<int> partitions2;
     if(dop == 1) {
       partitions1 = mergeAndCreatePartitionsVec<std::remove_cv_t<T1>>(
           firstPassPartitions1, returnBuffer1.get(), returnIndexes1.get());
@@ -1850,9 +1888,9 @@ private:
     for(size_t j = 0; j < partitions1.size(); ++j) {
       if(partitions1[j] != prevPartitionEnd1 && partitions2[j] != prevPartitionEnd2) {
         if((partitions1[j] - prevPartitionEnd1) > maxElementsPerPartition) {
-          auto tableOnePartitionPositions =
+          auto* tableOnePartitionPositions =
               furtherPartitioningResults[j]->tableOnePartitionPositions.get();
-          auto tableTwoPartitionPositions =
+          auto* tableTwoPartitionPositions =
               furtherPartitioningResults[j]->tableTwoPartitionPositions.get();
           std::move(tableOnePartitionPositions->begin(), tableOnePartitionPositions->end(),
                     std::back_inserter(outputPartitions1));
@@ -1873,11 +1911,11 @@ private:
   mergeAndCreatePartitionsVec(const std::vector<PartitionedArrayAlt<T>>& partitionedArrays,
                               T* keyBuffer, int64_t* indexesBuffer) {
     std::vector<int> mergedPartitions;
-    int numPartitions = partitionedArrays[0].partitionPositions->size() - 1;
+    uint32_t numPartitions = partitionedArrays[0].partitionPositions->size() - 1;
     mergedPartitions.reserve(numPartitions);
 
     int totalElements = 0;
-    for(int partitionNum = 0; partitionNum < numPartitions; ++partitionNum) {
+    for(uint32_t partitionNum = 0; partitionNum < numPartitions; ++partitionNum) {
       for(size_t threadNum = 0; threadNum < partitionedArrays.size(); ++threadNum) {
 #ifdef DEBUG
         assert(static_cast<int>(partitionedArrays[threadNum].partitionPositions->size()) - 1 ==
@@ -1921,11 +1959,11 @@ private:
   mergeKeysAndCreatePartitionsVec(const std::vector<PartitionedArrayAlt<T>>& partitionedArrays,
                                   T* keyBuffer) {
     std::vector<int> mergedPartitions;
-    int numPartitions = partitionedArrays[0].partitionPositions->size() - 1;
+    uint32_t numPartitions = partitionedArrays[0].partitionPositions->size() - 1;
     mergedPartitions.reserve(numPartitions);
 
     int totalElements = 0;
-    for(int partitionNum = 0; partitionNum < numPartitions; ++partitionNum) {
+    for(uint32_t partitionNum = 0; partitionNum < numPartitions; ++partitionNum) {
       for(size_t threadNum = 0; threadNum < partitionedArrays.size(); ++threadNum) {
 #ifdef DEBUG
         assert(static_cast<int>(partitionedArrays[threadNum].partitionPositions->size()) - 1 ==
@@ -1964,10 +2002,10 @@ private:
   template <typename T>
   void mergeIndexes(const std::vector<PartitionedArrayAlt<T>>& partitionedArrays,
                     int64_t* indexesBuffer) {
-    int numPartitions = partitionedArrays[0].partitionPositions->size() - 1;
+    uint32_t numPartitions = partitionedArrays[0].partitionPositions->size() - 1;
 
     int totalElements = 0;
-    for(int partitionNum = 0; partitionNum < numPartitions; ++partitionNum) {
+    for(uint32_t partitionNum = 0; partitionNum < numPartitions; ++partitionNum) {
       for(size_t threadNum = 0; threadNum < partitionedArrays.size(); ++threadNum) {
 #ifdef DEBUG
         assert(static_cast<int>(partitionedArrays[threadNum].partitionPositions->size()) - 1 ==
@@ -2010,9 +2048,9 @@ private:
     return cumulativeBatchSizes;
   }
 
-  template <typename U> inline int getMsb(const ExpressionSpanArguments& keySpans, int& n) {
+  template <typename U> inline uint32_t getMsb(const ExpressionSpanArguments& keySpans, uint32_t& n) {
     auto largest = std::numeric_limits<U>::min();
-    for(auto& untypedSpan : keySpans) {
+    for(const auto& untypedSpan : keySpans) {
       auto& span = std::get<Span<U>>(untypedSpan);
       n += span.size();
       for(auto& key : span) {
@@ -2020,7 +2058,7 @@ private:
       }
     }
 
-    int msbToPartition = 0;
+    uint32_t msbToPartition = 0;
     while(largest != 0) {
       largest >>= 1;
       msbToPartition++;
@@ -2028,23 +2066,23 @@ private:
     return msbToPartition;
   }
 
-  int nInput1;
+  uint32_t nInput1;
   const ExpressionSpanArguments& keySpans1;
   std::shared_ptr<std::remove_cv_t<T1>[]> returnBuffer1;
   std::shared_ptr<int64_t[]> returnIndexes1;
   vectorOfPairs<int, int> outputPartitions1;
 
-  int nInput2;
+  uint32_t nInput2;
   const ExpressionSpanArguments& keySpans2;
   std::shared_ptr<std::remove_cv_t<T2>[]> returnBuffer2;
   std::shared_ptr<int64_t[]> returnIndexes2;
   vectorOfPairs<int, int> outputPartitions2;
 
   int dop;
-  int minimumRadixBits;
-  int startingRadixBits;
-  std::atomic<int> globalRadixBits;
-  int msbToPartitionInput{};
+  uint32_t minimumRadixBits;
+  uint32_t startingRadixBits;
+  std::atomic<uint32_t> globalRadixBits;
+  uint32_t msbToPartitionInput{};
   int maxElementsPerPartition;
   std::atomic<int> threadsStillRunning;
   ThreadPool& threadPool;
@@ -2070,8 +2108,8 @@ createPartitionsWithMinimumSize(const TwoPartitionedArrays<T1, T2>& partitionedT
   auto indexes2 = partitionedTables.partitionedArrayTwo.indexes.get();
   auto partitions2 = *(partitionedTables.partitionedArrayTwo.partitionPositions.get());
 
-  std::vector<ExpressionSpanArguments> partitionsOfKeySpans1, partitionsOfIndexSpans1,
-      partitionsOfKeySpans2, partitionsOfIndexSpans2;
+  std::vector<ExpressionSpanArguments> partitionsOfKeySpans1, partitionsOfIndexSpans1; // NOLINT
+  std::vector<ExpressionSpanArguments> partitionsOfKeySpans2, partitionsOfIndexSpans2; // NOLINT
   partitionsOfKeySpans1.reserve(partitions1.size());
   partitionsOfIndexSpans1.reserve(partitions1.size());
   partitionsOfKeySpans2.reserve(partitions1.size());
@@ -2233,18 +2271,19 @@ PartitionedJoinArguments partitionJoinExpr(PartitionOperators partitionImplement
               static_cast<int>(MachineConstants::getInstance().getMachineConstant(name));
           auto partitionOperator = Partition<T1, T2>(tableOneKeys, tableTwoKeys, radixBitsMin);
           return partitionOperator.processInput();
-        } else if(partitionImplementation == PartitionOperators::RadixBitsFixedMax) {
+        }
+        if(partitionImplementation == PartitionOperators::RadixBitsFixedMax) {
           std::string name = "Partition_startRadixBits";
           auto radixBitsMax =
               static_cast<int>(MachineConstants::getInstance().getMachineConstant(name));
           auto partitionOperator = Partition<T1, T2>(tableOneKeys, tableTwoKeys, radixBitsMax);
           return partitionOperator.processInput();
-        } else if(partitionImplementation == PartitionOperators::RadixBitsAdaptive) {
+        }
+        if(partitionImplementation == PartitionOperators::RadixBitsAdaptive) {
           auto partitionOperator = PartitionAdaptive<T1, T2>(tableOneKeys, tableTwoKeys);
           return partitionOperator.processInput();
-        } else {
-          throw std::runtime_error("Invalid selection of 'Partition' implementation!");
         }
+        throw std::runtime_error("Invalid selection of 'Partition' implementation!");
       }();
 
 #ifdef INCLUDE_MIN_PARTITION_SIZE
@@ -2269,8 +2308,8 @@ PartitionedJoinArguments partitionJoinExpr(PartitionOperators partitionImplement
   } else {
     auto& synchroniser = Synchroniser::getInstance();
     ThreadPool::getInstance(2).enqueue([&tableOneKeys, &partitionedTables,
-                                       &tableOnePartitionsOfKeySpans,
-                                       &tableOnePartitionsOfIndexSpans, &synchroniser] {
+                                        &tableOnePartitionsOfKeySpans,
+                                        &tableOnePartitionsOfIndexSpans, &synchroniser] {
       auto [tableOnePartitionsOfKeySpansTmp, tableOnePartitionsOfIndexSpansTmp] =
           createPartitionsOfSpansAlignedToTableBatches<T1>(partitionedTables.partitionedArrayOne,
                                                            tableOneKeys);
@@ -2279,8 +2318,8 @@ PartitionedJoinArguments partitionJoinExpr(PartitionOperators partitionImplement
       synchroniser.taskComplete();
     });
     ThreadPool::getInstance(2).enqueue([&tableTwoKeys, &partitionedTables,
-                                       &tableTwoPartitionsOfKeySpans,
-                                       &tableTwoPartitionsOfIndexSpans, &synchroniser] {
+                                        &tableTwoPartitionsOfKeySpans,
+                                        &tableTwoPartitionsOfIndexSpans, &synchroniser] {
       auto [tableTwoPartitionsOfKeySpansTmp, tableTwoPartitionsOfIndexSpansTmp] =
           createPartitionsOfSpansAlignedToTableBatches<T1>(partitionedTables.partitionedArrayTwo,
                                                            tableTwoKeys);
@@ -2300,3 +2339,6 @@ PartitionedJoinArguments partitionJoinExpr(PartitionOperators partitionImplement
 } // namespace adaptive
 
 #endif // BOSSHAZARDADAPTIVEENGINE_PARTITIONIMPLEMENTATION_HPP
+
+// NOLINTEND(hicpp-avoid-c-arrays, cppcoreguidelines-avoid-c-arrays,
+// readability-function-cognitive-complexity)

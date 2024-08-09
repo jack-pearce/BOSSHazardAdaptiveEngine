@@ -24,7 +24,7 @@ struct GroupConstants {
   std::string llcMissRate;
 };
 
-GroupConstants getGroupMachineConstantNames(GROUP_QUERIES groupQuery, uint32_t dop) {
+GroupConstants getGroupMachineConstantNames(GROUP_QUERIES groupQuery, uint32_t dop) { // NOLINT
   int groupQueryIndex = static_cast<int>(groupQuery);
   uint32_t numBytes = 4 + (4 * groupQueryIndex);
   std::string name1 = "Group_" + std::to_string(numBytes) + "B_" + std::to_string(dop) + "_dop_PageFaults";
