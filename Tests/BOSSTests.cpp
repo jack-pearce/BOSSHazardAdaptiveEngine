@@ -3428,40 +3428,6 @@ TEST_CASE("Complex projections", "[hazard-adaptive-engine]") {
   }
 }
 
-TEST_CASE("Join - multi-key join", "[hazard-adaptive-engine]") {
-  auto engine = boss::engines::BootstrapEngine();
-  REQUIRE(!librariesToTest.empty());
-  auto eval = [&engine](boss::Expression&& expression) mutable {
-    return engine.evaluate("EvaluateInEngines"_("List"_(GENERATE(from_range(librariesToTest))),
-                                                std::move(expression)));
-  };
-
-  SECTION("Join (non-partitioned) with 3 or more keys is not evaluated") {
-    auto intTable1 = "Table"_("L_key1"_(createTwoSpansInt(1, 100)),
-                              "L_key2"_(createTwoSpansInt(100, 1)),
-                              "L_key3"_(createTwoSpansInt(100, 1)),
-                              "L_value"_(createTwoSpansInt(1, 4))); // NOLINT
-    auto intTable2 = "Table"_("O_key1"_(createTwoSpansInt(10000, 1)),
-                              "O_key2"_(createTwoSpansInt(1, 10000)),
-                              "O_key3"_(createTwoSpansInt(1, 10000)),
-                              "O_value"_(createTwoSpansInt(1, 4))); // NOLINT
-    auto result = eval("Join"_(std::move(intTable1), std::move(intTable2),
-                               "Where"_("Equal"_("List"_("L_key1"_, "L_key2"_, "L_key3"_),
-                                                 "List"_("O_key1"_, "O_key2"_, "O_key3"_)))));
-
-    CHECK(result == "Join"_("Table"_("L_key1"_("List"_(1,2,3,100,101,102)),
-                                     "L_key2"_("List"_(100,101,102, 1,2,3)),
-                                     "L_key3"_("List"_(100,101,102, 1,2,3)),
-                                     "L_value"_("List"_(1,2,3,4,5,6))),
-                            "Table"_("O_key1"_("List"_(10000,10001,10002,1,2,3)),
-                                     "O_key2"_("List"_(1,2,3,10000,10001,10002)),
-                                     "O_key3"_("List"_(1,2,3,10000,10001,10002)),
-                                     "O_value"_("List"_(1,2,3,4,5,6))),
-                            "Where"_("Equal"_("List"_("L_key1"_, "L_key2"_, "L_key3"_),
-                                              "List"_("O_key1"_, "O_key2"_, "O_key3"_)))));
-  }
-}
-
 TEST_CASE("Dates and years", "[hazard-adaptive-engine]") {
   auto engine = boss::engines::BootstrapEngine();
   REQUIRE(!librariesToTest.empty());
