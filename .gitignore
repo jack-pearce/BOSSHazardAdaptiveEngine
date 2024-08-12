@@ -1,9 +1,12 @@
 .dir-locals.el
 .vscode
 .vs
+*.json
 .idea
+.patch
 cmake*
 build/
+build-vs/
 Debug/
 Release/
 MinSizeRel/
